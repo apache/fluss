@@ -29,6 +29,10 @@ allow = [
 ]
 
 exceptions = [
+    # Paimon's bzip2 decoder uses the permissive bzip2 license.
+    { crate = "libbz2-rs-sys", allow = ["bzip2-1.0.6"] },
+    # Same Mozilla root certificate dataset/license as webpki-roots below.
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
     # open data licenses that SHOULD be OK
     { crate = "webpki-roots", allow = [
         "CDLA-Permissive-2.0",

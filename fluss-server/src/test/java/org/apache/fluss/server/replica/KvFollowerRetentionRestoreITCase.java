@@ -29,6 +29,7 @@ import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.Test;
@@ -60,9 +61,11 @@ class KvFollowerRetentionRestoreITCase {
                     .setClock(MANUAL_CLOCK)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testCleanupLocalLogsAfterFollowerRestartWithoutNewWrites() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "test_follower_retention_restore");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_follower_retention_restore");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA_PK)

@@ -152,7 +152,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @ParameterizedTest
     @MethodSource("mailboxFailures")
     void testMailboxDispatchFailureFailsTask(RuntimeException failure) throws Exception {
-        TablePath table = TablePath.of("fluss", "async_failure");
+        TablePath table = tableNames.tablePath("fluss", "async_failure");
         long tableId = createTable(table, DEFAULT_PK_TABLE_DESCRIPTOR);
         mailbox.close();
         mailbox =
@@ -174,7 +174,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testCompletionFailurePropagatesFromMailbox() throws Exception {
-        TablePath table = TablePath.of("fluss", "completion_failure");
+        TablePath table = tableNames.tablePath("fluss", "completion_failure");
         long tableId = createTable(table, DEFAULT_PK_TABLE_DESCRIPTOR);
         parameters =
                 StreamOperatorParametersAdapter.create(
@@ -197,7 +197,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCommitErrorFailsTask(boolean duringClose) throws Exception {
-        TablePath table = TablePath.of("fluss", "close_failure");
+        TablePath table = tableNames.tablePath("fluss", "close_failure");
         long tableId = createTable(table, DEFAULT_PK_TABLE_DESCRIPTOR);
         AssertionError failure = new AssertionError("Commit failed");
         BlockingLakeTieringFactory factory =
@@ -229,7 +229,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testInterruptedCloseWaitsForCommit() throws Exception {
-        TablePath table = TablePath.of("fluss", "interrupted_close");
+        TablePath table = tableNames.tablePath("fluss", "interrupted_close");
         long tableId = createTable(table, DEFAULT_PK_TABLE_DESCRIPTOR);
         CompletableFuture<Void> started = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
@@ -281,8 +281,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testSlowCommitDoesNotBlockOtherTablesOrCheckpoint() throws Exception {
-        TablePath slowTable = TablePath.of("fluss", "slow_commit");
-        TablePath fastTable = TablePath.of("fluss", "fast_commit");
+        TablePath slowTable = tableNames.tablePath("fluss", "slow_commit");
+        TablePath fastTable = tableNames.tablePath("fluss", "fast_commit");
         long slowTableId = createTable(slowTable, DEFAULT_PK_TABLE_DESCRIPTOR);
         long fastTableId = createTable(fastTable, DEFAULT_PK_TABLE_DESCRIPTOR);
         BlockingLakeTieringFactory factory = new BlockingLakeTieringFactory(slowTable);
@@ -310,8 +310,9 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testCountsConsecutiveCommitFailuresPerTable() throws Exception {
-        TablePath failingTable = TablePath.of("fluss", "consecutive_commit_failures");
-        TablePath healthyTable = TablePath.of("fluss", "consecutive_commit_failures_healthy");
+        TablePath failingTable = tableNames.tablePath("fluss", "consecutive_commit_failures");
+        TablePath healthyTable =
+                tableNames.tablePath("fluss", "consecutive_commit_failures_healthy");
         long failingTableId = createTable(failingTable, DEFAULT_PK_TABLE_DESCRIPTOR);
         long healthyTableId = createTable(healthyTable, DEFAULT_PK_TABLE_DESCRIPTOR);
         TestingLakeTieringFactory.TestingLakeCommitter lakeCommitter =
@@ -352,8 +353,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testCommitWaitsForCapacity() throws Exception {
-        TablePath first = TablePath.of("fluss", "first_commit");
-        TablePath second = TablePath.of("fluss", "second_commit");
+        TablePath first = tableNames.tablePath("fluss", "first_commit");
+        TablePath second = tableNames.tablePath("fluss", "second_commit");
         long firstId = createTable(first, DEFAULT_PK_TABLE_DESCRIPTOR);
         long secondId = createTable(second, DEFAULT_PK_TABLE_DESCRIPTOR);
         BlockingLakeTieringFactory factory = new BlockingLakeTieringFactory(first);
@@ -373,7 +374,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testRejectsDuplicateTableCommit() throws Exception {
-        TablePath table = TablePath.of("fluss", "duplicate_commit");
+        TablePath table = tableNames.tablePath("fluss", "duplicate_commit");
         long tableId = createTable(table, DEFAULT_PK_TABLE_DESCRIPTOR);
         TableBucket bucket = new TableBucket(tableId, 0);
         BlockingLakeTieringFactory factory = new BlockingLakeTieringFactory(table);
@@ -396,7 +397,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCloseAfterCheckpoint(boolean callbackQueued) throws Exception {
-        TablePath table = TablePath.of("fluss", "cancel_commit");
+        TablePath table = tableNames.tablePath("fluss", "cancel_commit");
         long tableId = createTable(table, DEFAULT_PK_TABLE_DESCRIPTOR);
         BlockingLakeTieringFactory factory = new BlockingLakeTieringFactory(table);
         reopenCommitter(factory, 1);
@@ -430,7 +431,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testDuplicateBucketWriteResult() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "duplicate_bucket");
+        TablePath tablePath = tableNames.tablePath("fluss", "duplicate_bucket");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         TableBucket tableBucket = new TableBucket(tableId, 0);
         committerOperator.processElement(
@@ -451,7 +452,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testInconsistentWriteResultCounts() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "inconsistent_result_counts");
+        TablePath tablePath = tableNames.tablePath("fluss", "inconsistent_result_counts");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         committerOperator.processElement(
                 createTableBucketWriteResultStreamRecord(
@@ -476,8 +477,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testCommitNonPartitionedTable() throws Exception {
-        TablePath tablePath1 = TablePath.of("fluss", "test1");
-        TablePath tablePath2 = TablePath.of("fluss", "test2");
+        TablePath tablePath1 = tableNames.tablePath("fluss", "test1");
+        TablePath tablePath2 = tableNames.tablePath("fluss", "test2");
 
         long tableId1 = createTable(tablePath1, DEFAULT_PK_TABLE_DESCRIPTOR);
         long tableId2 = createTable(tablePath2, DEFAULT_PK_TABLE_DESCRIPTOR);
@@ -552,7 +553,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testCommitPartitionedTable() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "partitioned_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "partitioned_table");
         long tableId = createTable(tablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
@@ -587,7 +588,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testCommitMeetsEmptyWriteResult() throws Exception {
-        TablePath tablePath1 = TablePath.of("fluss", "test_commit_empty_write_result");
+        TablePath tablePath1 = tableNames.tablePath("fluss", "test_commit_empty_write_result");
         long tableId = createTable(tablePath1, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         int numberOfWriteResults = 3;
 
@@ -673,7 +674,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testTableCommitWhenFlussMissingLakeSnapshot() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
+        TablePath tablePath =
+                tableNames.tablePath("fluss", "test_commit_when_fluss_missing_lake_snapshot");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numberOfWriteResults = 2;
 
@@ -747,7 +749,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"file:///unused", "s3://bucket/fluss"})
     void testIgnoreMissingLakeSnapshotFromPreviousTable(String remoteDataDir) throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test-ignore-previous-table-lake-snapshot");
+        TablePath tablePath =
+                tableNames.tablePath("fluss", "test-ignore-previous-table-lake-snapshot");
         long oldTableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         // Only construct the path: recovery must identify the old table without accessing
         // the offsets file or requiring a filesystem plugin for its URI scheme.
@@ -798,7 +801,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @Test
     void testPartitionedTableCommitWhenFlussMissingLakeSnapshot() throws Exception {
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "fluss", "test_commit_partitioned_table_when_fluss_missing_lake_snapshot");
         long tableId = createTable(tablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
 
@@ -964,7 +967,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
             tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, true);
             reopenCommitter(new TestingLakeTieringFactory(), tieringConfig);
         }
-        TablePath tablePath = TablePath.of("fluss", "test_commit_fails_when_table_recreated");
+        TablePath tablePath =
+                tableNames.tablePath("fluss", "test_commit_fails_when_table_recreated");
         long originalTableId =
                 createTable(
                         tablePath,
@@ -1028,7 +1032,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     @ValueSource(booleans = {false, true})
     void testEmptyRoundRecoversMissingLakeSnapshot(boolean jobMarkDoneEnabled) throws Exception {
         TablePath tablePath =
-                TablePath.of("fluss", "test_empty_round_recovers_missing_lake_snapshot");
+                tableNames.tablePath("fluss", "test_empty_round_recovers_missing_lake_snapshot");
         long tableId = createTable(tablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
 
         // mimic a previous round that committed snapshot 5 to the lake but failed to commit
@@ -1084,7 +1088,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testReadableSnapshotsAfterPartitionMarkDone() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_readable_snapshots_after_mark_done");
+        TablePath tablePath =
+                tableNames.tablePath("fluss", "test_readable_snapshots_after_mark_done");
         long tableId = createTable(tablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         TableBucket bucket = new TableBucket(tableId, 0);
         Map<TableBucket, Long> tieredOffsets = Collections.singletonMap(bucket, 100L);

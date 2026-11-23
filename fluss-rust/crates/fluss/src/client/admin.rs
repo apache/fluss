@@ -81,8 +81,7 @@ impl FlussAdmin {
     ) -> Result<HashMap<TableBucket, Option<crate::client::OffsetAndMetadata>>> {
         let options = crate::client::ConsumerGroupOptions::new(group_id);
         options.validate()?;
-        crate::client::consumer_offsets::ConsumerGroup::new(
-            0,
+        crate::client::consumer_offsets::ConsumerGroupClient::new(
             options,
             self.rpc_client.clone(),
             self.metadata.clone(),

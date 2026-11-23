@@ -54,7 +54,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testHandleTieringReachMaxDurationEvent() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_tiering_reach_max_duration");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_tiering_reach_max_duration");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         Configuration conf = new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig());
         conf.set(

@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -63,6 +64,9 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final String scopedComplexLogTest = tableNames.tableName("complex_log_test");
 
     protected StreamExecutionEnvironment env;
     protected StreamTableEnvironment tEnv;
@@ -109,7 +113,9 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
     @MultiVersionTest
     void testComplexTypesInLogTable() throws Exception {
         tEnv.executeSql(
-                "create table complex_log_test ("
+                ("create table "
+                        + scopedComplexLogTest
+                        + " ("
                         + "id int, "
                         // Array types
                         + "int_array array<int>, "
@@ -134,10 +140,12 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                         + "array_of_maps array<map<string, double>>, "
                         + "row_with_map_and_arrays row<data map<int, array<float>>>, "
                         + "map_with_complex_row map<bigint, row<name string, tags array<string>, ids array<int>>>"
-                        + ") with ('bucket.num' = '3')");
+                        + ") with ('bucket.num' = '3')"));
 
         tEnv.executeSql(
-                        "INSERT INTO complex_log_test VALUES "
+                        ("INSERT INTO "
+                                + scopedComplexLogTest
+                                + " VALUES "
                                 + "(1, "
                                 // Arrays
                                 + "ARRAY[1, 2, CAST(NULL AS INT)], ARRAY[100, CAST(NULL AS BIGINT), 300], "
@@ -214,11 +222,11 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                                 + "CAST(NULL AS ARRAY<MAP<STRING, DOUBLE>>), "
                                 + "CAST(NULL AS ROW<data MAP<INT, ARRAY<FLOAT>>>), "
                                 + "CAST(NULL AS MAP<BIGINT, ROW<name STRING, tags ARRAY<STRING>, ids ARRAY<INT>>>)"
-                                + ")")
+                                + ")"))
                 .await();
 
         CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from complex_log_test").collect();
+                tEnv.executeSql("select * from " + scopedComplexLogTest).collect();
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, [1, 2, null], [100, null, 300], [1.1, null], [2.2, 3.3, null], [a, null, c], [true, null, false], [[1, 2], null, [3]], [[x], [null, y]], [[[1, 2]], [[3, 4, 5]]], "
@@ -241,7 +249,9 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
     @Test
     void testComplexTypesInPartitionedLogTable() throws Exception {
         tEnv.executeSql(
-                "create table complex_log_test ("
+                ("create table "
+                        + scopedComplexLogTest
+                        + " ("
                         + "id int, "
                         + "dt string, "
                         // Array types
@@ -266,10 +276,12 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                         + "row_with_map_and_arrays row<data map<int, array<float>>>, "
                         + "map_with_complex_row map<bigint, row<name string, tags array<string>, ids array<int>>>"
                         + ") PARTITIONED BY (dt) "
-                        + "with ('bucket.num' = '3')");
+                        + "with ('bucket.num' = '3')"));
 
         tEnv.executeSql(
-                        "INSERT INTO complex_log_test VALUES "
+                        ("INSERT INTO "
+                                + scopedComplexLogTest
+                                + " VALUES "
                                 + "(1, '2024', "
                                 // Arrays
                                 + "ARRAY[1, 2, CAST(NULL AS INT)], ARRAY[100, CAST(NULL AS BIGINT), 300], "
@@ -338,11 +350,11 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                                 + "CAST(NULL AS ARRAY<MAP<STRING, DOUBLE>>), "
                                 + "CAST(NULL AS ROW<data MAP<INT, ARRAY<FLOAT>>>), "
                                 + "CAST(NULL AS MAP<BIGINT, ROW<name STRING, tags ARRAY<STRING>, ids ARRAY<INT>>>)"
-                                + ")")
+                                + ")"))
                 .await();
 
         CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from complex_log_test").collect();
+                tEnv.executeSql("select * from " + scopedComplexLogTest).collect();
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, 2024, [1, 2, null], [100, null, 300], [1.1, null], [2.2, 3.3, null], [a, null, c], [true, null, false], [[1, 2], null, [3]], [[x], [null, y]], [[[1, 2]], [[3, 4, 5]]], "

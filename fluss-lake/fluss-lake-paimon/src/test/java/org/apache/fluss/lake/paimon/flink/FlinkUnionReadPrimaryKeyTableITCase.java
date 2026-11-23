@@ -35,6 +35,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -82,6 +83,8 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
     @TempDir public static File savepointDir;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
@@ -93,7 +96,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "pk_table_full" + (isPartitioned ? "_partitioned" : "_non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "pk_table_full" + (isPartitioned ? "_partitioned" : "_non_partitioned"));
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         // create table & write initial data
@@ -446,7 +451,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // and union read still works correctly.
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "pk_table_not_default_bucket_key";
+        String tableName = tableNames.tableName("pk_table_not_default_bucket_key");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
         int bucketNum = 3;
@@ -513,7 +518,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "pk_table_union_read_some_bucket_not_tiered";
+        String tableName = tableNames.tableName("pk_table_union_read_some_bucket_not_tiered");
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         int bucketNum = 3;
         // create table & write initial data
@@ -557,7 +562,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     void testUnionReadLegacyTable() throws Exception {
         // FIP-27: union read (lake snapshot merged with fresh Fluss log) must still work for a
         // legacy table that carries the three trailing system columns.
-        String tableName = "pk_table_union_read_legacy";
+        String tableName = tableNames.tableName("pk_table_union_read_legacy");
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         int bucketNum = 3;
         long tableId = createSimplePkTable(t1, bucketNum, false, true);
@@ -602,7 +607,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         JobClient jobClient = buildTieringJob(execEnv);
 
         String tableName =
-                "stream_pk_table_full" + (isPartitioned ? "_partitioned" : "_non_partitioned");
+                tableNames.tableName(
+                        "stream_pk_table_full"
+                                + (isPartitioned ? "_partitioned" : "_non_partitioned"));
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         // create table & write initial data
@@ -857,9 +864,11 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         JobClient jobClient = buildTieringJob(execEnv);
 
         String tableName1 =
-                "restore_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "restore_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         String resultTableName =
-                "result_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "result_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath table1 = TablePath.of(DEFAULT_DB, tableName1);
         TablePath resultTable = TablePath.of(DEFAULT_DB, resultTableName);
@@ -971,7 +980,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         boolean originalReuseSource =
                 streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
         JobClient tieringJob = null;
-        String tableName = "stream_union_different_pushdown_filters";
+        String tableName = tableNames.tableName("stream_union_different_pushdown_filters");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
 
@@ -1011,7 +1020,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         boolean originalReuseSource =
                 streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
         JobClient tieringJob = null;
-        String tableName = "stream_union_different_projections";
+        String tableName = tableNames.tableName("stream_union_different_projections");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
 
@@ -1055,7 +1064,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testUnionReadWithCustomLakeTablePath() throws Exception {
-        String tableName = "pk_table_custom_lake_mapping";
+        String tableName = tableNames.tableName("pk_table_custom_lake_mapping");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         TablePath lakeTablePath = TablePath.of("custom_db", "pk_table_custom_lake_mapping_target");
         Map<String, String> tableProperties = new HashMap<>();
@@ -1207,7 +1216,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "expired_partition_pk_table";
+        String tableName = tableNames.tableName("expired_partition_pk_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         // create table and write data
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
@@ -1311,7 +1320,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         boolean tieringCancelled = false;
         try {
-            String tableName = "point_lookup_expired_partition_pk_table";
+            String tableName = tableNames.tableName("point_lookup_expired_partition_pk_table");
             TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
             Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
             Function<String, List<InternalRow>> rowGenerator =
@@ -1384,7 +1393,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "stream_pk_table_full";
+        String tableName = tableNames.tableName("stream_pk_table_full");
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         // create table & write initial data

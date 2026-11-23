@@ -70,6 +70,7 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -145,6 +146,8 @@ class TableManagerITCase {
                                     DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
                     .setClusterConf(initConf())
                     .build();
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     private static Configuration initConf() {
         Configuration conf = new Configuration();
@@ -269,7 +272,7 @@ class TableManagerITCase {
         AdminGateway adminGateway = getAdminGateway();
 
         String db1 = "db1";
-        String tb1 = "tb1";
+        String tb1 = tableNames.tableName("tb1");
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
@@ -367,7 +370,7 @@ class TableManagerITCase {
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, true)).get();
 
         // create another table without setting distribution
-        String tb2 = "tb2";
+        String tb2 = tableNames.tableName("tb2");
         TableDescriptor tableDescriptor1 = newTableWithoutSettingDistribution();
         adminGateway
                 .createTable(
@@ -476,7 +479,7 @@ class TableManagerITCase {
         AdminGateway adminGateway = getAdminGateway();
 
         String db1 = "db1";
-        String tb1 = "tb1";
+        String tb1 = tableNames.tableName("tb1");
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
@@ -594,7 +597,7 @@ class TableManagerITCase {
         AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
         AdminGateway adminGateway = getAdminGateway();
         String db1 = "db1_" + (isCoordinatorServer ? "coordinator" : "tablet");
-        String tb1 = "tb1";
+        String tb1 = tableNames.tableName("tb1");
         // create a partitioned table, and request a not exist partition, should throw partition not
         // exist exception
         TablePath tablePath = TablePath.of(db1, tb1);
@@ -702,9 +705,9 @@ class TableManagerITCase {
         AdminGateway adminGateway = getAdminGateway();
 
         String databaseName = "db_value_layout";
-        TablePath plainTablePath = TablePath.of(databaseName, "plain_pk");
-        TablePath ttlTablePath = TablePath.of(databaseName, "ttl_pk");
-        TablePath logTablePath = TablePath.of(databaseName, "log_table");
+        TablePath plainTablePath = tableNames.tablePath(databaseName, "plain_pk");
+        TablePath ttlTablePath = tableNames.tablePath(databaseName, "ttl_pk");
+        TablePath logTablePath = tableNames.tablePath(databaseName, "log_table");
         adminGateway.createDatabase(newCreateDatabaseRequest(databaseName, false)).get();
 
         adminGateway.createTable(newCreateTableRequest(plainTablePath, newPkTable(), false)).get();
@@ -811,7 +814,7 @@ class TableManagerITCase {
 
         // create database and table
         String db1 = "db1";
-        String tb1 = "tb1";
+        String tb1 = tableNames.tableName("tb1");
         TablePath tablePath = TablePath.of(db1, tb1);
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         TableDescriptor tableDescriptor = newPkTable();

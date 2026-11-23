@@ -30,6 +30,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshotLegacyJsonSerde;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -53,6 +54,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link FlussTableLakeSnapshotCommitter}. */
 class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
 
     @BeforeEach
@@ -73,7 +76,8 @@ class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testCommit(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of("fluss", "test_commit" + (isPartitioned ? "_partitioned" : ""));
+                tableNames.tablePath(
+                        "fluss", "test_commit" + (isPartitioned ? "_partitioned" : ""));
         Tuple2<Long, Collection<Long>> tableIdAndPartitions = createTable(tablePath, isPartitioned);
         long tableId = tableIdAndPartitions.f0;
         Collection<Long> partitions = tableIdAndPartitions.f1;
@@ -173,7 +177,7 @@ class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCommitCurrentCompactWithSeparateReadableOffsets() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_current_compact_readable");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_current_compact_readable");
         long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR, true);
         TableBucket bucket = new TableBucket(tableId, 0);
         long previousSnapshotId = 1L;
@@ -239,7 +243,7 @@ class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
     void testCompatibilityWithOldCommitter(boolean isPartitioned) throws Exception {
         // test commit lake snapshot with old behavior
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "fluss",
                         "test_legacy_version_commit" + (isPartitioned ? "_partitioned" : ""));
         Tuple2<Long, Collection<Long>> tableIdAndPartitions = createTable(tablePath, isPartitioned);
@@ -276,7 +280,7 @@ class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPrepareLakeSnapshotSurfacesServerError() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_prepare_error");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_prepare_error");
         Tuple2<Long, Collection<Long>> tableIdAndPartitions = createTable(tablePath, false);
         long tableId = tableIdAndPartitions.f0;
         Map<TableBucket, Long> offsets = mockLogEndOffsets(tableId, tableIdAndPartitions.f1);

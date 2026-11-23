@@ -65,6 +65,8 @@ async fn log_table(connection: &FlussConnection) -> (TablePath, TableBucket) {
                 .build()
                 .unwrap(),
         )
+        .property("table.statistics.columns", "id")
+        .property("table.log.tiered.local-segments", "100")
         .distributed_by(Some(1), vec![])
         .build()
         .unwrap();
@@ -83,6 +85,65 @@ async fn log_table(connection: &FlussConnection) -> (TablePath, TableBucket) {
     }
     writer.flush().await.unwrap();
     (path, TableBucket::new(table.get_table_info().table_id, 0))
+}
+
+#[tokio::test]
+async fn restore_skips_a_range_consumed_by_a_zero_row_poll() {
+    let connection = connection().await;
+    let (path, bucket) = log_table(&connection).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let group = format!("filtered-{}", bucket.table_id());
+    let filtered = table
+        .new_scan()
+        .filter(fluss::predicate::col("id").gt(7))
+        .unwrap()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    filtered.subscribe(0, 0).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let poll = filtered.poll(Duration::from_secs(5)).await.unwrap();
+            assert_eq!(poll.count(), 0);
+            if poll.consumed_up_to_offset(&bucket) == Some(8) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("filtered poll did not consume the existing eight records");
+    success(filtered.commit_sync().await.unwrap());
+    drop(filtered);
+
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    let mut row = GenericRow::new(1);
+    row.set_field(0, 8i32);
+    writer.append(&row).unwrap();
+    writer.flush().await.unwrap();
+    let restored = table.new_scan().create_log_scanner().unwrap();
+    restored
+        .subscribe_with_initializer(
+            std::slice::from_ref(&bucket),
+            &OffsetsInitializer::committed_with_fallback(group, OffsetsInitializer::fail()),
+        )
+        .await
+        .unwrap();
+    let poll = restored.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(
+        poll.records(&bucket)
+            .iter()
+            .map(|row| row.offset())
+            .collect::<Vec<_>>(),
+        [8]
+    );
+    connection
+        .get_admin()
+        .unwrap()
+        .drop_table(&path, false)
+        .await
+        .unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
 }
 
 #[tokio::test]

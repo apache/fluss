@@ -161,10 +161,7 @@ const MAX_PENDING_COMMITS: usize = 64;
 pub(crate) struct ConsumerGroup {
     slots: Arc<tokio::sync::Semaphore>,
     table_id: i64,
-    options: ConsumerGroupOptions,
-    connections: Arc<RpcClient>,
-    metadata: Arc<Metadata>,
-    owner: Mutex<Option<ServerNode>>,
+    client: ConsumerGroupClient,
     // Held through the response, not just dispatch: the server may reorder concurrent commits.
     late_writes: tokio::sync::Mutex<HashMap<TableBucket, OffsetAndMetadata>>,
     tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -181,10 +178,7 @@ impl ConsumerGroup {
         Self {
             slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_COMMITS)),
             table_id,
-            options,
-            connections,
-            metadata,
-            owner: Mutex::new(None),
+            client: ConsumerGroupClient::new(options, connections, metadata),
             late_writes: tokio::sync::Mutex::new(HashMap::new()),
             tail: Mutex::new(None),
             delivered: Mutex::new(HashMap::new()),
@@ -212,6 +206,146 @@ impl ConsumerGroup {
         });
         // Keep the queue link alive when a caller cancels its waiting handle.
         Ok(tokio::spawn(async move { operation.await? }))
+    }
+
+    async fn commit(
+        &self,
+        offsets: HashMap<TableBucket, OffsetAndMetadata>,
+    ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
+        let mut requested = Vec::with_capacity(offsets.len());
+        for (bucket, value) in &offsets {
+            if value.offset < 0 {
+                return Err(OffsetCommitError::Rejected(invalid(
+                    "Committed offset must be nonnegative",
+                )));
+            }
+            requested.push(proto::PbCommitConsumerOffsetsRequestBucket {
+                partition_id: bucket.partition_id(),
+                bucket_id: bucket.bucket_id(),
+                offset: value.offset,
+                metadata: value.metadata.clone(),
+            });
+        }
+        let request = proto::CommitConsumerOffsetsRequest {
+            group_id: self.client.options.group_id.clone(),
+            tables: if requested.is_empty() {
+                Vec::new()
+            } else {
+                vec![proto::PbCommitConsumerOffsetsRequestTable {
+                    table_id: self.table_id,
+                    buckets: requested,
+                }]
+            },
+        };
+        let mut late = self.late_writes.lock().await;
+        if offsets.iter().any(|(bucket, next)| {
+            late.get(bucket).is_some_and(|old| {
+                next.offset < old.offset
+                    || (next.offset == old.offset && next.metadata != old.metadata)
+            })
+        }) {
+            return Err(OffsetCommitError::NeedsRecovery);
+        }
+        let mut attempt = CommitAttempt {
+            offsets: &offsets,
+            late: &mut late,
+            started: false,
+        };
+        let mut lost_reply = false;
+        let result = tokio::time::timeout(self.client.options.timeout, async {
+            loop {
+                let owner = self.client.owner().await?;
+                let response = match self.client.connections.get_connection(&owner).await {
+                    Ok(connection) => {
+                        connection
+                            .request_with_send_status(
+                                message::CommitConsumerOffsetsRequest {
+                                    inner_request: request.clone(),
+                                },
+                                &mut attempt.started,
+                            )
+                            .await
+                    }
+                    Err(error) => Err(RequestFailure::NotSent(error)),
+                };
+                match response {
+                    Ok(response) => {
+                        let mut results = decode_commit(response, &offsets)?;
+                        attempt.started = false;
+                        for (bucket, outcome) in &mut results {
+                            match outcome {
+                                OffsetCommitOutcome::Unknown(_) => {
+                                    attempt.remember(bucket);
+                                }
+                                OffsetCommitOutcome::Rejected(error) if lost_reply => {
+                                    *outcome = OffsetCommitOutcome::Unknown(error.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                        return Ok(results);
+                    }
+                    Err(RequestFailure::NotSent(error)) => {
+                        attempt.started = false;
+                        if !error.is_retriable() {
+                            return Err(error);
+                        }
+                    }
+                    Err(RequestFailure::MaybeSent(error)) if routing_error(&error) => {
+                        attempt.started = false;
+                    }
+                    Err(RequestFailure::MaybeSent(error)) if definite_rejection(&error) => {
+                        attempt.started = false;
+                        return Err(error);
+                    }
+                    Err(RequestFailure::MaybeSent(Error::RpcError { source, .. }))
+                        if source.is_transport_failure() =>
+                    {
+                        // A successful replay cannot rule out a late copy of the first attempt.
+                        if !lost_reply {
+                            attempt.remember_all();
+                        }
+                        attempt.started = false;
+                        lost_reply = true;
+                    }
+                    Err(RequestFailure::MaybeSent(error)) => return Err(error),
+                }
+                self.client.invalidate_owner();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Err(timeout_error()));
+        result.map_err(|error| {
+            if attempt.started || lost_reply {
+                self.client.invalidate_owner();
+                OffsetCommitError::Unknown(error)
+            } else {
+                OffsetCommitError::Rejected(error)
+            }
+        })
+    }
+}
+
+pub(crate) struct ConsumerGroupClient {
+    options: ConsumerGroupOptions,
+    connections: Arc<RpcClient>,
+    metadata: Arc<Metadata>,
+    owner: Mutex<Option<ServerNode>>,
+}
+
+impl ConsumerGroupClient {
+    pub(crate) fn new(
+        options: ConsumerGroupOptions,
+        connections: Arc<RpcClient>,
+        metadata: Arc<Metadata>,
+    ) -> Self {
+        Self {
+            options,
+            connections,
+            metadata,
+            owner: Mutex::new(None),
+        }
     }
 
     async fn owner(&self) -> Result<ServerNode> {
@@ -279,7 +413,7 @@ impl ConsumerGroup {
             return Err(invalid("Duplicate requested consumer offset bucket"));
         }
         for bucket in buckets {
-            validate_bucket(bucket.table_id(), bucket)?;
+            validate_bucket(bucket)?;
             requested.entry(bucket.table_id()).or_default().push(
                 proto::PbGetConsumerOffsetsRequestBucket {
                     partition_id: bucket.partition_id(),
@@ -325,125 +459,6 @@ impl ConsumerGroup {
         .await
         .map_err(|_| timeout_error())?
     }
-
-    pub(crate) async fn commit(
-        &self,
-        offsets: HashMap<TableBucket, OffsetAndMetadata>,
-    ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-        let mut requested = Vec::with_capacity(offsets.len());
-        for (bucket, value) in &offsets {
-            validate_bucket(self.table_id, bucket).map_err(OffsetCommitError::Rejected)?;
-            if value.offset < 0 {
-                return Err(OffsetCommitError::Rejected(invalid(
-                    "Committed offset must be nonnegative",
-                )));
-            }
-            requested.push(proto::PbCommitConsumerOffsetsRequestBucket {
-                partition_id: bucket.partition_id(),
-                bucket_id: bucket.bucket_id(),
-                offset: value.offset,
-                metadata: value.metadata.clone(),
-            });
-        }
-        let request = proto::CommitConsumerOffsetsRequest {
-            group_id: self.options.group_id.clone(),
-            tables: if requested.is_empty() {
-                Vec::new()
-            } else {
-                vec![proto::PbCommitConsumerOffsetsRequestTable {
-                    table_id: self.table_id,
-                    buckets: requested,
-                }]
-            },
-        };
-        let mut late = self.late_writes.lock().await;
-        if offsets.iter().any(|(bucket, next)| {
-            late.get(bucket).is_some_and(|old| {
-                next.offset < old.offset
-                    || (next.offset == old.offset && next.metadata != old.metadata)
-            })
-        }) {
-            return Err(OffsetCommitError::NeedsRecovery);
-        }
-        let mut attempt = CommitAttempt {
-            offsets: &offsets,
-            late: &mut late,
-            started: false,
-        };
-        let mut lost_reply = false;
-        let result = tokio::time::timeout(self.options.timeout, async {
-            loop {
-                let owner = self.owner().await?;
-                let response = match self.connections.get_connection(&owner).await {
-                    Ok(connection) => {
-                        connection
-                            .request_with_send_status(
-                                message::CommitConsumerOffsetsRequest {
-                                    inner_request: request.clone(),
-                                },
-                                &mut attempt.started,
-                            )
-                            .await
-                    }
-                    Err(error) => Err(RequestFailure::NotSent(error)),
-                };
-                match response {
-                    Ok(response) => {
-                        let mut results = decode_commit(response, &offsets)?;
-                        attempt.started = false;
-                        for (bucket, outcome) in &mut results {
-                            match outcome {
-                                OffsetCommitOutcome::Unknown(_) => {
-                                    attempt.remember(bucket);
-                                }
-                                OffsetCommitOutcome::Rejected(error) if lost_reply => {
-                                    *outcome = OffsetCommitOutcome::Unknown(error.clone());
-                                }
-                                _ => {}
-                            }
-                        }
-                        return Ok(results);
-                    }
-                    Err(RequestFailure::NotSent(error)) => {
-                        attempt.started = false;
-                        if !error.is_retriable() {
-                            return Err(error);
-                        }
-                    }
-                    Err(RequestFailure::MaybeSent(error)) if routing_error(&error) => {
-                        attempt.started = false;
-                    }
-                    Err(RequestFailure::MaybeSent(error)) if definite_rejection(&error) => {
-                        attempt.started = false;
-                        return Err(error);
-                    }
-                    Err(RequestFailure::MaybeSent(Error::RpcError { source, .. }))
-                        if source.is_transport_failure() =>
-                    {
-                        // A successful replay cannot rule out a late copy of the first attempt.
-                        if !lost_reply {
-                            attempt.remember_all();
-                        }
-                        attempt.started = false;
-                        lost_reply = true;
-                    }
-                    Err(RequestFailure::MaybeSent(error)) => return Err(error),
-                }
-                self.invalidate_owner();
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .unwrap_or_else(|_| Err(timeout_error()));
-        result.map_err(|error| {
-            if attempt.started || lost_reply {
-                self.invalidate_owner();
-                OffsetCommitError::Unknown(error)
-            } else {
-                OffsetCommitError::Rejected(error)
-            }
-        })
-    }
 }
 
 // Retain only the highest potentially late position per affected bucket. A later ACK
@@ -475,10 +490,7 @@ impl Drop for CommitAttempt<'_> {
     }
 }
 
-fn validate_bucket(table_id: i64, bucket: &TableBucket) -> Result<()> {
-    if bucket.table_id() != table_id {
-        return Err(invalid("Consumer offset bucket belongs to another table"));
-    }
+fn validate_bucket(bucket: &TableBucket) -> Result<()> {
     if bucket.bucket_id() < 0 || bucket.partition_id().is_some_and(|id| id < 0) {
         return Err(invalid(
             "Bucket and explicit partition IDs must be nonnegative; omit partition ID for nonpartitioned tables",
@@ -567,356 +579,4 @@ fn decode_commit(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use prost::Message;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[test]
-    fn response_validation_keeps_missing_offsets_and_partial_failures_distinct() {
-        assert!(definite_rejection(&Error::FlussAPIError {
-            api_error: api_error(48, None)
-        }));
-        assert!(!definite_rejection(&Error::FlussAPIError {
-            api_error: api_error(999, None)
-        }));
-        let bucket = TableBucket::new(1, 0);
-        let expected = HashSet::from([bucket.clone()]);
-        let mut response = proto::GetConsumerOffsetsResponse {
-            tables: vec![proto::PbGetConsumerOffsetsResponseTable {
-                table_id: 1,
-                buckets: vec![proto::PbGetConsumerOffsetsResponseBucket {
-                    bucket_id: 0,
-                    ..Default::default()
-                }],
-            }],
-        };
-        assert_eq!(
-            decode_fetch(response.clone(), &expected).unwrap()[&bucket],
-            None
-        );
-        response.tables[0].buckets[0].offset = Some(0);
-        response.tables[0].buckets[0].metadata = Some(String::new());
-        assert_eq!(
-            decode_fetch(response.clone(), &expected).unwrap()[&bucket],
-            Some(OffsetAndMetadata {
-                offset: 0,
-                metadata: Some(String::new())
-            })
-        );
-        response.tables[0].buckets.clear();
-        assert!(decode_fetch(response, &expected).is_err());
-
-        let values = HashMap::from([
-            (bucket.clone(), OffsetAndMetadata::new(2)),
-            (TableBucket::new(1, 1), OffsetAndMetadata::new(3)),
-        ]);
-        let result = decode_commit(
-            proto::CommitConsumerOffsetsResponse {
-                tables: vec![proto::PbCommitConsumerOffsetsResponseTable {
-                    table_id: 1,
-                    buckets: vec![
-                        proto::PbCommitConsumerOffsetsResponseBucket {
-                            bucket_id: 0,
-                            ..Default::default()
-                        },
-                        proto::PbCommitConsumerOffsetsResponseBucket {
-                            bucket_id: 1,
-                            error_code: Some(80),
-                            ..Default::default()
-                        },
-                    ],
-                }],
-            },
-            &values,
-        )
-        .unwrap();
-        assert!(matches!(result[&bucket], OffsetCommitOutcome::Committed));
-        assert!(matches!(
-            result[&TableBucket::new(1, 1)],
-            OffsetCommitOutcome::Rejected(_)
-        ));
-    }
-
-    // A real TCP peer exercises version negotiation, request envelopes, rediscovery and
-    // cancelled/unknown writes without depending on a full server's fault timing.
-    #[tokio::test]
-    async fn routing_and_late_writes_preserve_forward_progress_and_guard_rewinds() {
-        exercise_uncertain_commit(false).await;
-        exercise_uncertain_commit(true).await;
-    }
-
-    async fn exercise_uncertain_commit(cancel: bool) {
-        let observed_write = Arc::new(tokio::sync::Notify::new());
-        let release_late = Arc::new(tokio::sync::Notify::new());
-        let disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let commits = Arc::new(AtomicUsize::new(0));
-        let discoveries = Arc::new(AtomicUsize::new(0));
-        let recorded = Arc::new(Mutex::new(Vec::new()));
-        let peer = {
-            let commits = commits.clone();
-            let discoveries = discoveries.clone();
-            let recorded = recorded.clone();
-            let observed_write = observed_write.clone();
-            let release_late = release_late.clone();
-            let disconnected = disconnected.clone();
-            tokio::spawn(async move {
-                let mut connections = tokio::task::JoinSet::new();
-                loop {
-                    let (mut socket, _) = listener.accept().await.unwrap();
-                    let commits = commits.clone();
-                    let discoveries = discoveries.clone();
-                    let recorded = recorded.clone();
-                    let observed_write = observed_write.clone();
-                    let release_late = release_late.clone();
-                    let disconnected = disconnected.clone();
-                    connections.spawn(async move {
-                        while let Ok(len) = socket.read_i32().await {
-                            let mut request = vec![0; len as usize];
-                            socket.read_exact(&mut request).await.unwrap();
-                            let key = i16::from_be_bytes(request[..2].try_into().unwrap());
-                            let mut error = false;
-                            let body = match key {
-                                1000 => proto::ApiVersionsResponse {
-                                    api_versions: [1000, 1068, 1069, 1070]
-                                        .iter()
-                                        .map(|key| proto::PbApiVersion {
-                                            api_key: *key,
-                                            min_version: 0,
-                                            max_version: 0,
-                                        })
-                                        .collect(),
-                                    server_type: Some(ServerType::TabletServer.to_type_id()),
-                                }
-                                .encode_to_vec(),
-                                1068 => {
-                                    discoveries.fetch_add(1, Ordering::SeqCst);
-                                    let request =
-                                        proto::FindConsumerGroupOwnerRequest::decode(&request[8..])
-                                            .unwrap();
-                                    assert_eq!(request.group_id, "consumer-offsets");
-                                    proto::FindConsumerGroupOwnerResponse {
-                                        owner: proto::PbServerNode {
-                                            node_id: 0,
-                                            host: "127.0.0.1".into(),
-                                            port: port as i32,
-                                            ..Default::default()
-                                        },
-                                    }
-                                    .encode_to_vec()
-                                }
-                                1069 => {
-                                    let request =
-                                        proto::CommitConsumerOffsetsRequest::decode(&request[8..])
-                                            .unwrap();
-                                    let value = &request.tables[0].buckets[0];
-                                    assert_eq!(value.partition_id, None);
-                                    let attempt = commits.fetch_add(1, Ordering::SeqCst);
-                                    if attempt < 3 || matches!(value.offset, 21 | 22) {
-                                        error = true;
-                                        proto::ErrorResponse {
-                                            error_code: match value.offset {
-                                                21 => 81,
-                                                22 => 48,
-                                                _ => 76 + attempt as i32,
-                                            },
-                                            error_message: None,
-                                        }
-                                        .encode_to_vec()
-                                    } else if value.offset == 30 {
-                                        // Hold the first write past the client deadline, then apply it after 40.
-                                        let late = release_late.clone();
-                                        let log = recorded.clone();
-                                        tokio::spawn(async move {
-                                            late.notified().await;
-                                            log.lock().push(30);
-                                        });
-                                        observed_write.notify_one();
-                                        continue;
-                                    } else if matches!(value.offset, 41 | 42)
-                                        && !disconnected.swap(true, Ordering::SeqCst)
-                                    {
-                                        recorded.lock().push(value.offset);
-                                        break; // Persisted; lose this ACK with the connection.
-                                    } else if value.offset == 42 {
-                                        error = true;
-                                        proto::ErrorResponse {
-                                            error_code: 48,
-                                            error_message: None,
-                                        }
-                                        .encode_to_vec()
-                                    } else {
-                                        recorded.lock().push(value.offset);
-                                        proto::CommitConsumerOffsetsResponse {
-                                            tables: vec![
-                                                proto::PbCommitConsumerOffsetsResponseTable {
-                                                    table_id: 1,
-                                                    buckets: vec![
-                                            proto::PbCommitConsumerOffsetsResponseBucket {
-                                                bucket_id: value.bucket_id,
-                                                ..Default::default()
-                                            },
-                                        ],
-                                                },
-                                            ],
-                                        }
-                                        .encode_to_vec()
-                                    }
-                                }
-                                _ => panic!("unexpected API {key}"),
-                            };
-                            let mut response = vec![u8::from(error)];
-                            response.extend_from_slice(&request[4..8]);
-                            response.extend_from_slice(&body);
-                            socket.write_i32(response.len() as i32).await.unwrap();
-                            socket.write_all(&response).await.unwrap();
-                        }
-                    });
-                }
-            })
-        };
-        let node = ServerNode::new(
-            0,
-            "127.0.0.1".into(),
-            u32::from(port),
-            ServerType::TabletServer,
-        );
-        let cluster = crate::cluster::Cluster::new(
-            None,
-            HashMap::from([(0, node)]),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-        );
-        let group = Arc::new(ConsumerGroup::new(
-            1,
-            ConsumerGroupOptions {
-                group_id: "consumer-offsets".into(),
-                timeout: Duration::from_secs(2),
-            },
-            Arc::new(RpcClient::new()),
-            Arc::new(Metadata::new_for_test(Arc::new(cluster))),
-        ));
-        let offsets =
-            |offset| HashMap::from([(TableBucket::new(1, 0), OffsetAndMetadata::new(offset))]);
-        let first = group.enqueue(offsets(10)).unwrap();
-        let cancelled = group.enqueue(offsets(15)).unwrap();
-        cancelled.abort();
-        assert!(cancelled.await.unwrap_err().is_cancelled());
-        let second = group.enqueue(offsets(20)).unwrap();
-        // Dropping a waiting handle must not cancel or reorder the first write.
-        drop(first);
-        assert!(matches!(
-            second.await.unwrap().unwrap()[&TableBucket::new(1, 0)],
-            OffsetCommitOutcome::Committed
-        ));
-        assert_eq!(*recorded.lock(), vec![10, 15, 20]);
-        assert_eq!(discoveries.load(Ordering::SeqCst), 4);
-        for (offset, code) in [(21, 81), (22, 48)] {
-            assert!(matches!(
-                group.enqueue(offsets(offset)).unwrap().await.unwrap(),
-                Err(OffsetCommitError::Rejected(Error::FlussAPIError { api_error }))
-                    if api_error.code == code
-            ));
-        }
-        assert!(group.enqueue(offsets(25)).unwrap().await.unwrap().is_ok());
-        let owner = group.owner().await.unwrap();
-        let connection = group.connections.get_connection(&owner).await.unwrap();
-        if !cancel {
-            let before = commits.load(Ordering::SeqCst);
-            connection
-                .with_write_lock_for_test(async {
-                    // The running request owns its slot even if its waiting handle is aborted.
-                    let mut handles = Vec::new();
-                    for _ in 0..MAX_PENDING_COMMITS {
-                        handles.push(group.enqueue(offsets(25)).unwrap());
-                    }
-                    handles.pop().unwrap().abort();
-                    assert!(matches!(
-                        group.enqueue(offsets(25)),
-                        Err(Error::BufferExhausted { .. })
-                    ));
-                    assert!(matches!(
-                        handles.remove(0).await.unwrap(),
-                        Err(OffsetCommitError::Rejected(_))
-                    ));
-                    assert_eq!(commits.load(Ordering::SeqCst), before);
-                })
-                .await;
-            // Drain all admitted writes before testing the next connection failure.
-            group.enqueue(offsets(25)).unwrap().await.unwrap().unwrap();
-            assert_eq!(commits.load(Ordering::SeqCst) - before, MAX_PENDING_COMMITS);
-        }
-        let recovered = tokio::time::timeout(
-            Duration::from_secs(5),
-            connection.close_before_write_for_test(async {
-                group.enqueue(offsets(26)).unwrap().await.unwrap()
-            }),
-        )
-        .await
-        .expect("commit did not recover from a connection closed before sending")
-        .expect("a request that was never sent must not block the scanner");
-        assert!(matches!(
-            recovered[&TableBucket::new(1, 0)],
-            OffsetCommitOutcome::Committed
-        ));
-        assert_eq!(discoveries.load(Ordering::SeqCst), 5);
-        let pending = group.enqueue(offsets(30)).unwrap();
-        if cancel {
-            tokio::time::timeout(Duration::from_secs(2), observed_write.notified())
-                .await
-                .unwrap();
-            pending.abort();
-            assert!(pending.await.unwrap_err().is_cancelled());
-        } else {
-            assert!(matches!(
-                pending.await.unwrap(),
-                Err(OffsetCommitError::Unknown(_))
-            ));
-        }
-        assert!(group.enqueue(offsets(40)).unwrap().await.unwrap().is_ok());
-        release_late.notify_one();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !recorded.lock().ends_with(&[40, 30]) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(matches!(
-            group.enqueue(offsets(29)).unwrap().await.unwrap(),
-            Err(OffsetCommitError::NeedsRecovery)
-        ));
-        assert!(group.enqueue(offsets(41)).unwrap().await.unwrap().is_ok());
-        assert!(recorded.lock().ends_with(&[40, 30, 41, 41]));
-        // Even an ACK for the retry does not fence its original attempt.
-        assert!(matches!(
-            group.enqueue(offsets(39)).unwrap().await.unwrap(),
-            Err(OffsetCommitError::NeedsRecovery)
-        ));
-        let mut same = offsets(41);
-        same.values_mut().next().unwrap().metadata = Some("other".into());
-        assert!(matches!(
-            group.enqueue(same).unwrap().await.unwrap(),
-            Err(OffsetCommitError::NeedsRecovery)
-        ));
-        disconnected.store(false, Ordering::SeqCst);
-        // A definitive rejection for the retry says nothing about its lost predecessor.
-        assert!(matches!(
-            group.enqueue(offsets(42)).unwrap().await.unwrap(),
-            Err(OffsetCommitError::Unknown(_))
-        ));
-        let other = TableBucket::new(1, 1);
-        let independent = HashMap::from([(other.clone(), OffsetAndMetadata::new(1))]);
-        assert!(matches!(
-            group.enqueue(independent).unwrap().await.unwrap().unwrap()[&other],
-            OffsetCommitOutcome::Committed
-        ));
-        peer.abort();
-    }
-}
+mod tests;

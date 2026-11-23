@@ -39,6 +39,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -142,15 +143,17 @@ public class TieringTestBase extends AbstractTestBase {
 
     protected static final String DEFAULT_DB = "test-tiering-db";
 
-    protected static final TablePath DEFAULT_TABLE_PATH =
-            TablePath.of(DEFAULT_DB, "tiering-test-table");
-
     protected static Connection conn;
     protected static Admin admin;
     protected static CoordinatorGateway coordinatorGateway;
 
     protected static Configuration clientConf;
     protected static String bootstrapServers;
+
+    protected final TestTableNames tableNames = new TestTableNames();
+
+    protected final TablePath defaultTablePath =
+            tableNames.tablePath(DEFAULT_DB, "tiering-test-table");
 
     @BeforeAll
     protected static void beforeAll() {

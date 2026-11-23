@@ -231,6 +231,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.scanner_log_fetch_min_bytes = config.scanner_log_fetch_min_bytes;
     ffi_config.scanner_log_fetch_wait_max_time_ms = config.scanner_log_fetch_wait_max_time_ms;
     ffi_config.scanner_log_fetch_max_bytes_for_bucket = config.scanner_log_fetch_max_bytes_for_bucket;
+    ffi_config.scanner_log_check_crc = config.scanner_log_check_crc;
     ffi_config.writer_batch_timeout_ms = config.writer_batch_timeout_ms;
     ffi_config.writer_enable_idempotence = config.writer_enable_idempotence;
     ffi_config.writer_max_inflight_requests_per_bucket =
@@ -248,6 +249,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.security_sasl_username = rust::String(config.security_sasl_username);
     ffi_config.security_sasl_password = rust::String(config.security_sasl_password);
     ffi_config.lookup_queue_size = config.lookup_queue_size;
+    ffi_config.lookup_max_pending_operations = config.lookup_max_pending_operations;
     ffi_config.lookup_max_batch_size = config.lookup_max_batch_size;
     ffi_config.lookup_batch_timeout_ms = config.lookup_batch_timeout_ms;
     ffi_config.lookup_max_inflight_requests = config.lookup_max_inflight_requests;

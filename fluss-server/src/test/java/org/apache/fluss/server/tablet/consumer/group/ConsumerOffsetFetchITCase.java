@@ -42,6 +42,7 @@ import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseTable;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -76,10 +77,12 @@ class ConsumerOffsetFetchITCase {
                                     .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 1))
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testFetchAllAndSelectedOffsetsForNonPartitionedTable() throws Exception {
         String groupId = "fetch-non-partitioned-group";
-        TablePath tablePath = TablePath.of("fetch_non_partitioned_db", "source_table");
+        TablePath tablePath = tableNames.tablePath("fetch_non_partitioned_db", "source_table");
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
@@ -135,7 +138,7 @@ class ConsumerOffsetFetchITCase {
     @Test
     void testFetchOffsetsForPartitionedTable() throws Exception {
         String groupId = "fetch-partitioned-group";
-        TablePath tablePath = TablePath.of("fetch_partitioned_db", "source_table");
+        TablePath tablePath = tableNames.tablePath("fetch_partitioned_db", "source_table");
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,

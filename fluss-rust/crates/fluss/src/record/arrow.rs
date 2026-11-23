@@ -129,6 +129,7 @@ pub(crate) struct PrebuiltRecordBatchBuilder {
     row_type: RowType,
     arrow_record_batch: Option<Arc<RecordBatch>>,
     records_count: i32,
+    estimated_body_size: usize,
 }
 
 impl PrebuiltRecordBatchBuilder {
@@ -137,6 +138,7 @@ impl PrebuiltRecordBatchBuilder {
             row_type,
             arrow_record_batch: None,
             records_count: 0,
+            estimated_body_size: 0,
         }
     }
 }
@@ -159,7 +161,15 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
             record_batch.as_ref(),
             &self.row_type,
         )?);
+        // IPC writes logical data, not unused buffer capacity or array objects.
+        // Cache this per batch so size checks do not reconstruct ArrayData.
+        let estimated_body_size = record_batch
+            .columns()
+            .iter()
+            .map(|column| column.to_data().get_slice_memory_size())
+            .sum::<std::result::Result<usize, _>>()?;
         self.records_count = record_batch.num_rows() as i32;
+        self.estimated_body_size = estimated_body_size;
         self.arrow_record_batch = Some(record_batch);
         Ok(true)
     }
@@ -178,10 +188,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
     }
 
     fn estimated_size_in_bytes(&self) -> usize {
-        self.arrow_record_batch
-            .as_ref()
-            .map(|batch| batch.get_array_memory_size())
-            .unwrap_or(0)
+        self.estimated_body_size
     }
 }
 
@@ -1470,11 +1477,25 @@ impl ReadContext {
     }
 }
 
-fn align_record_batch_to_schema(
+/// Aligns columns to a target schema using source indexes; `-1` fills a missing
+/// column with nulls. Callers resolve field identity before constructing the mapping.
+/// Incompatible types and nullability are rejected by Arrow validation.
+#[doc(hidden)]
+pub fn align_record_batch_to_schema(
     record_batch: RecordBatch,
     target_schema: SchemaRef,
     schema_alignment: &[i32],
 ) -> Result<RecordBatch> {
+    if schema_alignment.len() != target_schema.fields().len()
+        || schema_alignment.iter().any(|index| {
+            *index != UNEXIST_MAPPING
+                && (*index < 0 || *index as usize >= record_batch.num_columns())
+        })
+    {
+        return Err(crate::error::Error::IllegalArgument {
+            message: "invalid Arrow schema alignment".into(),
+        });
+    }
     if schema_alignment.len() == record_batch.num_columns()
         && schema_alignment.len() == target_schema.fields().len()
         && schema_alignment

@@ -30,6 +30,7 @@ pub struct OffsetsInitializer(Initializer);
 
 #[derive(Debug, Clone)]
 enum Initializer {
+    Earliest,
     Offset(i64),
     Lookup(crate::rpc::message::OffsetSpec),
     Fail,
@@ -39,7 +40,7 @@ enum Initializer {
 impl OffsetsInitializer {
     /// Starts at the earliest available record.
     pub fn earliest() -> Self {
-        Self(Initializer::Offset(crate::client::EARLIEST_OFFSET))
+        Self(Initializer::Earliest)
     }
     /// Starts at the current end of each bucket.
     pub fn latest() -> Self {
@@ -97,18 +98,7 @@ impl LogScannerInner {
 
     fn delivered_offsets(&self) -> Result<HashMap<TableBucket, OffsetAndMetadata>> {
         self.check_no_active_reader()?;
-        let delivered = self.group()?.delivered.lock();
-        Ok(self
-            .log_scanner_status
-            .get_all_subscriptions()
-            .into_iter()
-            .filter_map(|(bucket, _)| {
-                delivered
-                    .get(&bucket)
-                    .cloned()
-                    .map(|offset| (bucket, offset))
-            })
-            .collect())
+        Ok(self.group()?.delivered.lock().clone())
     }
 
     async fn subscribe_with_initializer(
@@ -140,8 +130,15 @@ impl LogScannerInner {
                 Initializer::Fail => {
                     return Err(invalid("No committed offset and no fallback provided"));
                 }
+                Initializer::Earliest => {
+                    offsets.extend(
+                        pending
+                            .drain(..)
+                            .map(|bucket| (bucket, crate::client::EARLIEST_OFFSET)),
+                    );
+                }
                 Initializer::Offset(offset) => {
-                    if *offset < 0 && *offset != crate::client::EARLIEST_OFFSET {
+                    if *offset < 0 {
                         return Err(invalid("Starting offset must be nonnegative"));
                     }
                     offsets.extend(pending.drain(..).map(|bucket| (bucket, *offset)));
@@ -211,8 +208,8 @@ macro_rules! group_methods {
                     .await
             }
 
-            /// Enqueues the positions delivered by completed polls. Call only after processing
-            /// all returned records successfully; use `commit_offsets_async` for partial batches.
+            /// Commits progress from completed polls, including ranges skipped by the filter.
+            /// Process all returned records first; use `commit_offsets_async` for partial batches.
             /// Subscriptions, seeks and polls must be driven by one consumer task.
             pub fn commit_async(&self) -> Result<OffsetCommitHandle> {
                 self.commit_offsets_async(self.inner.delivered_offsets()?)

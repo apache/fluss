@@ -651,7 +651,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
     @Test
     void testCountPushDownWithWALMode() throws Exception {
-        String tableName = "test_count_table_with_wal";
+        String tableName = tableNames.tableName("test_count_table_with_wal");
         createTableAndWaitUntilReady(
                 tableName,
                 String.format(
@@ -667,13 +667,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThatThrownBy(() -> tEnv.explainSql(query))
                 .hasMessageContaining(
                         String.format(
-                                "Row count is disabled for this table '%s.test_count_table_with_wal'.",
-                                databaseName));
+                                "Row count is disabled for this table '%s.%s'.",
+                                databaseName, tableName));
     }
 
     @Test
     void testCountIsNotPushedDownForRowTtlTable() throws Exception {
-        String tableName = "test_count_table_with_row_ttl";
+        String tableName = tableNames.tableName("test_count_table_with_row_ttl");
         createTableAndWaitUntilReady(
                 tableName,
                 String.format(

@@ -29,6 +29,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
+| `scanner_log_check_crc`               | `bool`          | `true`             | Check the CRC of fetched log batches, so a corrupted batch fails the scan. Batches the server projected are not checked |
 | `lookup_queue_size`                   | `usize`         | `25600`            | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
 | `lookup_max_batch_size`               | `usize`         | `128`              | Maximum number of lookups merged into one request                                    |
 | `lookup_batch_timeout_ms`             | `u64`           | `100`              | Maximum time in ms a lookup waits for its batch to fill                              |
@@ -159,6 +160,7 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by `create_bucket_batch_scanner`) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
+| `async fn create_bounded_log_reader(self, ranges: Vec<BoundedLogReadRange>) -> Result<RecordBatchLogReader>` | Read frozen ranges of an append log or a primary-key changelog. Use `ScanBatch::change_types` for CDC. |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
 
 ## `LogScanner`
@@ -227,7 +229,7 @@ for (bucket, outcome) in outcomes {
 | --- | --- |
 | `subscribe_with_initializer(buckets, initializer).await` | Resolve and update selected buckets together; retain other subscriptions. Resolution errors leave subscriptions unchanged. |
 | `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
-| `commit_sync().await` | Commit the next offsets after records returned by completed polls. Internal prefetch is excluded. Process the entire returned batch first. |
+| `commit_sync().await` | Commit progress from completed polls, including ranges skipped by the filter even when no rows were returned. Prefetch is excluded. Process all returned records first. |
 | `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
 | `commit_async()` / `commit_offsets_async(offsets)` | Return an `OffsetCommitHandle`, capturing the offsets at invocation. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
 
@@ -326,8 +328,8 @@ thread that belongs to the same runtime** — nested `block_on` panics. Prefer
 `RecordBatchLogReader::next_batch` in async Rust code; use this adapter only at
 sync/FFI boundaries.
 
-Bucket and offset metadata carried by `ScanBatch` is **dropped** here, because
-the Arrow trait contract yields plain `RecordBatch`. If you need offsets or
+Bucket, offset, and change-type metadata carried by `ScanBatch` is **dropped** here, because
+the Arrow trait contract yields plain `RecordBatch`. If you need offsets, change types, or
 bucket identity per batch, use `next_batch` instead.
 
 | Method                                                          | Description                                      |
@@ -379,8 +381,9 @@ existing key emits `-U` then `+U`; the `WAL` mode emits only `+U`.
 | Method                                                                   | Description                       |
 |--------------------------------------------------------------------------|-----------------------------------|
 | `fn count(&self) -> usize`                                               | Number of records                 |
-| `fn is_empty(&self) -> bool`                                             | Whether the result set is empty   |
+| `fn is_empty(&self) -> bool`                                             | True if no bucket returned records or advanced   |
 | `fn records(&self, bucket: &TableBucket) -> &[ScanRecord]`               | Get records for a specific bucket |
+| `fn consumed_up_to_offset(&self, bucket: &TableBucket) -> Option<i64>` | Exclusive offset consumed in this poll; can advance even if the bucket returned no records |
 | `fn records_by_buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>>` | Get all records grouped by bucket |
 
 `ScanRecords` also implements `IntoIterator`, so you can iterate over all records directly:
@@ -398,6 +401,7 @@ for record in records {
 | `fn bucket(&self) -> &TableBucket`  | Bucket this batch belongs to      |
 | `fn batch(&self) -> &RecordBatch`   | Arrow RecordBatch data            |
 | `fn base_offset(&self) -> i64`      | First record offset               |
+| `fn change_types(&self) -> Option<&[ChangeType]>` | One change type per CDC row; absent for append-only batches |
 | `fn last_offset(&self) -> i64`      | Last record offset                |
 | `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
 | `fn schema_id(&self) -> i32`      | Schema ID from the source log batch |
@@ -468,7 +472,7 @@ close, and lookups left unfinished when the close times out fail with `Error::Lo
 Usage:
 
 ```rust
-// Fire-and-forget (batched)
+// Fire-and-forget (batched), flush() doesn't return the error of a failed write
 writer.append(&row)?;
 writer.flush().await?;
 

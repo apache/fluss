@@ -22,7 +22,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
@@ -31,6 +33,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,7 +45,6 @@ import java.util.Map;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
@@ -60,6 +62,9 @@ public class RemoteLeaderEndpointTest {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     private ZooKeeperClient zkClient;
 
     @BeforeEach
@@ -74,7 +79,7 @@ public class RemoteLeaderEndpointTest {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
-        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, tableDescriptor);
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
@@ -121,10 +126,7 @@ public class RemoteLeaderEndpointTest {
                                                 Collections.singletonMap(
                                                         tb,
                                                         new BucketFetchStatus(
-                                                                tableId,
-                                                                DATA1_TABLE_PATH,
-                                                                0L,
-                                                                null)))
+                                                                tableId, data1TablePath, 0L, null)))
                                         .get())
                         .get();
 

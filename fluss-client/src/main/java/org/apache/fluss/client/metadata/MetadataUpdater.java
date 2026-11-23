@@ -60,6 +60,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The updater to initialize and update client metadata. */
 public class MetadataUpdater {
@@ -154,13 +155,21 @@ public class MetadataUpdater {
     }
 
     public @Nullable TabletServerGateway newTabletServerClientForNode(int serverId) {
-        @Nullable final ServerNode serverNode = getTabletServer(serverId);
-        if (serverNode == null) {
-            return null;
-        } else {
-            return GatewayClientProxy.createGatewayProxy(
-                    () -> serverNode, rpcClient, TabletServerGateway.class);
-        }
+        ServerNode serverNode = getTabletServer(serverId);
+        return serverNode == null ? null : newTabletServerClientForNode(serverNode);
+    }
+
+    /**
+     * Creates a tablet server gateway using the given node's endpoint without consulting cached
+     * metadata.
+     *
+     * @param serverNode the tablet server node to connect to
+     * @return a gateway for the supplied node
+     */
+    public TabletServerGateway newTabletServerClientForNode(ServerNode serverNode) {
+        checkNotNull(serverNode, "serverNode must not be null");
+        return GatewayClientProxy.createGatewayProxy(
+                () -> serverNode, rpcClient, TabletServerGateway.class);
     }
 
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {

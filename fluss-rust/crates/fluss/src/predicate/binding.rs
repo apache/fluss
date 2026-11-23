@@ -115,6 +115,20 @@ impl BoundPredicate {
     /// A partially supported `OR` is never pushed down.
     #[doc(hidden)]
     pub fn to_pushdown_predicate(&self) -> Option<Predicate> {
+        self.unbind(true)
+    }
+
+    /// Encodes the complete normalized filter, including leaves that cannot prune log batches.
+    #[doc(hidden)]
+    pub fn exact_filter_bytes(&self, row_type: &RowType) -> Result<Vec<u8>> {
+        use prost::Message;
+        self.unbind(false)
+            .map(|predicate| predicate.to_protobuf(row_type).map(|pb| pb.encode_to_vec()))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    fn unbind(&self, for_pushdown: bool) -> Option<Predicate> {
         match self {
             Self::AlwaysTrue => None,
             Self::Leaf {
@@ -128,13 +142,14 @@ impl BoundPredicate {
                 let null_checks_only =
                     matches!(data_type, DataType::Float(_) | DataType::Double(_))
                         || matches!(data_type, DataType::Time(time) if time.precision() > 3);
-                if null_checks_only
+                if for_pushdown
+                    && null_checks_only
                     && !matches!(function, LeafFunction::IsNull | LeafFunction::IsNotNull)
                 {
                     return None;
                 }
                 // Server prefix pruning uses UTF-16 ordering, unlike UTF-8 min/max.
-                if matches!(function, LeafFunction::StartsWith) {
+                if for_pushdown && matches!(function, LeafFunction::StartsWith) {
                     return None;
                 }
                 Some(Predicate::Leaf {
@@ -146,14 +161,18 @@ impl BoundPredicate {
             Self::Compound {
                 function: CompoundFunction::And,
                 children,
-            } => Predicate::and_all(children.iter().filter_map(Self::to_pushdown_predicate)),
+            } => Predicate::and_all(
+                children
+                    .iter()
+                    .filter_map(|child| child.unbind(for_pushdown)),
+            ),
             Self::Compound {
                 function: CompoundFunction::Or,
                 children,
             } => Predicate::or_all(
                 children
                     .iter()
-                    .map(Self::to_pushdown_predicate)
+                    .map(|child| child.unbind(for_pushdown))
                     .collect::<Option<Vec<_>>>()?,
             ),
         }

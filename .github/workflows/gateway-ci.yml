@@ -56,6 +56,8 @@ on:
       - 'tools/releasing/*rust_license.py'
       - '.github/workflows/gateway-ci.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '0 20 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -65,9 +67,9 @@ defaults:
   run:
     working-directory: fluss-gateway
 
-# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
-# on x86, so a merge that breaks only x86 still shows up there. The container
-# smoke test keeps one job per architecture on every event.
+# Runs on arm64, whose queue stays short at peak hours. Main uses the same arch,
+# so PRs restore its caches. x86 runs nightly and on release branches. The
+# container smoke test keeps one job per architecture on every event.
 jobs:
   build-and-unit-test:
     name: "Gateway Build and Tests"
@@ -76,7 +78,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+          - ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/heads/release-')) && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
           - macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -85,6 +87,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-gateway
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # Without `--locked` Cargo rewrites a stale lockfile in the CI workspace, and the run would
       # validate a dependency graph the repository does not contain.
@@ -110,7 +113,7 @@ jobs:
     # rust-toolchain.toml floats to stable, so a plain build never catches features newer
     # than the declared rust-version; `+toolchain` overrides the file here.
     timeout-minutes: 60
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/heads/release-')) && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -121,13 +124,14 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-gateway
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check on the declared MSRV
         run: cargo +1.88.0 check --locked --all-targets
 
   check-license-and-formatting:
     name: "Gateway License and Formatting Check"
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/heads/release-')) && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -162,6 +166,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-gateway
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -205,7 +210,7 @@ jobs:
       # an exact commit, so a moving tag such as @v3 fails the whole run before any job
       # starts. This commit is the revision other ASF projects already build images with.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build and smoke test the distribution and image
         env:

@@ -38,6 +38,7 @@ import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
@@ -82,6 +83,8 @@ public class KvSnapshotMultipleDirsITCase {
                     .setRemoteDirNames(REMOTE_DIR_NAMES)
                     .setUseRemoteDataDir(false)
                     .build();
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     private ZooKeeperClient zkClient;
 
@@ -174,7 +177,7 @@ public class KvSnapshotMultipleDirsITCase {
         // to ensure round-robin distribution. Each partition's KV snapshot should be uploaded to
         // different remote dirs.
         int partitionCount = 6;
-        TablePath tablePath = TablePath.of("test_db", "partitioned_kv_snapshot_table");
+        TablePath tablePath = tableNames.tablePath("test_db", "partitioned_kv_snapshot_table");
 
         // Create partitioned table with primary key
         Schema schema =

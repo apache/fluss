@@ -18,9 +18,9 @@
 name = "fluss-lake"
 version = { workspace = true }
 edition = { workspace = true }
-# Paimon 0.3 requires Rust 1.91; this package MSRV applies to all features.
+# Paimon 0.5 requires Rust 1.95; this package MSRV applies to all features.
 # Keep in sync with the `lake-msrv` CI job.
-rust-version = "1.91"
+rust-version = "1.95"
 license = { workspace = true }
 authors = { workspace = true }
 description = "Engine-neutral bounded lake and log read kernel for Apache Fluss"
@@ -31,14 +31,23 @@ categories = { workspace = true }
 
 [features]
 integration_tests = ["fluss/integration_tests"]
+paimon = ["dep:opendal-core", "dep:paimon", "dep:reqwest"]
 
 [dependencies]
+# Paimon reports storage failures as opendal-core errors.
+opendal-core = { version = "0.59.5", default-features = false, optional = true }
+paimon = { version = "0.5.0", default-features = false, features = ["storage-memory", "storage-fs", "storage-oss", "storage-s3"], optional = true }
+# Paimon's REST client reports transport failures as reqwest errors.
+reqwest = { version = "0.12", default-features = false, optional = true }
+sha2 = "0.10"
+serde_json = { workspace = true }
+arrow = { workspace = true }
+serde = { workspace = true }
 fluss = { package = "fluss-rs", path = "../fluss" }
 futures = "0.3"
 thiserror = "1.0"
+tokio = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
-arrow = { workspace = true }
 fluss-test-cluster = { path = "../fluss-test-cluster" }
-tokio = { workspace = true }
+tempfile = "3.23.0"

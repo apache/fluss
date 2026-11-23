@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -50,6 +51,8 @@ class PartitionNegativeCacheITCase {
 
     private static CoordinatorGateway coordinatorGateway;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     static void setup() {
         coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
@@ -60,7 +63,7 @@ class PartitionNegativeCacheITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         // Create a partitioned table with auto-partition disabled.
-        TablePath tablePath = TablePath.of("test_db_neg_cache", "partitioned_table");
+        TablePath tablePath = tableNames.tablePath("test_db_neg_cache", "partitioned_table");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)

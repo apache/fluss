@@ -43,6 +43,7 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -101,6 +102,8 @@ class RemoteStorageCleanerITCase {
                     .setRemoteDirNames(REMOTE_DATA_DIRS)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private ZooKeeperClient zkClient;
     private CoordinatorGateway coordinatorGateway;
 
@@ -115,7 +118,7 @@ class RemoteStorageCleanerITCase {
     void testDeleteNonPartitionedTable(boolean isPkTable) throws Exception {
         // Create table
         String tablePrefix = isPkTable ? "pk_table_cleaner_" : "log_table_cleaner_";
-        TablePath tablePath = TablePath.of("test_db", tablePrefix + "1");
+        TablePath tablePath = tableNames.tablePath("test_db", tablePrefix + "1");
         TableDescriptor tableDescriptor =
                 isPkTable ? DATA1_TABLE_DESCRIPTOR_PK : DATA1_TABLE_DESCRIPTOR;
 

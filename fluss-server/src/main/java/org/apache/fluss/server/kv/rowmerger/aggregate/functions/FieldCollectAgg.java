@@ -26,12 +26,9 @@ import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.array.BinaryArraySplicer;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.utils.ArrayDistinctCollector;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.utils.ByteArrayWrapper;
-
-import java.util.LinkedHashSet;
-import java.util.Set;
 
 /** Collects array elements, retaining their first occurrence order when distinct is enabled. */
 public class FieldCollectAgg extends FieldAggregator {
@@ -39,6 +36,7 @@ public class FieldCollectAgg extends FieldAggregator {
     private static final long serialVersionUID = 1L;
 
     private final boolean distinct;
+    private final ArrayDistinctCollector distinctCollector;
     private final DataType elementType;
     private final boolean spliceable;
     private final InternalArray.ElementGetter elementGetter;
@@ -50,6 +48,7 @@ public class FieldCollectAgg extends FieldAggregator {
         this.elementType = dataType.getElementType();
         this.spliceable = BinaryArraySplicer.supports(elementType);
         this.elementGetter = InternalArray.createElementGetter(elementType);
+        this.distinctCollector = distinct ? new ArrayDistinctCollector(elementType) : null;
     }
 
     @Override
@@ -94,7 +93,8 @@ public class FieldCollectAgg extends FieldAggregator {
             return new GenericArray(result);
         }
 
-        Set<Object> elements = new LinkedHashSet<>(expectedSize);
+        ArrayDistinctCollector.Accumulator elements =
+                distinctCollector.newAccumulator(expectedSize);
         collectDistinct(elements, accumulatorArray);
         int accumulatorDistinctSize = elements.size();
         collectDistinct(elements, inputArray);
@@ -103,13 +103,7 @@ public class FieldCollectAgg extends FieldAggregator {
                 && elements.size() == accumulatorDistinctSize) {
             return accumulator;
         }
-        Object[] result = elements.toArray();
-        for (int i = 0; i < result.length; i++) {
-            if (result[i] instanceof ByteArrayWrapper) {
-                result[i] = ((ByteArrayWrapper) result[i]).getData();
-            }
-        }
-        return new GenericArray(result);
+        return elements.toArray();
     }
 
     @Override
@@ -117,14 +111,12 @@ public class FieldCollectAgg extends FieldAggregator {
         return distinct;
     }
 
-    private void collectDistinct(Set<Object> elements, InternalArray array) {
+    private void collectDistinct(ArrayDistinctCollector.Accumulator elements, InternalArray array) {
         if (array == null) {
             return;
         }
         for (int i = 0; i < array.size(); i++) {
-            Object element = elementGetter.getElementOrNull(array, i);
-            elements.add(
-                    element instanceof byte[] ? new ByteArrayWrapper((byte[]) element) : element);
+            elements.add(array, i);
         }
     }
 }

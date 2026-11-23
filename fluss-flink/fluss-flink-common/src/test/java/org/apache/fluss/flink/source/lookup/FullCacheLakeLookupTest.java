@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.decode.RowDecoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
@@ -64,6 +65,8 @@ class FullCacheLakeLookupTest {
                     .setNumOfTabletServers(1)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @TempDir private Path tempDir;
 
     @ParameterizedTest
@@ -72,7 +75,7 @@ class FullCacheLakeLookupTest {
         Configuration config = new Configuration(CLUSTER.getClientConfig());
         config.set(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR, tempDir.toString());
         config.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, strategy);
-        TablePath path = TablePath.of("full_cache_lake", "dimension_" + strategy);
+        TablePath path = tableNames.tablePath("full_cache_lake", "dimension_" + strategy);
         try (Connection connection = ConnectionFactory.createConnection(config);
                 Admin admin = connection.getAdmin()) {
             admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();

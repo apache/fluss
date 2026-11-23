@@ -29,6 +29,7 @@ import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -84,6 +85,8 @@ class RemoteDirsITCase {
                     .setRemoteDirNames(REMOTE_DIR_NAMES)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private ZooKeeperClient zkClient;
 
     private static Configuration initConfig() {
@@ -111,7 +114,7 @@ class RemoteDirsITCase {
         int tableCount = 6; // Create more tables than dirs to see round-robin in action
 
         for (int i = 0; i < tableCount; i++) {
-            TablePath tablePath = TablePath.of("test_db", tablePrefix + i);
+            TablePath tablePath = tableNames.tablePath("test_db", tablePrefix + i);
             RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
 
             // Get the table registration to check remoteDataDir
@@ -140,7 +143,7 @@ class RemoteDirsITCase {
         // Create a partitioned table and add multiple partitions
         // Each partition should get a different remoteDataDir via round-robin
         String tablePrefix = isPrimaryKeyTable ? "pk_partitioned_" : "partitioned_";
-        TablePath tablePath = TablePath.of("test_db", tablePrefix + "table_2");
+        TablePath tablePath = tableNames.tablePath("test_db", tablePrefix + "table_2");
 
         TableDescriptor tableDescriptor =
                 isPrimaryKeyTable
@@ -187,7 +190,7 @@ class RemoteDirsITCase {
     void testAutoPartitionWithMultipleRemoteDirs(boolean isPrimaryKeyTable) throws Exception {
         // Create an auto-partitioned table and verify partitions use different remote dirs
         String tablePrefix = isPrimaryKeyTable ? "auto_pk_partitioned_" : "auto_partitioned_";
-        TablePath tablePath = TablePath.of("test_db", tablePrefix + "table");
+        TablePath tablePath = tableNames.tablePath("test_db", tablePrefix + "table");
         TableDescriptor tableDescriptor =
                 isPrimaryKeyTable
                         ? DATA1_PARTITIONED_TABLE_DESCRIPTOR_PK
@@ -223,13 +226,13 @@ class RemoteDirsITCase {
 
         // Create 2 non-partitioned tables
         for (int i = 0; i < 2; i++) {
-            TablePath tablePath = TablePath.of("test_db", "mixed_non_pk_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "mixed_non_pk_" + i);
             RpcMessageTestUtils.createTable(
                     FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
         }
 
         // Create a partitioned table
-        TablePath partitionedTablePath = TablePath.of("test_db", "mixed_partitioned");
+        TablePath partitionedTablePath = tableNames.tablePath("test_db", "mixed_partitioned");
         RpcMessageTestUtils.createTable(
                 FLUSS_CLUSTER_EXTENSION, partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR);
 
@@ -247,7 +250,7 @@ class RemoteDirsITCase {
 
         // Create 2 more non-partitioned tables
         for (int i = 2; i < 4; i++) {
-            TablePath tablePath = TablePath.of("test_db", "mixed_non_pk_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "mixed_non_pk_" + i);
             RpcMessageTestUtils.createTable(
                     FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
         }
@@ -257,7 +260,7 @@ class RemoteDirsITCase {
 
         // Check non-partitioned tables
         for (int i = 0; i < 4; i++) {
-            TablePath tablePath = TablePath.of("test_db", "mixed_non_pk_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "mixed_non_pk_" + i);
             Optional<TableRegistration> tableOpt = zkClient.getTable(tablePath);
             assertThat(tableOpt).isPresent();
             assertThat(tableOpt.get().remoteDataDir).isNotNull();

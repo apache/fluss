@@ -19,6 +19,7 @@ package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.bucketing.FlussBucketingFunction;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -60,6 +61,12 @@ public final class ConsumerOffsetSchema {
     /** Sentinel used for non-partitioned tables because primary-key columns cannot be null. */
     public static final long NON_PARTITIONED_PARTITION_ID = -1L;
 
+    /** Sentinel table ID used by group metadata rows. */
+    private static final long GROUP_METADATA_TABLE_ID = -1L;
+
+    /** Sentinel bucket ID used by group metadata rows. */
+    private static final int GROUP_METADATA_BUCKET_ID = -1;
+
     private static final List<String> PRIMARY_KEYS =
             Collections.unmodifiableList(
                     Arrays.asList(
@@ -75,6 +82,12 @@ public final class ConsumerOffsetSchema {
     private static final Schema TABLE_SCHEMA = createTableSchema();
     private static final RowType ROW_TYPE = TABLE_SCHEMA.getRowType();
     private static final DataType[] DATA_TYPES = ROW_TYPE.getChildren().toArray(new DataType[0]);
+
+    /** Encoded prefix for all group metadata rows. Must not be modified. */
+    static final byte[] GROUP_METADATA_PREFIX =
+            KeyEncoder.ofBucketKeyEncoder(
+                            ROW_TYPE, Collections.singletonList(RECORD_TYPE_COLUMN), null)
+                    .encodeKey(GenericRow.of(GROUP_METADATA_RECORD_TYPE));
 
     private final ThreadLocal<CompactedRowEncoder> rowEncoder =
             ThreadLocal.withInitial(() -> new CompactedRowEncoder(DATA_TYPES));
@@ -109,11 +122,11 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the complete primary key of an offset row. */
-    public byte[] encodeOffsetKey(String groupId, long tableId, Long partitionId, int bucketId) {
+    public byte[] encodeOffsetKey(GroupId groupId, long tableId, Long partitionId, int bucketId) {
         return encodeOffsetKey(
                 GenericRow.of(
                         OFFSET_COMMIT_RECORD_TYPE,
-                        BinaryString.fromString(groupId),
+                        BinaryString.fromString(groupId.getGroupId()),
                         tableId,
                         partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId,
                         bucketId));
@@ -137,23 +150,51 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the bucket key used to route a group to its offsets-table bucket. */
-    public byte[] encodeGroupBucketKey(String groupId) {
+    public byte[] encodeGroupBucketKey(GroupId groupId) {
         // The bucket-key encoder reads group_id from column 1; record_type is only a placeholder.
         return groupBucketKeyEncoder
                 .get()
                 .encodeKey(
-                        GenericRow.of(OFFSET_COMMIT_RECORD_TYPE, BinaryString.fromString(groupId)));
+                        GenericRow.of(
+                                OFFSET_COMMIT_RECORD_TYPE,
+                                BinaryString.fromString(groupId.getGroupId())));
     }
 
     /**
      * Encodes the {@code record_type} and {@code group_id} prefix used to enumerate a group's
      * committed offsets.
      */
-    public byte[] encodeOffsetCommitPrefix(String groupId) {
+    public byte[] encodeOffsetCommitPrefix(GroupId groupId) {
         return groupLookupPrefixEncoder
                 .get()
                 .encodeKey(
-                        GenericRow.of(OFFSET_COMMIT_RECORD_TYPE, BinaryString.fromString(groupId)));
+                        GenericRow.of(
+                                OFFSET_COMMIT_RECORD_TYPE,
+                                BinaryString.fromString(groupId.getGroupId())));
+    }
+
+    /** Encodes the complete primary key of a group metadata row. */
+    public byte[] encodeGroupMetadataKey(GroupId groupId) {
+        return primaryKeyEncoder
+                .get()
+                .encodeKey(
+                        GenericRow.of(
+                                GROUP_METADATA_RECORD_TYPE,
+                                BinaryString.fromString(groupId.getGroupId()),
+                                GROUP_METADATA_TABLE_ID,
+                                NON_PARTITIONED_PARTITION_ID,
+                                GROUP_METADATA_BUCKET_ID));
+    }
+
+    /** Encodes a group metadata row. */
+    public CompactedRow encodeGroupMetadataRow(GroupId groupId) {
+        return encodeOffsetRow(
+                GROUP_METADATA_RECORD_TYPE,
+                groupId,
+                GROUP_METADATA_TABLE_ID,
+                null,
+                GROUP_METADATA_BUCKET_ID,
+                new ConsumerOffsetAndMetadata(-1L, null));
     }
 
     /** Encodes the complete primary key of an already materialized offset row. */
@@ -161,14 +202,14 @@ public final class ConsumerOffsetSchema {
         return primaryKeyEncoder.get().encodeKey(row);
     }
 
-    int bucketFor(String groupId, int bucketCount) {
+    int bucketFor(GroupId groupId, int bucketCount) {
         return FlussBucketingFunction.bucketForRowKey(encodeGroupBucketKey(groupId), bucketCount);
     }
 
     /** The returned row uses this thread's buffer until its next call to this method. */
     CompactedRow encodeOffsetRow(
-            String groupId,
             int recordType,
+            GroupId groupId,
             long tableId,
             Long partitionId,
             int bucketId,
@@ -176,7 +217,7 @@ public final class ConsumerOffsetSchema {
         CompactedRowEncoder encoder = rowEncoder.get();
         encoder.startNewRow();
         encoder.encodeField(0, recordType);
-        encoder.encodeField(1, BinaryString.fromString(groupId));
+        encoder.encodeField(1, BinaryString.fromString(groupId.getGroupId()));
         encoder.encodeField(2, tableId);
         encoder.encodeField(3, partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId);
         encoder.encodeField(4, bucketId);

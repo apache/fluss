@@ -44,6 +44,7 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -83,9 +84,11 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private static final int RECORDS_PER_PARTITION = 12;
     private static final List<String> OLD_NEW_PARTITIONS = Arrays.asList("old", "new");
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testCoordinatorReloadsLegacyPartitionCountAtEpochZero() throws Exception {
-        TablePath path = TablePath.of("test_db_1", "legacy_restart_counts");
+        TablePath path = tableNames.tablePath("test_db_1", "legacy_restart_counts");
         createPartitionedTable(path, logSchema());
         admin.createPartition(path, newPartitionSpec("c", "old"), false).get();
         TableInfo tableInfo = admin.getTableInfo(path).get();
@@ -143,7 +146,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCoordinatorReloadsRegisteredPartitionCountsAfterRescale() throws Exception {
-        TablePath path = TablePath.of("test_db_1", "rescale_restart_counts");
+        TablePath path = tableNames.tablePath("test_db_1", "rescale_restart_counts");
         createPartitionedTable(path, logSchema());
         List<PartitionInfo> partitions = setupOldNewPartitions(path);
         long tableId = admin.getTableInfo(path).get().getTableId();
@@ -185,7 +188,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         // OLD_BUCKET_NUM, new partition uses NEW_BUCKET_NUM). Routing by the wrong (table-level)
         // count would miss rows when reading back each partition's own bucket range.
 
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_log_table");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_log_table");
         Schema schema = logSchema();
         createPartitionedTable(tablePath, schema);
         List<PartitionInfo> partitionInfos = setupOldNewPartitions(tablePath);
@@ -214,7 +217,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPkTableReadPathsAcrossRescale() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_pk_read_paths");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_pk_read_paths");
         Schema schema = pkSchema("a", "c");
         createPartitionedTable(tablePath, schema);
         List<PartitionInfo> partitionInfos = setupOldNewPartitions(tablePath);
@@ -295,7 +298,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         // SET ('bucket.num' = currentValue) does not change the bucket layout, so it must not
         // advance bucketCountEpoch: legacy-client routing and historical lookup both read
         // epoch > 0 as evidence that mixed bucket layouts may exist.
-        TablePath tablePath = TablePath.of("test_db_1", "test_same_value_bucket_num_alter");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_same_value_bucket_num_alter");
         createPartitionedTable(tablePath, logSchema());
 
         TableInfo before = admin.getTableInfo(tablePath).get();
@@ -326,7 +329,8 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
 
     @Test
     void testBucketCountChangeCannotBeMixedWithPropertyChange() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_mixed_bucket_and_property_alter");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_mixed_bucket_and_property_alter");
         createPartitionedTable(tablePath, logSchema());
 
         assertThatThrownBy(
@@ -354,7 +358,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
 
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_dynamic_create");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_dynamic_create");
         Schema schema = logSchema();
         createPartitionedTable(tablePath, schema);
         alterBucketNum(tablePath, NEW_BUCKET_NUM);
@@ -398,7 +402,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
 
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_stale_handle");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_stale_handle");
         Schema schema = pkSchema("a", "c");
         createPartitionedTable(tablePath, schema);
 
@@ -442,7 +446,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     void testPrefixLookupAcrossPartitionsWithDifferentBucketCounts() throws Exception {
         // Prefix lookup must resolve the bucket with the correct per-partition count; a mismatch
         // would query the wrong bucket and miss rows.
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_prefix_lookup");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_prefix_lookup");
         Schema schema = pkSchema("a", "b", "c");
         createPartitionedTable(tablePath, schema, "a");
         setupOldNewPartitions(tablePath);

@@ -30,6 +30,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +42,6 @@ import java.util.Collections;
 import java.util.Optional;
 
 import static org.apache.fluss.client.admin.FlussAdminITCase.DEFAULT_SCHEMA;
-import static org.apache.fluss.client.admin.FlussAdminITCase.DEFAULT_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -54,6 +54,9 @@ public class RackAwareClusterITCase {
                     .setNumOfTabletServers(4)
                     .setRacks(new String[] {"rack-0", "rack-1", "rack-2", "rack-0"})
                     .build();
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath defaultTablePath = tableNames.tablePath("test_db", "person");
 
     protected Connection conn;
     protected Admin admin;
@@ -82,7 +85,8 @@ public class RackAwareClusterITCase {
     @Test
     void testCreateTableWithInsufficientRack() throws Exception {
         TablePath tablePath =
-                TablePath.of(DEFAULT_TABLE_PATH.getDatabaseName(), "t1-with-replica-factor-4");
+                tableNames.tablePath(
+                        defaultTablePath.getDatabaseName(), "t1-with-replica-factor-4");
         // set replica factor to a number larger than available racks (ts-0: rack-0, ts-1: rack-1,
         // ts-2: rack-2)
         TableDescriptor tableDescriptor =
@@ -93,7 +97,7 @@ public class RackAwareClusterITCase {
                         .distributedBy(1, "id")
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "4")
                         .build();
-        admin.createDatabase(DEFAULT_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, false)
+        admin.createDatabase(defaultTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false)
                 .get();
 
         // In this case, create table will success with two replicas on one rack.
@@ -110,7 +114,7 @@ public class RackAwareClusterITCase {
         assertThat(bucketAssignment.getReplicas()).containsExactlyInAnyOrder(0, 1, 2, 3);
 
         admin.dropTable(tablePath, false).get();
-        admin.dropDatabase(DEFAULT_TABLE_PATH.getDatabaseName(), false, false).get();
+        admin.dropDatabase(defaultTablePath.getDatabaseName(), false, false).get();
     }
 
     @Test

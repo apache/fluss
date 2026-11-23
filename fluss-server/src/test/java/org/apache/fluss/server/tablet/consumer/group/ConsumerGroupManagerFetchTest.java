@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.tablet.consumer.group;
 
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -124,8 +125,8 @@ class ConsumerGroupManagerFetchTest {
         CompactedRow row =
                 new ConsumerOffsetSchema()
                         .encodeOffsetRow(
-                                groupId,
                                 ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                                GroupId.of(groupId),
                                 tableBucket.getTableId(),
                                 tableBucket.getPartitionId(),
                                 tableBucket.getBucket(),

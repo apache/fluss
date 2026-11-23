@@ -22,8 +22,10 @@ import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
@@ -34,11 +36,17 @@ import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorServi
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -89,6 +97,43 @@ class ConsumerOffsetTableInitializationTest extends ReplicaTestBase {
         if (lakeCatalogLoader != null) {
             lakeCatalogLoader.close();
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDelayedDeletionPreservesRecreatedOffsetsTable(boolean sameBatch) throws Exception {
+        zkClient.registerFirstSchema(
+                SystemTables.CONSUMER_OFFSETS, ConsumerOffsetSchema.getTableSchema());
+        TableInfo original = metadataManager.getTable(SystemTables.CONSUMER_OFFSETS);
+        TableInfo replacement = withTableId(original, TABLE_ID + 1);
+
+        publishUpdates(new TableMetadata(original, Collections.emptyList()));
+        assertThat(tableManager.ensureTableAsync()).isCompletedWithValue(original);
+        TableMetadata update = new TableMetadata(replacement, Collections.emptyList());
+        TableMetadata staleDeletion = new TableMetadata(original, Collections.emptyList(), true);
+        if (sameBatch) {
+            publishUpdates(update, staleDeletion);
+        } else {
+            publishUpdates(update);
+            publishUpdates(staleDeletion);
+        }
+        assertThat(tableManager.ensureTableAsync()).isCompletedWithValue(replacement);
+        assertThat(executor.numQueuedRunnables()).isZero();
+
+        publishUpdates(new TableMetadata(replacement, Collections.emptyList(), true));
+        assertThat(tableManager.ensureTableAsync()).isNotDone();
+    }
+
+    @Test
+    void testLegacyDeletionInvalidatesOffsetsTableByName() throws Exception {
+        zkClient.registerFirstSchema(
+                SystemTables.CONSUMER_OFFSETS, ConsumerOffsetSchema.getTableSchema());
+        TableInfo table = metadataManager.getTable(SystemTables.CONSUMER_OFFSETS);
+        publishUpdates(new TableMetadata(table, Collections.emptyList()));
+        assertThat(tableManager.ensureTableAsync()).isCompletedWithValue(table);
+        publishUpdates(
+                new TableMetadata(withTableId(table, DELETED_TABLE_ID), Collections.emptyList()));
+        assertThat(tableManager.ensureTableAsync()).isNotDone();
     }
 
     @Test
@@ -150,5 +195,29 @@ class ConsumerOffsetTableInitializationTest extends ReplicaTestBase {
         assertThat(retried)
                 .succeedsWithin(Duration.ofSeconds(10))
                 .isEqualTo(metadataManager.getTable(SystemTables.CONSUMER_OFFSETS));
+    }
+
+    private static TableInfo withTableId(TableInfo info, long tableId) {
+        return TableInfo.of(
+                info.getTablePath(),
+                tableId,
+                info.getSchemaId(),
+                info.toTableDescriptor(),
+                info.getRemoteDataDir(),
+                info.getCreatedTime(),
+                info.getModifiedTime());
+    }
+
+    private void publishUpdates(TableMetadata... updates) {
+        UpdateMetadataRequest request =
+                makeUpdateMetadataRequest(
+                        null,
+                        0,
+                        Collections.emptySet(),
+                        Arrays.asList(updates),
+                        Collections.emptyList());
+        ClusterMetadata metadata = getUpdateMetadataRequestData(request);
+        serverMetadataCache.updateClusterMetadata(metadata);
+        tableManager.onTableMetadataUpdate(metadata.getTableMetadataList());
     }
 }

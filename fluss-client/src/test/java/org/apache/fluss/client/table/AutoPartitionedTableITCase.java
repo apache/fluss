@@ -35,8 +35,10 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -57,8 +59,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.assertRowValueEquals;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
@@ -67,6 +67,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for auto partitioned table. */
 class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data1TablePathPk = tableNames.tablePath(TestData.DATA1_TABLE_PATH_PK);
 
     @BeforeEach
     void beforeEach() throws Exception {
@@ -77,10 +81,10 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPartitionedPrimaryKeyTable() throws Exception {
-        Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, true);
+        Schema schema = createPartitionedTable(data1TablePathPk, true);
         Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(DATA1_TABLE_PATH_PK);
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(data1TablePathPk);
+        Table table = conn.getTable(data1TablePathPk);
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
         int recordsPerPartition = 5;
         // now, put some data to the partitions
@@ -114,7 +118,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testPartitionedTablePrefixLookup(boolean isDataLakeEnabled) throws Exception {
         // This case partition key 'b' in both pk and bucket key (prefix key).
-        TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_partitioned_table_prefix_lookup");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -178,7 +183,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testInvalidPrefixLookupForPartitionedTable() throws Exception {
         // This case partition key 'c' only in pk but not in prefix key.
-        TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup2");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_partitioned_table_prefix_lookup2");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -205,16 +211,22 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(() -> table.newLookup().lookupBy("a", "b").createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Can not perform prefix lookup on table 'test_db_1.test_partitioned_table_prefix_lookup2', "
-                                + "because the lookup columns [a, b] must contain all partition fields [c].");
+                        ("Can not perform prefix lookup on table '"
+                                + tableNames
+                                        .tablePath(
+                                                "test_db_1",
+                                                "test_partitioned_table_prefix_lookup2")
+                                        .toString()
+                                + "', "
+                                + "because the lookup columns [a, b] must contain all partition fields [c]."));
     }
 
     @Test
     void testPartitionedLogTable() throws Exception {
-        Schema schema = createPartitionedTable(DATA1_TABLE_PATH, false);
+        Schema schema = createPartitionedTable(data1TablePath, false);
         Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(DATA1_TABLE_PATH);
-        Table table = conn.getTable(DATA1_TABLE_PATH);
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(data1TablePath);
+        Table table = conn.getTable(data1TablePath);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
@@ -236,7 +248,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testUnsubscribePartitionBucket() throws Exception {
         // write rows
-        TablePath tablePath = TablePath.of("test_db_1", "unsubscribe_partition_bucket_table");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "unsubscribe_partition_bucket_table");
         Schema schema = createPartitionedTable(tablePath, false);
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
@@ -311,8 +324,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testOperateNotExistPartitionShouldThrowException() throws Exception {
-        createPartitionedTable(DATA1_TABLE_PATH_PK, true);
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        createPartitionedTable(data1TablePathPk, true);
+        Table table = conn.getTable(data1TablePathPk);
         String partitionName = "notExistPartition";
         Lookuper lookuper = table.newLookup().createLookuper();
 
@@ -327,7 +340,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining(
                         "Table partition '%s' does not exist.",
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, partitionName));
+                        PhysicalTablePath.of(data1TablePathPk, partitionName));
 
         // test scan a not exist partition's log
         LogScanner logScanner = table.newScan().createLogScanner();
@@ -344,7 +357,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testAddPartitionForAutoPartitionedTable() throws Exception {
         TablePath tablePath =
-                TablePath.of("test_db_1", "test_auto_partition_table_add_partition_1");
+                tableNames.tablePath("test_db_1", "test_auto_partition_table_add_partition_1");
         Schema schema = createPartitionedTable(tablePath, false);
         int currentYear = LocalDateTime.now().getYear();
 
@@ -385,7 +398,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testWriteToDashedDayPartitionShouldCreateAndValidateStringKey() throws Exception {
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
-        TablePath tablePath = TablePath.of("test_db_1", "test_write_dashed_day_partition_string");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_write_dashed_day_partition_string");
         createDayPartitionedTable(tablePath, DataTypes.STRING(), true);
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
@@ -425,7 +439,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testWriteToDashedDayPartitionShouldCreateAndValidateDateKey() throws Exception {
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
-        TablePath tablePath = TablePath.of("test_db_1", "test_write_dashed_day_partition_date");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_write_dashed_day_partition_date");
         createDayPartitionedTable(tablePath, DataTypes.DATE(), false);
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
@@ -452,7 +467,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     void testWriteToInvalidPartitionShouldThrowException() throws Exception {
         // Enable dynamic partition creation so the writer attempts to create the partition.
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
-        TablePath tablePath = TablePath.of("test_db_1", "test_write_invalid_format_partition");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_write_invalid_format_partition");
         createPartitionedTable(tablePath, true);
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
 

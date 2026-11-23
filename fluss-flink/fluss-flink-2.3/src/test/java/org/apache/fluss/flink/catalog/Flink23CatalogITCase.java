@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.RowType;
 
@@ -37,10 +38,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** IT case for catalog in Flink 2.3. */
 public class Flink23CatalogITCase extends FlinkCatalogITCase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     @MultiVersionTest
     void testGetTableWithIndex() throws Exception {
-        String tableName = "table_with_pk_only";
+        String tableName = tableNames.tableName("table_with_pk_only");
         tEnv.executeSql(
                 String.format(
                         "create table %s ( "
@@ -249,7 +252,7 @@ public class Flink23CatalogITCase extends FlinkCatalogITCase {
     @MultiVersionTest
     void testCreateTableWithNestedNotNull() throws Exception {
         // Flink before 2.2 drops nested NOT NULL constraints during DDL resolution (FLINK-20539).
-        String tableName = "nested_not_null_table";
+        String tableName = tableNames.tableName("nested_not_null_table");
         tEnv.executeSql(
                 String.format(
                         "create table %s ("

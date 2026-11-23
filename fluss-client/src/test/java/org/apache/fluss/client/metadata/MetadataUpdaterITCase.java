@@ -42,6 +42,7 @@ import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -72,10 +73,12 @@ class MetadataUpdaterITCase {
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(2).build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testPartialCacheThroughRpcAndClientRouting(boolean explicitCount) throws Exception {
-        TablePath path = TablePath.of("fluss", "partial_routing_" + explicitCount);
+        TablePath path = tableNames.tablePath("fluss", "partial_routing_" + explicitCount);
         int recordCount = 30;
         long tableId;
         try (Connection connection =
@@ -197,7 +200,7 @@ class MetadataUpdaterITCase {
         Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         Connection conn = ConnectionFactory.createConnection(clientConf);
         Admin admin = conn.getAdmin();
-        TablePath tablePath = TablePath.of("fluss", "test");
+        TablePath tablePath = tableNames.tablePath("fluss", "test");
         admin.createTable(tablePath, DATA1_TABLE_DESCRIPTOR, true).get();
         admin.close();
         conn.close();

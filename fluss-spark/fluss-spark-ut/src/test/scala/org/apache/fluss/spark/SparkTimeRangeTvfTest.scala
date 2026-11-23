@@ -41,19 +41,20 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
   private val P2 = "2026-01-02"
 
   test("TVF: log table window") {
-    withTable("t_log") {
-      createLogTable("t_log")
+    val tableName = scopedTableName("t_log")
+    withTable(tableName) {
+      createLogTable(tableName)
 
       val t0 = boundary()
-      insert("t_log", s"""(1L, 11L, 101, "a1", "$P1"), (2L, 12L, 102, "a2", "$P2")""")
+      insert(tableName, s"""(1L, 11L, 101, "a1", "$P1"), (2L, 12L, 102, "a2", "$P2")""")
       val t1 = boundary()
-      insert("t_log", s"""(3L, 13L, 103, "a3", "$P1"), (4L, 14L, 104, "a4", "$P2")""")
+      insert(tableName, s"""(3L, 13L, 103, "a3", "$P1"), (4L, 14L, 104, "a4", "$P2")""")
       val t2 = boundary()
-      insert("t_log", s"""(5L, 15L, 105, "a5", "$P1")""")
+      insert(tableName, s"""(5L, 15L, 105, "a5", "$P1")""")
       val t3 = boundary()
       // nothing is committed in [t3, t4), but rows follow it
       val t4 = boundary()
-      insert("t_log", s"""(6L, 16L, 106, "a6", "$P2"), (7L, 17L, 107, "a7", "$P1")""")
+      insert(tableName, s"""(6L, 16L, 106, "a6", "$P2"), (7L, 17L, 107, "a7", "$P1")""")
       val t5 = boundary()
       val t6 = boundary()
 
@@ -63,53 +64,56 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       val batch4 = Row(6L, 16L, 106, "a6", P2) :: Row(7L, 17L, 107, "a7", P1) :: Nil
 
       // consecutive windows partition the table exactly, each one spanning every partition
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t0, t1)} ORDER BY orderId"), batch1)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t1, t2)} ORDER BY orderId"), batch2)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t2, t3)} ORDER BY orderId"), batch3)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t4, t5)} ORDER BY orderId"), batch4)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t0, t1)} ORDER BY orderId"), batch1)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t1, t2)} ORDER BY orderId"), batch2)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t2, t3)} ORDER BY orderId"), batch3)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t4, t5)} ORDER BY orderId"), batch4)
 
       // a window may span several writes, and one covering everything matches a plain batch read
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t1, t4)} ORDER BY orderId"), batch2 ::: batch3)
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_log", t0, t6)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t1, t4)} ORDER BY orderId"),
+        batch2 ::: batch3)
+      checkAnswer(
+        sql(s"SELECT * FROM ${tvf(tableName, t0, t6)} ORDER BY orderId"),
         batch1 ::: batch2 ::: batch3 ::: batch4)
 
       // projection, filter and partition pruning still work on top of the TVF relation
       checkAnswer(
-        sql(s"SELECT address FROM ${tvf("t_log", t1, t2)} WHERE amount = 104"),
+        sql(s"SELECT address FROM ${tvf(tableName, t1, t2)} WHERE amount = 104"),
         Row("a4") :: Nil)
       checkAnswer(
-        sql(s"SELECT orderId FROM ${tvf("t_log", t1, t2)} WHERE dt = '$P1'"),
+        sql(s"SELECT orderId FROM ${tvf(tableName, t1, t2)} WHERE dt = '$P1'"),
         Row(3L) :: Nil)
 
       // without an end timestamp the window runs up to the latest data
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t2)} ORDER BY orderId"), batch3 ::: batch4)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t4)} ORDER BY orderId"), batch4)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t2)} ORDER BY orderId"), batch3 ::: batch4)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t4)} ORDER BY orderId"), batch4)
 
       // a window without writes yields nothing, whether it precedes, splits or trails the data
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t3, t4)}"), Nil)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_log", t5, t6)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t3, t4)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t5, t6)}"), Nil)
 
       // the table argument may be unqualified or fully qualified
-      checkAnswer(sql(s"SELECT * FROM $TVF('t_log', '$t4')"), batch4)
+      checkAnswer(sql(s"SELECT * FROM $TVF('$tableName', '$t4')"), batch4)
       checkAnswer(
-        sql(s"SELECT * FROM $TVF('$DEFAULT_CATALOG.$DEFAULT_DATABASE.t_log', '$t4')"),
+        sql(s"SELECT * FROM $TVF('$DEFAULT_CATALOG.$DEFAULT_DATABASE.$tableName', '$t4')"),
         batch4)
 
       // the omitted end bound is pinned when the statement is analyzed, so a row committed before
       // the scan is planned stays outside the window
-      val pinned = sql(s"SELECT * FROM ${tvf("t_log", t4)} ORDER BY orderId")
-      insert("t_log", s"""(8L, 18L, 108, "a8", "$P1")""")
+      val pinned = sql(s"SELECT * FROM ${tvf(tableName, t4)} ORDER BY orderId")
+      insert(tableName, s"""(8L, 18L, 108, "a8", "$P1")""")
       Thread.sleep(200)
       checkAnswer(pinned, batch4)
     }
   }
 
   test("TVF: primary key table folds the window changelog") {
-    withTable("t_fold") {
-      createPkTable("t_fold")
+    val tableName = scopedTableName("t_fold")
+    withTable(tableName) {
+      createPkTable(tableName)
 
-      val writer = loadFlussTable(createTablePath("t_fold")).newUpsert().createWriter()
+      val writer = loadFlussTable(createTablePath(tableName)).newUpsert().createWriter()
       writer.upsert(row(1L, 11L, 101, "a1", P1)).get()
       writer.upsert(row(2L, 12L, 102, "a2", P2)).get()
       writer.upsert(row(3L, 13L, 103, "a3", P1)).get()
@@ -149,50 +153,51 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       // each changed key appears once with its last in-window value; deleted keys and an insert
       // cancelled by a delete are excluded
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_fold", t1, t2)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t1, t2)} ORDER BY orderId"),
         Row(1L, 111L, 1002, "a1_v3", P1) ::
           Row(2L, 120L, 1002, "a2_upd", P2) ::
           Row(3L, 130L, 1003, "a3_new", P1) :: Nil
       )
 
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_fold", t2, t3)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t2, t3)} ORDER BY orderId"),
         Row(1L, 112L, 1004, "a1_v4", P1) :: Nil)
 
       // a window whose only change is a delete folds to nothing, even though it does read records
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_fold", t4, t5)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t4, t5)}"), Nil)
 
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_fold", t5, t6)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t5, t6)} ORDER BY orderId"),
         Row(6L, 16L, 106, "a6", P1) :: Nil)
 
       // spanning several batches: key 1 keeps its last value, key 2 is dropped by the later delete
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_fold", t2, t6)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t2, t6)} ORDER BY orderId"),
         Row(1L, 112L, 1004, "a1_v4", P1) :: Row(6L, 16L, 106, "a6", P1) :: Nil)
 
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_fold", t1)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t1)} ORDER BY orderId"),
         Row(1L, 112L, 1004, "a1_v4", P1) ::
           Row(3L, 130L, 1003, "a3_new", P1) ::
           Row(6L, 16L, 106, "a6", P1) :: Nil
       )
 
       checkAnswer(
-        sql(s"SELECT orderId FROM ${tvf("t_fold", t1, t2)} WHERE dt = '$P1' ORDER BY orderId"),
+        sql(s"SELECT orderId FROM ${tvf(tableName, t1, t2)} WHERE dt = '$P1' ORDER BY orderId"),
         Row(1L) :: Row(3L) :: Nil)
 
       // windows without any change yield nothing, whether they split or trail the changelog
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_fold", t3, t4)}"), Nil)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_fold", t6, t7)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t3, t4)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t6, t7)}"), Nil)
     }
   }
 
   test("TVF: primary key table with several buckets") {
-    withTable("t_multi") {
-      createPkTable("t_multi", buckets = 3)
+    val tableName = scopedTableName("t_multi")
+    withTable(tableName) {
+      createPkTable(tableName, buckets = 3)
 
-      val writer = loadFlussTable(createTablePath("t_multi")).newUpsert().createWriter()
+      val writer = loadFlussTable(createTablePath(tableName)).newUpsert().createWriter()
       (1 to 6).foreach {
         k =>
           val dt = if (k % 2 == 0) P2 else P1
@@ -210,15 +215,16 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       val t2 = boundary()
 
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_multi", t1, t2)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t1, t2)} ORDER BY orderId"),
         Row(2L, 120L, 1002, "a2_upd", P2) :: Row(7L, 17L, 107, "a7", P1) :: Nil)
     }
   }
 
   test("TVF: primary key table never serves the kv snapshot") {
-    withTable("t_snap") {
-      createPkTable("t_snap")
-      val tablePath = createTablePath("t_snap")
+    val tableName = scopedTableName("t_snap")
+    withTable(tableName) {
+      createPkTable(tableName)
+      val tablePath = createTablePath(tableName)
       val writer = loadFlussTable(tablePath).newUpsert().createWriter()
 
       val t0 = boundary()
@@ -240,7 +246,7 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       // a read-optimized full read serves the snapshot alone, which is how we know it is there
       withSQLConf(sessionKey(SparkFlussConf.READ_OPTIMIZED_OPTION.key()) -> "true") {
         checkAnswer(
-          sql(s"SELECT * FROM $DEFAULT_DATABASE.t_snap ORDER BY orderId"),
+          sql(s"SELECT * FROM $DEFAULT_DATABASE.$tableName ORDER BY orderId"),
           Row(1L, 110L, 1001, "a1_upd", P1) ::
             Row(2L, 12L, 102, "a2", P2) ::
             Row(3L, 13L, 103, "a3", P1) :: Nil
@@ -249,39 +255,41 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
 
       // key 2 changed before the window and only survives in the snapshot, so it must not appear
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_snap", t1, t2)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t1, t2)} ORDER BY orderId"),
         Row(1L, 110L, 1001, "a1_upd", P1) :: Row(3L, 13L, 103, "a3", P1) :: Nil)
 
       // an earlier window still folds from the changelog, at the values it held back then
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_snap", t0, t1)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(tableName, t0, t1)} ORDER BY orderId"),
         Row(1L, 11L, 101, "a1", P1) :: Row(2L, 12L, 102, "a2", P2) :: Nil)
 
       // a window with no changes stays empty instead of falling back to the whole snapshot
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_snap", t2, t3)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(tableName, t2, t3)}"), Nil)
     }
   }
 
   test("TVF: non-partitioned tables") {
-    withTable("t_np", "t_np_pk") {
+    val npTableName = scopedTableName("t_np")
+    val npPkTableName = scopedTableName("t_np_pk")
+    withTable(npTableName, npPkTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_np
+             |CREATE TABLE $DEFAULT_DATABASE.$npTableName
              |(orderId BIGINT, itemId BIGINT, amount INT, address STRING)
              |""".stripMargin)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_np_pk
+             |CREATE TABLE $DEFAULT_DATABASE.$npPkTableName
              |(orderId BIGINT, itemId BIGINT, amount INT, address STRING)
              |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
              |""".stripMargin)
 
-      val writer = loadFlussTable(createTablePath("t_np_pk")).newUpsert().createWriter()
+      val writer = loadFlussTable(createTablePath(npPkTableName)).newUpsert().createWriter()
       val t0 = boundary()
-      insert("t_np", """(1L, 11L, 101, "a1")""")
+      insert(npTableName, """(1L, 11L, 101, "a1")""")
       writer.upsert(unpartitionedRow(1L, 11L, 101, "a1")).get()
       writer.flush()
       val t1 = boundary()
 
-      insert("t_np", """(2L, 12L, 102, "a2")""")
+      insert(npTableName, """(2L, 12L, 102, "a2")""")
       writer.upsert(unpartitionedRow(1L, 110L, 1001, "a1_upd")).get()
       writer.upsert(unpartitionedRow(2L, 12L, 102, "a2")).get()
       writer.flush()
@@ -290,36 +298,41 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
       // nothing is committed in [t2, t3), but writes follow it
       val t3 = boundary()
 
-      insert("t_np", """(3L, 13L, 103, "a3")""")
+      insert(npTableName, """(3L, 13L, 103, "a3")""")
       writer.delete(unpartitionedDeleteKey(2L)).get()
       writer.flush()
       val t4 = boundary()
 
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np", t0, t1)}"), Row(1L, 11L, 101, "a1") :: Nil)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np_pk", t0, t1)}"), Row(1L, 11L, 101, "a1") :: Nil)
-
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np", t1, t2)}"), Row(2L, 12L, 102, "a2") :: Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(npTableName, t0, t1)}"), Row(1L, 11L, 101, "a1") :: Nil)
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_np_pk", t1, t2)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(npPkTableName, t0, t1)}"),
+        Row(1L, 11L, 101, "a1") :: Nil)
+
+      checkAnswer(sql(s"SELECT * FROM ${tvf(npTableName, t1, t2)}"), Row(2L, 12L, 102, "a2") :: Nil)
+      checkAnswer(
+        sql(s"SELECT * FROM ${tvf(npPkTableName, t1, t2)} ORDER BY orderId"),
         Row(1L, 110L, 1001, "a1_upd") :: Row(2L, 12L, 102, "a2") :: Nil)
 
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np", t2, t3)}"), Nil)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np_pk", t2, t3)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(npTableName, t2, t3)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(npPkTableName, t2, t3)}"), Nil)
 
       // the pk window only deletes, so it folds to nothing while the log table keeps its append
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np", t3, t4)}"), Row(3L, 13L, 103, "a3") :: Nil)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np_pk", t3, t4)}"), Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(npTableName, t3, t4)}"), Row(3L, 13L, 103, "a3") :: Nil)
+      checkAnswer(sql(s"SELECT * FROM ${tvf(npPkTableName, t3, t4)}"), Nil)
 
       checkAnswer(
-        sql(s"SELECT * FROM ${tvf("t_np", t1)} ORDER BY orderId"),
+        sql(s"SELECT * FROM ${tvf(npTableName, t1)} ORDER BY orderId"),
         Row(2L, 12L, 102, "a2") :: Row(3L, 13L, 103, "a3") :: Nil)
-      checkAnswer(sql(s"SELECT * FROM ${tvf("t_np_pk", t1)}"), Row(1L, 110L, 1001, "a1_upd") :: Nil)
+      checkAnswer(
+        sql(s"SELECT * FROM ${tvf(npPkTableName, t1)}"),
+        Row(1L, 110L, 1001, "a1_upd") :: Nil)
     }
   }
 
   test("TVF: timestamp argument forms resolve to the same window") {
-    withTable("t_ts") {
-      createLogTable("t_ts")
+    val tableName = scopedTableName("t_ts")
+    withTable(tableName) {
+      createLogTable(tableName)
 
       // every accepted form of the same instant must resolve to the same window; asserted on the
       // options the reader consumes, so no data has to be written
@@ -334,7 +347,7 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
           s"TIMESTAMP '$startTs', TIMESTAMP '$endTs'",
           s"TIMESTAMP_NTZ '$startTs', TIMESTAMP_NTZ '$endTs'",
           "DATE '2026-01-01', DATE '2026-01-02'"
-        ).foreach(args => assertThat(resolvedWindow("t_ts", args)).isEqualTo(expected))
+        ).foreach(args => assertThat(resolvedWindow(tableName, args)).isEqualTo(expected))
       }
 
       assertAllFormsAgree()
@@ -343,48 +356,52 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
 
       // an omitted end bound is pinned to the analysis time
       val before = System.currentTimeMillis()
-      val openEnded = resolvedWindow("t_ts", "'2026-01-01 00:00:00'")
+      val openEnded = resolvedWindow(tableName, "'2026-01-01 00:00:00'")
       assertThat(openEnded.endMs).isBetween(before, System.currentTimeMillis())
 
       // constant expressions are evaluated during analysis
       val lastHour = resolvedWindow(
-        "t_ts",
+        tableName,
         "date_format(now() - INTERVAL 1 HOUR, 'yyyy-MM-dd HH:mm:ss'), " +
           "CAST(unix_timestamp() * 1000 AS STRING)")
       assertThat(lastHour.endMs - lastHour.startMs).isBetween(3590000L, 3610000L)
 
       val aroundToday =
-        resolvedWindow("t_ts", "current_date() - INTERVAL 1 DAY, current_date() + INTERVAL 1 DAY")
+        resolvedWindow(
+          tableName,
+          "current_date() - INTERVAL 1 DAY, current_date() + INTERVAL 1 DAY")
       assertThat(aroundToday.startMs).isLessThan(before)
       assertThat(aroundToday.endMs).isGreaterThan(before)
     }
   }
 
   test("TVF: invalid usage fails fast") {
-    withTable("t_bad", "t_bad_pk") {
-      createLogTable("t_bad")
-      createPkTable("t_bad_pk")
+    val badTableName = scopedTableName("t_bad")
+    val badPkTableName = scopedTableName("t_bad_pk")
+    withTable(badTableName, badPkTableName) {
+      createLogTable(badTableName)
+      createPkTable(badPkTableName)
 
-      val writer = loadFlussTable(createTablePath("t_bad_pk")).newUpsert().createWriter()
-      insert("t_bad", s"""(1L, 11L, 101, "a1", "$P1")""")
+      val writer = loadFlussTable(createTablePath(badPkTableName)).newUpsert().createWriter()
+      insert(badTableName, s"""(1L, 11L, 101, "a1", "$P1")""")
       writer.upsert(row(1L, 11L, 101, "a1", P1)).get()
       writer.flush()
       Thread.sleep(300)
       val t1 = System.currentTimeMillis()
 
       // a blank start must not silently read the full table
-      assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_bad', ' ')"))
+      assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.$badTableName', ' ')"))
         .contains(TVF)
         .contains("must not be blank")
 
-      assertThat(failureOf(s"SELECT * FROM ${tvf("t_bad", t1 + 1000, t1)}"))
+      assertThat(failureOf(s"SELECT * FROM ${tvf(badTableName, t1 + 1000, t1)}"))
         .contains("strictly before")
-      assertThat(failureOf(s"SELECT * FROM ${tvf("t_bad", t1, t1)}"))
+      assertThat(failureOf(s"SELECT * FROM ${tvf(badTableName, t1, t1)}"))
         .contains("strictly before")
 
-      assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_bad')"))
+      assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.$badTableName')"))
         .contains("endTimestamp")
-      assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_bad', '1', '2', '3')"))
+      assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.$badTableName', '1', '2', '3')"))
         .contains("endTimestamp")
 
       assertThat(failureOf(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.not_exist', '1', '2')"))
@@ -392,24 +409,26 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
 
       // an incremental read reconciles the changelog and cannot serve a read-optimized scan
       withSQLConf(sessionKey(SparkFlussConf.READ_OPTIMIZED_OPTION.key()) -> "true") {
-        assertThat(failureOf(s"SELECT * FROM ${tvf("t_bad_pk", t1)}"))
+        assertThat(failureOf(s"SELECT * FROM ${tvf(badPkTableName, t1)}"))
           .contains(SparkFlussConf.READ_OPTIMIZED_OPTION.key())
       }
     }
   }
 
   test("TVF: window bounds are never read from session configuration") {
-    withTable("t_conf", "t_conf_pk") {
-      createLogTable("t_conf")
-      createPkTable("t_conf_pk")
+    val confTableName = scopedTableName("t_conf")
+    val confPkTableName = scopedTableName("t_conf_pk")
+    withTable(confTableName, confPkTableName) {
+      createLogTable(confTableName)
+      createPkTable(confPkTableName)
 
-      val writer = loadFlussTable(createTablePath("t_conf_pk")).newUpsert().createWriter()
-      insert("t_conf", s"""(1L, 11L, 101, "a1", "$P1")""")
+      val writer = loadFlussTable(createTablePath(confPkTableName)).newUpsert().createWriter()
+      insert(confTableName, s"""(1L, 11L, 101, "a1", "$P1")""")
       writer.upsert(row(1L, 11L, 101, "a1", P1)).get()
       writer.flush()
       val t1 = boundary()
 
-      insert("t_conf", s"""(2L, 12L, 102, "a2", "$P2")""")
+      insert(confTableName, s"""(2L, 12L, 102, "a2", "$P2")""")
       writer.upsert(row(2L, 12L, 102, "a2", P2)).get()
       writer.flush()
       Thread.sleep(200)
@@ -421,10 +440,10 @@ class SparkTimeRangeTvfTest extends FlussSparkTestBase {
         sessionKey(SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key()) -> "2000-01-02 00:00:00"
       ) {
         checkAnswer(
-          sql(s"SELECT * FROM $DEFAULT_DATABASE.t_conf ORDER BY orderId"),
+          sql(s"SELECT * FROM $DEFAULT_DATABASE.$confTableName ORDER BY orderId"),
           Row(1L, 11L, 101, "a1", P1) :: Row(2L, 12L, 102, "a2", P2) :: Nil)
-        checkAnswer(sql(s"SELECT * FROM ${tvf("t_conf", t1)}"), window)
-        checkAnswer(sql(s"SELECT * FROM ${tvf("t_conf_pk", t1)}"), window)
+        checkAnswer(sql(s"SELECT * FROM ${tvf(confTableName, t1)}"), window)
+        checkAnswer(sql(s"SELECT * FROM ${tvf(confPkTableName, t1)}"), window)
       }
     }
   }

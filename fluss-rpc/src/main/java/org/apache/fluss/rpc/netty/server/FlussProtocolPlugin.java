@@ -31,6 +31,8 @@ import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
+import org.apache.fluss.security.auth.ServerAuthenticator;
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServerConfigManager;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
@@ -39,7 +41,9 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /** Build-in protocol plugin for Fluss. */
 public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
@@ -48,6 +52,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private final List<String> listeners;
     private Configuration conf;
     private PlainSaslServerConfigManager plainSaslServerConfigManager;
+    private Map<String, Supplier<ServerAuthenticator>> authenticatorSuppliers;
     @Nullable private SslConfig sslConfig;
     /** Shared by every TLS listener; {@code null} when no listener enables TLS. */
     @Nullable private SslContext sslContext;
@@ -64,16 +69,22 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public void setup(Configuration conf) {
+        // Fail fast on invalid proxy grants before accepting connections. Authenticators resolve
+        // the per-listener policy from the configuration when initialized, like the JAAS config.
+        PlainSaslProxyAuthorization.loadForListeners(conf, listeners);
         this.plainSaslServerConfigManager = new PlainSaslServerConfigManager(conf);
         this.conf = plainSaslServerConfigManager.getConfiguration();
+        this.authenticatorSuppliers =
+                AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf);
         // Built once here so that invalid TLS settings fail the server at startup rather than
         // every accepted connection later.
         this.sslConfig = SslConfig.fromServerConfig(conf).orElse(null);
         if (sslConfig != null) {
             checkTlsListenersExist(sslConfig.enabledListeners());
-            checkInternalListenerIsPlaintext(sslConfig.enabledListeners());
-            this.sslContext = SslContextFactory.createServerSslContext(sslConfig);
         }
+        checkInternalListenerMatchesClientTls();
+        this.sslContext =
+                sslConfig == null ? null : SslContextFactory.createServerSslContext(sslConfig);
     }
 
     @Override
@@ -94,9 +105,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                 requestsMetrics,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                Optional.ofNullable(
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
-                                        .get(listenerName))
+                Optional.ofNullable(authenticatorSuppliers.get(listenerName))
                         .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new),
                 isTlsListener(listenerName) ? sslContext : null,
                 sslConfig != null && sslConfig.requiresClientAuth(listenerName));
@@ -128,19 +137,31 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     }
 
     /**
-     * Servers connect to each other over the internal listener without TLS, so TLS there would fail
-     * every request between servers.
+     * Servers connect to each other over the internal listener with a client built from this server
+     * configuration.
      *
-     * <p>TODO: remove once the client side supports TLS (#3797).
+     * <p>With {@code client.security.ssl.enabled} they communicate via TLS, so the internal
+     * listener must be TLS-enabled exactly when this option is true. A mismatch in either direction
+     * would fail every request between servers at runtime, so it is rejected at startup. The check
+     * runs even without any server TLS configuration, to reject outbound TLS towards a plaintext
+     * internal listener.
      */
-    private void checkInternalListenerIsPlaintext(List<String> tlsListeners) {
+    private void checkInternalListenerMatchesClientTls() {
         String internalListener = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
-        if (tlsListeners.contains(internalListener)) {
+        boolean internalListenerTls = isTlsListener(internalListener);
+        boolean clientTls = conf.get(ConfigOptions.CLIENT_SSL_ENABLED);
+        if (internalListenerTls != clientTls) {
             throw new IllegalConfigurationException(
-                    "TLS is not supported yet on the internal listener '%s' (see '%s'): servers connect to each other without TLS. Remove it from '%s'.",
+                    "The internal listener '%s' (see '%s') is %s in '%s', but '%s' is %s. Servers "
+                            + "connect to each other over the internal listener with the "
+                            + "'client.security.ssl.*' options of the server configuration, so "
+                            + "both must agree.",
                     internalListener,
                     ConfigOptions.INTERNAL_LISTENER_NAME.key(),
-                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+                    internalListenerTls ? "listed" : "not listed",
+                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
+                    ConfigOptions.CLIENT_SSL_ENABLED.key(),
+                    clientTls);
         }
     }
 

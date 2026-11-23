@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -63,6 +64,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class FlinkUnionReadDvTableITCase extends FlinkUnionReadTestBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @TempDir private File tempDir;
 
     @BeforeAll
@@ -98,7 +101,7 @@ class FlinkUnionReadDvTableITCase extends FlinkUnionReadTestBase {
         // Start the tiering job that syncs data from Fluss to Paimon
         JobClient jobClient = buildTieringJob(execEnv);
         try {
-            String tableName = "testUnionReadDvTable";
+            String tableName = tableNames.tableName("testUnionReadDvTable");
             TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
             int bucketNum = 3;
             long tableId = createDvEnabledTable(tablePath, bucketNum, false);
@@ -203,7 +206,7 @@ class FlinkUnionReadDvTableITCase extends FlinkUnionReadTestBase {
         // Start the tiering job that syncs data from Fluss to Paimon
         JobClient jobClient = buildTieringJob(execEnv);
         try {
-            String tableName = "testUnionReadDvPartitionedTable";
+            String tableName = tableNames.tableName("testUnionReadDvPartitionedTable");
             TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
             int bucketNum = 2;
             long tableId = createDvEnabledTable(tablePath, bucketNum, true);

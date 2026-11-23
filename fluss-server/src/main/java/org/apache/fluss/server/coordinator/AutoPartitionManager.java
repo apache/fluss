@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -538,6 +539,11 @@ public class AutoPartitionManager implements AutoCloseable {
             currentPartitions.put(partition.getPartitionName(), null);
             LOG.info(
                     "Auto partitioning created partition {} for table [{}].", partition, tablePath);
+        } catch (TableNotExistException e) {
+            LOG.info(
+                    "Skipping partition creation for table [{}] (id={}) as the table has been dropped.",
+                    tablePath,
+                    tableId);
         } catch (PartitionAlreadyExistsException e) {
             currentPartitions.put(partition.getPartitionName(), null);
             LOG.info(

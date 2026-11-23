@@ -732,7 +732,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         AclBindingFilter aclBindingFilter = toAclFilter(request.getAclFilter());
         try {
             Collection<AclBinding> acls = authorizer.listAcls(currentSession(), aclBindingFilter);
-            return CompletableFuture.completedFuture(makeListAclsResponse(acls));
+            boolean includeGroupAcls = currentApiVersion() >= 1;
+            return CompletableFuture.completedFuture(makeListAclsResponse(acls, includeGroupAcls));
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to list acls for resource: %s", aclBindingFilter), e);
