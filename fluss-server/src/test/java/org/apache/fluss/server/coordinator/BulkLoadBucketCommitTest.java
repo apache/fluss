@@ -61,7 +61,10 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTargetZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTransactionZNode;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
@@ -723,7 +726,7 @@ class BulkLoadBucketCommitTest {
             String partitionName,
             String remoteDir)
             throws Exception {
-        String path = "/bulk_load/tables/" + table.getTableId() + "/transactions/" + LOAD_ID;
+        String path = BulkLoadTransactionZNode.path(table.getTableId(), LOAD_ID);
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode transaction = mapper.createObjectNode();
         transaction
@@ -734,26 +737,16 @@ class BulkLoadBucketCommitTest {
                 .putObject("table_path")
                 .put("database_name", table.getTablePath().getDatabaseName())
                 .put("table_name", table.getTablePath().getTableName());
-        ObjectNode info = transaction.putObject("table_info");
-        info.put("schema_id", table.getSchemaId())
-                .put("created_time", table.getCreatedTime())
-                .put("modified_time", table.getModifiedTime())
-                .put("remote_data_dir", table.getRemoteDataDir())
-                .put("bucket_count_epoch", table.getBucketCountEpoch());
-        info.set("table_json", mapper.readTree(table.toTableDescriptor().toJsonBytes()));
+        transaction
+                .put("schema_id", table.getSchemaId())
+                .put("remote_data_dir", table.getRemoteDataDir());
         createNode(client, path, mapper.writeValueAsBytes(transaction));
 
-        String targetPath =
-                path + "/targets" + (partitionId == null ? "/table" : "/partitions/" + partitionId);
-        ObjectNode target = mapper.createObjectNode();
-        target.put("version", 1)
-                .put("bucket_count", table.getNumBuckets())
-                .put("remote_data_dir", remoteDir)
-                .put("withdrawn", false);
-        if (partitionName != null) {
-            target.put("partition_name", partitionName);
-        }
-        createNode(client, targetPath, mapper.writeValueAsBytes(target));
+        String targetPath = BulkLoadTargetZNode.path(table.getTableId(), LOAD_ID, partitionId);
+        BulkLoadTarget target =
+                new BulkLoadTarget(
+                        partitionId, partitionName, table.getNumBuckets(), remoteDir, false);
+        createNode(client, targetPath, BulkLoadTargetZNode.encode(target));
         createNode(client, targetPath + "/buckets", new byte[0]);
     }
 

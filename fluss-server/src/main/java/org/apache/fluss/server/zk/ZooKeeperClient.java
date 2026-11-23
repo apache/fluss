@@ -71,6 +71,9 @@ import org.apache.fluss.server.zk.data.ZkData.BucketIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadBucketZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTargetZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTransactionZNode;
 import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
@@ -1505,22 +1508,23 @@ public class ZooKeeperClient implements AutoCloseable {
             throw new InvalidRequestException("Invalid bulk_load_id.");
         }
         return getVersionedData(
-                bulkLoadTransactionPath(tableId, bulkLoadId),
-                bytes -> BulkLoadTransaction.fromJson(tableId, bulkLoadId, bytes));
+                BulkLoadTransactionZNode.path(tableId, bulkLoadId),
+                bytes -> BulkLoadTransactionZNode.decode(tableId, bulkLoadId, bytes));
     }
 
     /** Reads the BulkLoad target at its original physical partition identity. */
     public Optional<VersionedData<BulkLoadTarget>> getBulkLoadTarget(
             BulkLoadTransaction transaction, @Nullable Long partitionId) throws Exception {
         return getVersionedData(
-                bulkLoadTargetPath(transaction, partitionId),
-                bytes -> BulkLoadTarget.fromJson(partitionId, bytes));
+                BulkLoadTargetZNode.path(transaction.tableId, transaction.bulkLoadId, partitionId),
+                bytes -> BulkLoadTargetZNode.decode(partitionId, bytes));
     }
 
     /** Reads the bucket allocation or the result of its completed commit. */
     public Optional<BulkLoadBucket> getBulkLoadBucket(
             BulkLoadTransaction transaction, TableBucket bucket) throws Exception {
-        return getOrEmpty(bulkLoadBucketPath(transaction, bucket)).map(BulkLoadBucket::fromJson);
+        return getOrEmpty(BulkLoadBucketZNode.path(transaction, bucket))
+                .map(BulkLoadBucketZNode::decode);
     }
 
     /**
@@ -1539,8 +1543,8 @@ public class ZooKeeperClient implements AutoCloseable {
                 bulkLoadMutationChecks(transaction, target, tableZkVersion, partitionZkVersion);
         ops.add(
                 zkOp.createOp(
-                        bulkLoadBucketPath(transaction.data(), bucket),
-                        allocation.toJson(),
+                        BulkLoadBucketZNode.path(transaction.data(), bucket),
+                        BulkLoadBucketZNode.encode(allocation),
                         CreateMode.PERSISTENT));
         writeBulkLoadMetadata(wrapRequestsWithEpochCheck(ops, epochVersion), epochVersion);
     }
@@ -1581,7 +1585,9 @@ public class ZooKeeperClient implements AutoCloseable {
         // Allocation creates version 0. Committing is the only update to a bucket record.
         operations.add(
                 zkOp.updateOp(
-                        bulkLoadBucketPath(transaction.data(), bucket), committed.toJson(), 0));
+                        BulkLoadBucketZNode.path(transaction.data(), bucket),
+                        BulkLoadBucketZNode.encode(committed),
+                        0));
         operations.add(
                 zkOp.createOp(
                         BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId()),
@@ -1667,30 +1673,14 @@ public class ZooKeeperClient implements AutoCloseable {
         }
         ops.add(
                 zkOp.checkOp(
-                        bulkLoadTransactionPath(txn.tableId, txn.bulkLoadId),
+                        BulkLoadTransactionZNode.path(txn.tableId, txn.bulkLoadId),
                         transaction.zkVersion()));
         ops.add(
                 zkOp.checkOp(
-                        bulkLoadTargetPath(txn, physicalTarget.partitionId), target.zkVersion()));
+                        BulkLoadTargetZNode.path(
+                                txn.tableId, txn.bulkLoadId, physicalTarget.partitionId),
+                        target.zkVersion()));
         return ops;
-    }
-
-    private static String bulkLoadTransactionPath(long tableId, String bulkLoadId) {
-        return "/bulk_load/tables/" + tableId + "/transactions/" + bulkLoadId;
-    }
-
-    private static String bulkLoadTargetPath(
-            BulkLoadTransaction transaction, @Nullable Long partitionId) {
-        String target = partitionId == null ? "/table" : "/partitions/" + partitionId;
-        return bulkLoadTransactionPath(transaction.tableId, transaction.bulkLoadId)
-                + "/targets"
-                + target;
-    }
-
-    private static String bulkLoadBucketPath(BulkLoadTransaction transaction, TableBucket bucket) {
-        return bulkLoadTargetPath(transaction, bucket.getPartitionId())
-                + "/buckets/"
-                + bucket.getBucket();
     }
 
     // --------------------------------------------------------------------------------------------

@@ -373,11 +373,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
             AllocateBulkLoadBucketSnapshotRequest request) {
-        Session session = currentSession();
+        PbBulkLoadHandle handle = request.getHandle();
+        authorizeBulkLoad(handle.getTableId());
         return submitBulkLoadOperation(
                 manager -> {
-                    PbBulkLoadHandle handle = request.getHandle();
-                    authorizeBulkLoad(handle.getTableId(), session);
                     TableBucket bucket =
                             new TableBucket(
                                     handle.getTableId(),
@@ -395,11 +394,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
             CommitBulkLoadBucketSnapshotRequest request) {
-        Session session = currentSession();
+        PbBulkLoadHandle handle = request.getHandle();
+        authorizeBulkLoad(handle.getTableId());
         return submitBulkLoadOperation(
                 manager -> {
-                    PbBulkLoadHandle handle = request.getHandle();
-                    authorizeBulkLoad(handle.getTableId(), session);
                     TableBucket bucket =
                             new TableBucket(
                                     handle.getTableId(),
@@ -415,14 +413,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 });
     }
 
-    private void authorizeBulkLoad(long tableId, Session session) {
-        if (authorizer != null) {
-            try {
-                authorizeTableWithSession(session, OperationType.WRITE, tableId);
-            } catch (UnknownTableOrBucketException e) {
-                throw new BulkLoadNotFoundException(
-                        "The original BulkLoad table no longer exists.");
-            }
+    private void authorizeBulkLoad(long tableId) {
+        try {
+            authorizeTable(OperationType.WRITE, tableId);
+        } catch (UnknownTableOrBucketException e) {
+            throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
         }
     }
 
