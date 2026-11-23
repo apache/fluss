@@ -26,6 +26,7 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceMetrics;
 
 import javax.annotation.Nullable;
 
@@ -53,6 +54,9 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
     private final Map<Class<? extends CoordinatorEvent>, CoordinatorEventMetricGroup>
             eventMetricGroups = new ConcurrentHashMap<>();
+
+    // Registered lazily via registerRebalanceMetrics(); guarded by that method's monitor.
+    private @Nullable RebalanceMetrics rebalanceMetrics;
 
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
@@ -88,6 +92,26 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
                 return "";
             }
         };
+    }
+
+    /**
+     * Registers the rebalance metrics of this coordinator server and returns them.
+     *
+     * <p>The metrics are not registered by the constructor, so that a group created outside the
+     * server startup path does not carry them. The server registers them explicitly on startup;
+     * anywhere else they are registered on first use. They outlive individual coordinator
+     * leadership terms and are unregistered when this group is closed.
+     */
+    public synchronized RebalanceMetrics registerRebalanceMetrics() {
+        if (rebalanceMetrics == null) {
+            rebalanceMetrics = new RebalanceMetrics(this);
+        }
+        return rebalanceMetrics;
+    }
+
+    /** Returns the rebalance metrics of this coordinator server, registering them if needed. */
+    public RebalanceMetrics getRebalanceMetrics() {
+        return registerRebalanceMetrics();
     }
 
     // ------------------------------------------------------------------------
