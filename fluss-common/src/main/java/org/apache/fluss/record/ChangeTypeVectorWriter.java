@@ -17,32 +17,35 @@
 
 package org.apache.fluss.record;
 
-import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.memory.AbstractPagedOutputView;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
+import java.io.IOException;
+import java.util.Arrays;
 
 /** A writer for {@link ChangeTypeVector}. */
 public class ChangeTypeVectorWriter {
 
-    private final MemorySegment segment;
-    private final int capacity;
-    private final int startPosition;
+    private byte[] buffer;
     private int recordsCount = 0;
 
-    public ChangeTypeVectorWriter(MemorySegment segment, int startPosition) {
-        checkArgument(segment.size() >= startPosition, "The start position is out of bound.");
-        this.segment = segment;
-        this.capacity = segment.size() - startPosition;
-        this.startPosition = startPosition;
+    public ChangeTypeVectorWriter() {
+        this.buffer = new byte[64];
     }
 
     public void writeChangeType(ChangeType changeType) {
-        if (recordsCount > capacity) {
-            // TODO: support AbstractPagedOutputView to have extendable capacity
-            throw new IllegalStateException("The change type vector is full.");
+        if (recordsCount >= buffer.length) {
+            buffer = Arrays.copyOf(buffer, buffer.length * 2);
         }
-        segment.put(startPosition + recordsCount, changeType.toByteValue());
+        buffer[recordsCount] = changeType.toByteValue();
         recordsCount++;
+    }
+
+    /**
+     * Writes all buffered change-type bytes to {@code outputView}. The view handles page-boundary
+     * crossing transparently.
+     */
+    public void writeTo(AbstractPagedOutputView outputView) throws IOException {
+        outputView.write(buffer, 0, recordsCount);
     }
 
     public int sizeInBytes() {
