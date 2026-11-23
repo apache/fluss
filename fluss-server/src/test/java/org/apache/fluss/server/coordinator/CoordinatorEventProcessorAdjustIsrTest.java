@@ -426,11 +426,12 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
         }
 
         @Override
-        public Map<TableBucket, LeaderAndIsr> batchUpdateLeaderAndIsr(
+        public void batchUpdateLeaderAndIsr(
                 Map<TableBucket, LeaderAndIsr> leaderAndIsrs, int expectedZkVersion)
                 throws Exception {
             if (!failureInjectionEnabled) {
-                return super.batchUpdateLeaderAndIsr(leaderAndIsrs, expectedZkVersion);
+                super.batchUpdateLeaderAndIsr(leaderAndIsrs, expectedZkVersion);
+                return;
             }
             // Record every proposed change before throwing so tests can verify validation
             // filtering.
@@ -438,11 +439,11 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
             if (failBatchUpdate) {
                 throw new RuntimeException("Expected batch update failure");
             }
-            return super.batchUpdateLeaderAndIsr(leaderAndIsrs, expectedZkVersion);
+            super.batchUpdateLeaderAndIsr(leaderAndIsrs, expectedZkVersion);
         }
 
         @Override
-        public LeaderAndIsr updateLeaderAndIsr(
+        public void updateLeaderAndIsr(
                 TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion)
                 throws Exception {
             // Record all fallback attempts, but persist only the buckets not selected to fail.
@@ -450,7 +451,7 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
             if (failedIndividualUpdates.contains(tableBucket)) {
                 throw new RuntimeException("Expected individual update failure");
             }
-            return super.updateLeaderAndIsr(tableBucket, leaderAndIsr, expectedZkVersion);
+            super.updateLeaderAndIsr(tableBucket, leaderAndIsr, expectedZkVersion);
         }
 
         private Map<TableBucket, LeaderAndIsr> getBatchUpdates() {

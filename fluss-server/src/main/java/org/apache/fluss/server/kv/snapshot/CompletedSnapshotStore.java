@@ -131,27 +131,21 @@ public class CompletedSnapshotStore {
                 () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
-    /**
-     * Publishes an import with private files under the bucket lock. An empty result means a
-     * previous attempt has already committed it.
-     */
-    public <T> Optional<T> publishImportedSnapshot(
-            CompletedSnapshot snapshot, CheckedSupplier<Optional<T>> publish) throws Exception {
-        return inLock(
+    /** Keeps the durable publication and local retention ordered with ordinary snapshot commits. */
+    public void publishImportedSnapshot(
+            CompletedSnapshot snapshot, CheckedSupplier<Boolean> publish) throws Exception {
+        inLock(
                 lock,
                 () -> {
                     if (recoverySnapshotId != null
                             && recoverySnapshotId == snapshot.getSnapshotID()) {
-                        return Optional.empty();
+                        return;
                     }
-                    Optional<T> published = publish.get();
-                    if (published.isPresent()) {
-                        // Allocation order can differ from commit order.
+                    if (publish.get()) {
                         completedSnapshots.addLast(snapshot);
                         recoverySnapshotId = snapshot.getSnapshotID();
                         retainSnapshots(snapshot, null);
                     }
-                    return published;
                 });
     }
 

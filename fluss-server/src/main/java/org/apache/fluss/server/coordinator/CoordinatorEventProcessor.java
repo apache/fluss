@@ -32,6 +32,8 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
@@ -63,13 +65,13 @@ import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.CommitBulkLoadBucketEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
@@ -138,9 +140,11 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.Uninterruptibles;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
+import org.apache.fluss.utils.function.CheckedSupplier;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -159,7 +163,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
@@ -319,20 +325,41 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         return coordinatorContext;
     }
 
-    void notifyBulkLoadBucketRole(TableBucket bucket, LeaderAndIsr published) {
-        coordinatorEventManager.put(
-                new AccessContextEvent<Void>(
-                        ctx -> {
-                            LeaderAndIsr current = ctx.getBucketLeaderAndIsr(bucket).orElse(null);
-                            if (current == null
-                                    || ctx.isToBeDeleted(bucket)
-                                    || current.zkVersion() > published.zkVersion()) {
-                                return null;
+    boolean publishBulkLoadBucket(
+            TableBucket bucket, CheckedSupplier<Optional<LeaderAndIsr>> publication)
+            throws Exception {
+        CommitBulkLoadBucketEvent event =
+                new CommitBulkLoadBucketEvent(
+                        () -> {
+                            Optional<LeaderAndIsr> published;
+                            try {
+                                published = publication.get();
+                            } catch (NetworkException unconfirmed) {
+                                // Without a verified role, ISR writers must not reuse the cached
+                                // epoch.
+                                coordinatorContext.bucketLeaderAndIsr().remove(bucket);
+                                throw unconfirmed;
                             }
-                            ctx.putBucketLeaderAndIsr(bucket, published);
-                            notifyOnlineReplicas(bucket);
-                            return null;
-                        }));
+                            published.ifPresent(
+                                    role -> {
+                                        coordinatorContext.putBucketLeaderAndIsr(bucket, role);
+                                        notifyOnlineReplicas(bucket);
+                                    });
+                            return published.isPresent();
+                        });
+        coordinatorEventManager.put(event);
+        try {
+            // The I/O caller owns the snapshot lock until publication has finished.
+            return Uninterruptibles.getUninterruptibly(event);
+        } catch (CancellationException e) {
+            throw new NotCoordinatorLeaderException(
+                    "Coordinator stopped before publishing " + bucket);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof Exception) {
+                throw (Exception) e.getCause();
+            }
+            throw (Error) e.getCause();
+        }
     }
 
     private void notifyOnlineReplicas(TableBucket bucket) {
@@ -742,7 +769,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     @Override
     public void process(CoordinatorEvent event) {
-        if (event instanceof CreateTableEvent) {
+        if (event instanceof CommitBulkLoadBucketEvent) {
+            ((CommitBulkLoadBucketEvent) event).run();
+        } else if (event instanceof CreateTableEvent) {
             processCreateTable((CreateTableEvent) event);
         } else if (event instanceof CreatePartitionEvent) {
             processCreatePartition((CreatePartitionEvent) event);
@@ -2196,12 +2225,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             .filter(targetReplicaSet::contains)
                             .collect(Collectors.toList());
             LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(targetIsr);
-            leaderAndIsr =
-                    zooKeeperClient.updateLeaderAndIsr(
-                            tableBucket,
-                            newLeaderAndIsr,
-                            coordinatorContext.getCoordinatorZkVersion());
-            coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+            zooKeeperClient.updateLeaderAndIsr(
+                    tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
+            coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
+            leaderAndIsr = newLeaderAndIsr;
         }
         sendCurrentLeaderAndIsrRequest(tableBucket, targetReplicas, leaderAndIsr);
     }
@@ -2346,6 +2373,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(
             Map<TableBucket, LeaderAndIsr> leaderAndIsrList) {
+        // TODO verify leader epoch.
+
         List<AdjustIsrResultForBucket> result = new ArrayList<>();
         Map<TableBucket, LeaderAndIsr> proposedChanges = new HashMap<>();
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
@@ -2353,58 +2382,59 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             LeaderAndIsr tryAdjustLeaderAndIsr = entry.getValue();
 
             try {
-                proposedChanges.put(
-                        tableBucket, prepareIsrUpdate(tableBucket, tryAdjustLeaderAndIsr));
+                validateLeaderAndIsr(tableBucket, tryAdjustLeaderAndIsr);
             } catch (Exception e) {
                 result.add(new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
+                continue;
             }
+
+            // Do the updates in ZK.
+            LeaderAndIsr currentLeaderAndIsr =
+                    coordinatorContext
+                            .getBucketLeaderAndIsr(tableBucket)
+                            .orElseThrow(
+                                    () ->
+                                            new FlussRuntimeException(
+                                                    "Leader not found for table bucket "
+                                                            + tableBucket));
+            LeaderAndIsr newLeaderAndIsr =
+                    new LeaderAndIsr(
+                            // the leaderEpoch in request has been validated to be equal to current
+                            // leaderEpoch, which means the leader is still the same, so we use
+                            // leader and leaderEpoch in currentLeaderAndIsr.
+                            currentLeaderAndIsr.leader(),
+                            currentLeaderAndIsr.leaderEpoch(),
+                            // TODO: reject the request if there is a replica in ISR is not online,
+                            //  see KIP-841.
+                            tryAdjustLeaderAndIsr.isr(),
+                            tryAdjustLeaderAndIsr.standbyReplicas(),
+                            coordinatorContext.getCoordinatorEpoch(),
+                            currentLeaderAndIsr.bucketEpoch() + 1);
+            proposedChanges.put(tableBucket, newLeaderAndIsr);
         }
 
-        Map<TableBucket, LeaderAndIsr> committedChanges;
+        Map<TableBucket, LeaderAndIsr> committedChanges = new HashMap<>();
         try {
-            committedChanges =
-                    zooKeeperClient.batchUpdateLeaderAndIsr(
-                            proposedChanges, coordinatorContext.getCoordinatorZkVersion());
-            if (committedChanges.size() < proposedChanges.size()) {
-                Set<TableBucket> conflicts = new HashSet<>(proposedChanges.keySet());
-                conflicts.removeAll(committedChanges.keySet());
-                zooKeeperClient
-                        .getLeaderAndIsrs(conflicts)
-                        .forEach(
-                                (bucket, role) -> {
-                                    coordinatorContext.putBucketLeaderAndIsr(bucket, role);
-                                    if (!coordinatorContext.isToBeDeleted(bucket)) {
-                                        notifyOnlineReplicas(bucket);
-                                    }
-                                });
-                for (TableBucket bucket : conflicts) {
-                    result.add(
-                            new AdjustIsrResultForBucket(
-                                    bucket,
-                                    new ApiError(
-                                            Errors.NETWORK_EXCEPTION,
-                                            "Could not confirm the ISR update for " + bucket)));
-                }
-            }
-        } catch (InvalidCoordinatorException e) {
-            ApiError error = ApiError.fromThrowable(e);
-            proposedChanges
-                    .keySet()
-                    .forEach(bucket -> result.add(new AdjustIsrResultForBucket(bucket, error)));
-            return result;
+            zooKeeperClient.batchUpdateLeaderAndIsr(
+                    proposedChanges, coordinatorContext.getCoordinatorZkVersion());
+            proposedChanges.forEach(
+                    (tableBucket, newLeaderAndIsr) -> {
+                        committedChanges.put(tableBucket, newLeaderAndIsr);
+                        result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
+                    });
         } catch (Exception batchException) {
             LOG.error("Error when batch update leader and isr. Try one by one.", batchException);
-            committedChanges = new HashMap<>();
+
             for (Map.Entry<TableBucket, LeaderAndIsr> entry : proposedChanges.entrySet()) {
                 TableBucket tableBucket = entry.getKey();
                 LeaderAndIsr newLeaderAndIsr = entry.getValue();
                 try {
-                    LeaderAndIsr committed =
-                            zooKeeperClient.updateLeaderAndIsr(
-                                    tableBucket,
-                                    newLeaderAndIsr,
-                                    coordinatorContext.getCoordinatorZkVersion());
-                    committedChanges.put(tableBucket, committed);
+                    zooKeeperClient.updateLeaderAndIsr(
+                            tableBucket,
+                            newLeaderAndIsr,
+                            coordinatorContext.getCoordinatorZkVersion());
+                    committedChanges.put(tableBucket, newLeaderAndIsr);
+                    result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
                 } catch (Exception e) {
                     LOG.error("Error when register leader and isr.", e);
                     result.add(
@@ -2414,11 +2444,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         }
 
         // update coordinator leader and isr cache.
-        committedChanges.forEach(
-                (bucket, committed) -> {
-                    coordinatorContext.putBucketLeaderAndIsr(bucket, committed);
-                    result.add(new AdjustIsrResultForBucket(bucket, committed));
-                });
+        committedChanges.forEach(coordinatorContext::putBucketLeaderAndIsr);
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
         committedChanges.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
@@ -2429,12 +2455,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     /**
-     * Validates an ISR change and derives the update from the current persisted role.
+     * Validate the new leader and isr.
      *
      * @param tableBucket table bucket
      * @param newLeaderAndIsr new leader and isr
      */
-    private LeaderAndIsr prepareIsrUpdate(TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) {
+    private void validateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) {
         if (coordinatorContext.getTablePathById(tableBucket.getTableId()) == null) {
             throw new UnknownTableOrBucketException("Unknown table id " + tableBucket.getTableId());
         }
@@ -2507,10 +2533,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 throw new FencedLeaderEpochException(
                         "The request isr in adjust isr request is not in assignment.");
             }
-            return currentLeaderAndIsr.withUpdatedIsr(
-                    isr,
-                    newLeaderAndIsr.standbyReplicas(),
-                    coordinatorContext.getCoordinatorEpoch());
         }
     }
 
@@ -2991,10 +3013,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // pass the original isr not include the new replicas.
         LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(leaderAndIsr.isr());
 
-        LeaderAndIsr committed =
-                zooKeeperClient.updateLeaderAndIsr(
-                        tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
-        sendCurrentLeaderAndIsrRequest(tableBucket, newReplicas, committed);
+        // TODO: Keep CoordinatorContext consistent when a ZooKeeper write fails or has an
+        // uncertain outcome. See https://github.com/apache/fluss/issues/5108.
+        coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
+        zooKeeperClient.updateLeaderAndIsr(
+                tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
+
+        sendLeaderAndIsrRequest(tableBucket, newReplicas, newLeaderAndIsr);
     }
 
     private void sendCurrentLeaderAndIsrRequest(TableBucket tableBucket, List<Integer> replicas)

@@ -342,11 +342,9 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         // persisting it: the target replicas have caught up, memory contains TRS, and ZooKeeper
         // still contains the Phase-A ORS+TRS assignment.
         LeaderAndIsr leaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
-        LeaderAndIsr caughtUp =
-                zookeeperClient.updateLeaderAndIsr(
-                        tableBucket,
-                        leaderAndIsr.newLeaderAndIsr(union),
-                        fromCtx(CoordinatorContext::getCoordinatorZkVersion));
+        LeaderAndIsr caughtUp = leaderAndIsr.newLeaderAndIsr(union);
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket, caughtUp, fromCtx(CoordinatorContext::getCoordinatorZkVersion));
         fromCtx(
                 ctx -> {
                     ctx.putBucketLeaderAndIsr(tableBucket, caughtUp);
@@ -832,13 +830,16 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
 
     private void changeLeader(TableBucket tableBucket, int newLeader) throws Exception {
         LeaderAndIsr current = zookeeperClient.getLeaderAndIsr(tableBucket).get();
-        int coordinatorZkVersion = fromCtx(CoordinatorContext::getCoordinatorZkVersion);
         LeaderAndIsr changed =
-                zookeeperClient.updateLeaderAndIsr(
-                        tableBucket,
-                        current.newLeaderAndIsr(
-                                newLeader, current.isr(), current.standbyReplicas()),
-                        coordinatorZkVersion);
+                new LeaderAndIsr(
+                        newLeader,
+                        current.leaderEpoch() + 1,
+                        current.isr(),
+                        current.standbyReplicas(),
+                        current.coordinatorEpoch(),
+                        current.bucketEpoch() + 1);
+        int coordinatorZkVersion = fromCtx(CoordinatorContext::getCoordinatorZkVersion);
+        zookeeperClient.updateLeaderAndIsr(tableBucket, changed, coordinatorZkVersion);
         fromCtx(
                 ctx -> {
                     ctx.putBucketLeaderAndIsr(tableBucket, changed);
@@ -1035,13 +1036,12 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         zookeeperClient.updateLeaderAndIsr(
                 bucket,
                 new LeaderAndIsr(
-                                leader,
-                                current.leaderEpoch() + 1,
-                                isr,
-                                Collections.emptyList(),
-                                current.coordinatorEpoch(),
-                                current.bucketEpoch() + 1)
-                        .withZkVersion(current.zkVersion()),
+                        leader,
+                        current.leaderEpoch() + 1,
+                        isr,
+                        Collections.emptyList(),
+                        current.coordinatorEpoch(),
+                        current.bucketEpoch() + 1),
                 ZkVersion.MATCH_ANY_VERSION.getVersion());
         zookeeperClient.registerRebalanceTask(
                 new RebalanceTask(

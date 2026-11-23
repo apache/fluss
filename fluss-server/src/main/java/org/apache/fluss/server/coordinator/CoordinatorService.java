@@ -405,10 +405,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     request.getBucketId());
                     CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
                     manager.commitBucketSnapshot(
-                                    handle.getBulkLoadId(),
-                                    bucket,
-                                    processor.completedSnapshotStoreManager())
-                            .ifPresent(role -> processor.notifyBulkLoadBucketRole(bucket, role));
+                            handle.getBulkLoadId(),
+                            bucket,
+                            processor.completedSnapshotStoreManager(),
+                            processor::publishBulkLoadBucket);
                     return new CommitBulkLoadBucketSnapshotResponse();
                 });
     }

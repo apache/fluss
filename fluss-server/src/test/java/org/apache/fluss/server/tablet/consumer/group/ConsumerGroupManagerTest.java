@@ -210,9 +210,7 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         cacheLeader(OTHER_SERVER_ID);
         zkClient.updateLeaderAndIsr(
                 offsetsTableBucket,
-                new LeaderAndIsr(TABLET_SERVER_ID, INITIAL_COORDINATOR_EPOCH)
-                        .withZkVersion(
-                                zkClient.getLeaderAndIsr(offsetsTableBucket).get().zkVersion()),
+                new LeaderAndIsr(TABLET_SERVER_ID, INITIAL_COORDINATOR_EPOCH),
                 ZkVersion.MATCH_ANY_VERSION.getVersion());
         assertCommitResult(Errors.NOT_CONSUMER_GROUP_OWNER);
     }

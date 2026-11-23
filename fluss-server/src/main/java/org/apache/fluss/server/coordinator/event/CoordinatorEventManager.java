@@ -225,6 +225,11 @@ public final class CoordinatorEventManager implements EventManager {
         inLock(
                 putLock,
                 () -> {
+                    if (thread.isShutdownInitiated()
+                            && event instanceof CommitBulkLoadBucketEvent) {
+                        ((CommitBulkLoadBucketEvent) event).cancel(false);
+                        return;
+                    }
                     try {
                         QueuedEvent queuedEvent =
                                 new QueuedEvent(event, System.currentTimeMillis());
@@ -238,6 +243,9 @@ public final class CoordinatorEventManager implements EventManager {
                                 event,
                                 event.getClass());
                     } catch (InterruptedException e) {
+                        if (event instanceof CommitBulkLoadBucketEvent) {
+                            ((CommitBulkLoadBucketEvent) event).cancel(false);
+                        }
                         LOG.error("Fail to put coordinator event {}.", event, e);
                     }
                 });
@@ -247,7 +255,12 @@ public final class CoordinatorEventManager implements EventManager {
         inLock(
                 putLock,
                 () -> {
-                    queue.clear();
+                    QueuedEvent pending;
+                    while ((pending = queue.poll()) != null) {
+                        if (pending.event instanceof CommitBulkLoadBucketEvent) {
+                            ((CommitBulkLoadBucketEvent) pending.event).cancel(false);
+                        }
+                    }
                     put(event);
                 });
     }

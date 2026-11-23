@@ -1431,55 +1431,6 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
-    void testAdjustIsrReconcilesConflictingAndPreviouslyCommittedRoles() throws Exception {
-        Map.Entry<TableBucket, LeaderAndIsr> entry =
-                createTableAndGetLeaderAndIsr("adjust_isr_with_stale_coordinator_role");
-        TableBucket bucket = entry.getKey();
-        LeaderAndIsr original = entry.getValue();
-        LeaderAndIsr bumped =
-                original.newLeaderAndIsr(
-                        original.leader(), original.isr(), original.standbyReplicas());
-        int coordinatorVersion = fromCtx(CoordinatorContext::getCoordinatorZkVersion);
-        zookeeperClient.updateLeaderAndIsr(bucket, bumped, coordinatorVersion);
-
-        TableBucket otherBucket =
-                new TableBucket(bucket.getTableId(), (bucket.getBucket() + 1) % N_BUCKETS);
-        LeaderAndIsr otherRole = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(otherBucket).get());
-        TableBucket replayedBucket =
-                new TableBucket(bucket.getTableId(), (bucket.getBucket() + 2) % N_BUCKETS);
-        LeaderAndIsr replayedRole = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(replayedBucket).get());
-        // The same proposal reached ZooKeeper before its reply was lost.
-        LeaderAndIsr persisted =
-                zookeeperClient.updateLeaderAndIsr(
-                        replayedBucket,
-                        replayedRole.newLeaderAndIsr(replayedRole.isr()),
-                        coordinatorVersion);
-        Map<TableBucket, LeaderAndIsr> adjustments = new HashMap<>();
-        adjustments.put(bucket, original);
-        adjustments.put(otherBucket, otherRole);
-        adjustments.put(replayedBucket, replayedRole);
-        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new AdjustIsrReceivedEvent(adjustments, response));
-
-        Map<TableBucket, AdjustIsrResultForBucket> result =
-                getAdjustIsrResponseData(response.get(10, TimeUnit.SECONDS));
-        assertThat(result.get(bucket).failed()).isTrue();
-        assertThat(result.get(otherBucket).succeeded()).isTrue();
-        assertThat(result.get(replayedBucket).succeeded()).isTrue();
-        LeaderAndIsr replayed = zookeeperClient.getLeaderAndIsr(replayedBucket).get();
-        assertThat(replayed).isEqualTo(persisted);
-        assertThat(replayed.zkVersion()).isEqualTo(persisted.zkVersion());
-        assertThat(zookeeperClient.getLeaderAndIsr(bucket)).contains(bumped);
-        LeaderAndIsr cached = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(bucket).get());
-        assertThat(cached).isEqualTo(bumped);
-        assertThat(cached.zkVersion()).isEqualTo(original.zkVersion() + 1);
-        assertThat(zookeeperClient.getLeaderAndIsr(otherBucket))
-                .contains(otherRole.newLeaderAndIsr(otherRole.isr()));
-    }
-
-    @Test
     void testProcessAdjustIsrRejectsRequestFromNonLeader() throws Exception {
         Map.Entry<TableBucket, LeaderAndIsr> entry =
                 createTableAndGetLeaderAndIsr("adjust_isr_from_non_leader");

@@ -529,7 +529,14 @@ class TableBucketStateMachineTest {
         TableBucket newBucket = new TableBucket(tableId, 1);
         Set<TableBucket> tableBuckets = Sets.newHashSet(onlineBucket, newBucket);
         List<Integer> assignedServers = Arrays.asList(0, 1, 2);
-        LeaderAndIsr originalLeaderAndIsr = initialRegisteredRole(assignedServers);
+        LeaderAndIsr originalLeaderAndIsr =
+                new LeaderAndIsr(
+                        0,
+                        0,
+                        assignedServers,
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
         LeaderAndIsr expectedOnlineLeaderAndIsr =
                 originalLeaderAndIsr.newLeaderAndIsr(
                         1, Arrays.asList(1, 2), Collections.emptyList());
@@ -596,7 +603,14 @@ class TableBucketStateMachineTest {
         TablePath tablePath = TablePath.of("db1", "fallback");
         TableBucket tableBucket = new TableBucket(tableId, 0);
         List<Integer> aliveServers = Arrays.asList(0, 1, 2);
-        LeaderAndIsr originalLeaderAndIsr = initialRegisteredRole(aliveServers);
+        LeaderAndIsr originalLeaderAndIsr =
+                new LeaderAndIsr(
+                        0,
+                        0,
+                        aliveServers,
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
 
         coordinatorContext.putTableInfo(
                 TableInfo.of(
@@ -656,7 +670,14 @@ class TableBucketStateMachineTest {
         Set<TableBucket> tableBuckets =
                 Sets.newHashSet(batchUpdatedBucket, individuallyRetriedBucket);
         List<Integer> aliveServers = Arrays.asList(0, 1, 2);
-        LeaderAndIsr originalLeaderAndIsr = initialRegisteredRole(aliveServers);
+        LeaderAndIsr originalLeaderAndIsr =
+                new LeaderAndIsr(
+                        0,
+                        0,
+                        aliveServers,
+                        Collections.emptyList(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        0);
         LeaderAndIsr expectedLeaderAndIsr =
                 originalLeaderAndIsr.newLeaderAndIsr(
                         1, Arrays.asList(1, 2), Collections.emptyList());
@@ -693,11 +714,10 @@ class TableBucketStateMachineTest {
             tableBucketStateMachine.handleStateChange(
                     tableBuckets, OnlineBucket, new ControlledShutdownLeaderElection());
 
-            for (TableBucket bucket : tableBuckets) {
-                LeaderAndIsr cached = coordinatorContext.getBucketLeaderAndIsr(bucket).get();
-                assertThat(cached).isEqualTo(expectedLeaderAndIsr);
-                assertThat(cached.zkVersion()).isOne();
-            }
+            assertThat(coordinatorContext.getBucketLeaderAndIsr(batchUpdatedBucket))
+                    .hasValue(expectedLeaderAndIsr);
+            assertThat(coordinatorContext.getBucketLeaderAndIsr(individuallyRetriedBucket))
+                    .hasValue(expectedLeaderAndIsr);
             assertThat(testingZooKeeperClient.batchReadBuckets)
                     .containsExactlyInAnyOrderElementsOf(tableBuckets);
             assertThat(testingZooKeeperClient.batchUpdates)
@@ -795,17 +815,6 @@ class TableBucketStateMachineTest {
                 coordinatorContext, coordinatorRequestBatch, zookeeperClient);
     }
 
-    private LeaderAndIsr initialRegisteredRole(List<Integer> replicas) {
-        return new LeaderAndIsr(
-                        0,
-                        0,
-                        replicas,
-                        Collections.emptyList(),
-                        coordinatorContext.getCoordinatorEpoch(),
-                        0)
-                .withZkVersion(0);
-    }
-
     private static final class TestingZooKeeperClient extends ZooKeeperClient {
 
         private final Map<TableBucket, LeaderAndIsr> batchReadResults;
@@ -843,31 +852,26 @@ class TableBucketStateMachineTest {
         }
 
         @Override
-        public Map<TableBucket, LeaderAndIsr> batchUpdateLeaderAndIsr(
+        public void batchUpdateLeaderAndIsr(
                 Map<TableBucket, LeaderAndIsr> leaderAndIsrs, int expectedZkVersion) {
             batchUpdates.putAll(leaderAndIsrs);
             batchUpdateZkVersion = expectedZkVersion;
             if (failBatchUpdate) {
                 throw new RuntimeException("Expected batch update failure");
             }
-            Map<TableBucket, LeaderAndIsr> committed = new HashMap<>(leaderAndIsrs);
-            committed.replaceAll((bucket, role) -> role.withZkVersion(role.zkVersion() + 1));
-            return committed;
         }
 
         @Override
-        public LeaderAndIsr updateLeaderAndIsr(
+        public void updateLeaderAndIsr(
                 TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
             individualUpdates.put(tableBucket, leaderAndIsr);
             individualUpdateZkVersions.put(tableBucket, expectedZkVersion);
-            return leaderAndIsr.withZkVersion(leaderAndIsr.zkVersion() + 1);
         }
 
         @Override
-        public LeaderAndIsr registerLeaderAndIsr(
+        public void registerLeaderAndIsr(
                 TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
             registeredLeaderAndIsrs.put(tableBucket, leaderAndIsr);
-            return leaderAndIsr.withZkVersion(0);
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {

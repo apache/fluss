@@ -221,19 +221,12 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr =
-                zookeeperClient.registerLeaderAndIsr(
-                        tableBucket,
-                        new LeaderAndIsr(
-                                0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0),
-                        ZkVersion.MATCH_ANY_VERSION.getVersion());
+                new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 
-        // An import advanced the role after the Coordinator cached it.
-        zookeeperClient.updateLeaderAndIsr(
-                tableBucket,
-                leaderAndIsr.newLeaderAndIsr(0, leaderAndIsr.isr(), leaderAndIsr.standbyReplicas()),
-                ZkVersion.MATCH_ANY_VERSION.getVersion());
         // set replica 0,1,2 to offline together. The result should be the same as offline one by
         // one.
         replicaStateMachine.handleStateChanges(replicas, OfflineReplica);
@@ -242,12 +235,11 @@ class ReplicaStateMachineTest {
                 .isEqualTo(
                         new LeaderAndIsr(
                                 LeaderAndIsr.NO_LEADER,
-                                4,
+                                3,
                                 Collections.singletonList(2),
                                 Collections.emptyList(),
                                 0,
-                                4));
-        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).contains(leaderAndIsr);
+                                3));
     }
 
     @Test
@@ -275,11 +267,9 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr =
-                zookeeperClient.registerLeaderAndIsr(
-                        tableBucket,
-                        new LeaderAndIsr(
-                                0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0),
-                        ZkVersion.MATCH_ANY_VERSION.getVersion());
+                new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 

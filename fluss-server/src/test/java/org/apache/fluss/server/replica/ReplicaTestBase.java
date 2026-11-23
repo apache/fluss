@@ -524,8 +524,7 @@ public class ReplicaTestBase {
             int coordinatorVersion = ZkVersion.MATCH_ANY_VERSION.getVersion();
             Optional<LeaderAndIsr> current = zkClient.getLeaderAndIsr(tb);
             if (current.isPresent()) {
-                zkClient.updateLeaderAndIsr(
-                        tb, role.withZkVersion(current.get().zkVersion()), coordinatorVersion);
+                zkClient.updateLeaderAndIsr(tb, role, coordinatorVersion);
             } else {
                 zkClient.registerLeaderAndIsr(tb, role, coordinatorVersion);
             }

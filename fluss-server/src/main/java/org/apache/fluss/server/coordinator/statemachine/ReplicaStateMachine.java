@@ -39,6 +39,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -272,7 +273,45 @@ public class ReplicaStateMachine {
                                         coordinatorContext.getBucketLeaderEpoch(
                                                 replica.getTableBucket())));
 
-                doRemoveReplicaFromIsr(validReplicas).forEach(this::notifyReplicasAfterIsrChange);
+                // then, may remove the offline replica from isr
+                Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr =
+                        doRemoveReplicaFromIsr(validReplicas);
+                // notify leader and isr changes
+                for (Map.Entry<TableBucketReplica, LeaderAndIsr> leaderAndIsrEntry :
+                        adjustedLeaderAndIsr.entrySet()) {
+                    TableBucketReplica tableBucketReplica = leaderAndIsrEntry.getKey();
+                    TableBucket tableBucket = tableBucketReplica.getTableBucket();
+                    LeaderAndIsr leaderAndIsr = leaderAndIsrEntry.getValue();
+                    if (!coordinatorContext.isToBeDeleted(tableBucket)) {
+                        Set<Integer> recipients =
+                                coordinatorContext.getAssignment(tableBucket).stream()
+                                        .filter(
+                                                replica ->
+                                                        replica != tableBucketReplica.getReplica())
+                                        .collect(Collectors.toSet());
+                        String partitionName;
+                        try {
+                            partitionName = getPartitionName(tableBucket);
+                        } catch (PartitionNotExistException e) {
+                            logFailedSateChange(
+                                    tableBucketReplica,
+                                    coordinatorContext.getReplicaState(tableBucketReplica),
+                                    targetState,
+                                    e.getMessage());
+                            continue;
+                        }
+                        // send leader request to the replica server
+                        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                                recipients,
+                                PhysicalTablePath.of(
+                                        coordinatorContext.getTablePathById(
+                                                tableBucket.getTableId()),
+                                        partitionName),
+                                tableBucket,
+                                coordinatorContext.getAssignment(tableBucket),
+                                leaderAndIsr);
+                    }
+                }
 
                 // finally, set to offline
                 validReplicas.forEach(
@@ -414,93 +453,63 @@ public class ReplicaStateMachine {
         }
     }
 
-    private void notifyReplicasAfterIsrChange(
-            TableBucket bucket, Set<TableBucketReplica> offlineReplicas) {
-        if (coordinatorContext.isToBeDeleted(bucket)) {
-            return;
-        }
-        String partitionName;
-        try {
-            partitionName = getPartitionName(bucket);
-        } catch (PartitionNotExistException e) {
-            for (TableBucketReplica replica : offlineReplicas) {
-                logFailedSateChange(
-                        replica,
-                        coordinatorContext.getReplicaState(replica),
-                        ReplicaState.OfflineReplica,
-                        e.getMessage());
-            }
-            return;
-        }
-
-        List<Integer> assignment = coordinatorContext.getAssignment(bucket);
-        Set<Integer> recipients = new HashSet<>(assignment);
-        // Each offline replica notifies its peers. With multiple removals their peers cover the
-        // assignment.
-        if (offlineReplicas.size() == 1) {
-            recipients.remove(offlineReplicas.iterator().next().getReplica());
-        }
-        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
-                recipients,
-                PhysicalTablePath.of(
-                        coordinatorContext.getTablePathById(bucket.getTableId()), partitionName),
-                bucket,
-                assignment,
-                coordinatorContext.getBucketLeaderAndIsr(bucket).get());
-    }
-
-    private Map<TableBucket, Set<TableBucketReplica>> doRemoveReplicaFromIsr(
+    private Map<TableBucketReplica, LeaderAndIsr> doRemoveReplicaFromIsr(
             Collection<TableBucketReplica> tableBucketReplicas) {
-        Map<TableBucket, Set<TableBucketReplica>> removed = new HashMap<>();
-        Map<TableBucket, LeaderAndIsr> currentRoles = coordinatorContext.bucketLeaderAndIsr();
-        try {
-            for (int attempt = 0; attempt < 2; attempt++) {
-                Map<TableBucket, LeaderAndIsr> changes = new HashMap<>();
-                Map<TableBucket, Set<TableBucketReplica>> affected = new HashMap<>();
-                for (TableBucketReplica replica : tableBucketReplicas) {
-                    TableBucket bucket = replica.getTableBucket();
-                    LeaderAndIsr role = changes.get(bucket);
-                    if (role == null) {
-                        role = currentRoles.get(bucket);
-                    }
-                    if (role != null && role.isr().contains(replica.getReplica())) {
-                        changes.put(bucket, removeReplicaFromIsr(role, replica.getReplica()));
-                        affected.computeIfAbsent(bucket, ignored -> new HashSet<>()).add(replica);
-                    }
+        Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr = new HashMap<>();
+        Map<TableBucket, LeaderAndIsr> toUpdateLeaderAndIsrList = new HashMap<>();
+        for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
+            TableBucket tableBucket = tableBucketReplica.getTableBucket();
+            int replicaId = tableBucketReplica.getReplica();
+
+            LeaderAndIsr leaderAndIsr;
+            if (toUpdateLeaderAndIsrList.get(tableBucket) != null) {
+                leaderAndIsr = toUpdateLeaderAndIsrList.get(tableBucket);
+            } else {
+                Optional<LeaderAndIsr> optLeaderAndIsr =
+                        coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+                if (!optLeaderAndIsr.isPresent()) {
+                    // no leader and isr for this table bucket, skip
+                    continue;
                 }
-                Map<TableBucket, LeaderAndIsr> committed =
-                        zooKeeperClient.batchUpdateLeaderAndIsr(
-                                changes, coordinatorContext.getCoordinatorZkVersion());
-                committed.forEach(
-                        (bucket, role) -> {
-                            coordinatorContext.putBucketLeaderAndIsr(bucket, role);
-                            removed.put(bucket, affected.get(bucket));
-                        });
-                if (attempt > 0 || changes.size() == committed.size()) {
-                    break;
-                }
-                // An import can advance the epoch without removing these offline replicas.
-                changes.keySet().removeAll(committed.keySet());
-                currentRoles = zooKeeperClient.getLeaderAndIsrs(changes.keySet());
-                currentRoles.forEach(coordinatorContext::putBucketLeaderAndIsr);
+                leaderAndIsr = optLeaderAndIsr.get();
             }
+
+            if (!leaderAndIsr.isr().contains(replicaId)) {
+                // isr doesn't contain the replica, skip
+                continue;
+            }
+            int newLeader =
+                    replicaId == leaderAndIsr.leader()
+                            ?
+                            // the leader become offline, set it to no leader
+                            LeaderAndIsr.NO_LEADER
+                            // otherwise, keep the origin as leader
+                            : leaderAndIsr.leader();
+            List<Integer> newIsr =
+                    leaderAndIsr.isr().size() == 1
+                            // don't remove the replica id from isr when isr size is 1,
+                            // if isr is empty, we can't elect leader anymore
+                            ? leaderAndIsr.isr()
+                            : leaderAndIsr.isr().stream()
+                                    .filter(id -> id != replicaId)
+                                    .collect(Collectors.toList());
+            LeaderAndIsr adjustLeaderAndIsr =
+                    newLeader == LeaderAndIsr.NO_LEADER
+                            ? leaderAndIsr.newLeaderAndIsr(
+                                    newLeader, newIsr, leaderAndIsr.standbyReplicas())
+                            : leaderAndIsr.newLeaderAndIsr(newIsr);
+            adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
+            toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);
+        }
+        try {
+            zooKeeperClient.batchUpdateLeaderAndIsr(
+                    toUpdateLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
+            toUpdateLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+            return adjustedLeaderAndIsr;
         } catch (Exception e) {
             LOG.error("Fail to batch update bucket LeaderAndIsr.", e);
         }
-        return removed;
-    }
-
-    private static LeaderAndIsr removeReplicaFromIsr(LeaderAndIsr role, int replicaId) {
-        // Keep the last ISR member eligible for a future election.
-        List<Integer> isr =
-                role.isr().size() == 1
-                        ? role.isr()
-                        : role.isr().stream()
-                                .filter(id -> id != replicaId)
-                                .collect(Collectors.toList());
-        return replicaId == role.leader() || role.leader() == LeaderAndIsr.NO_LEADER
-                ? role.newLeaderAndIsr(LeaderAndIsr.NO_LEADER, isr, role.standbyReplicas())
-                : role.newLeaderAndIsr(isr);
+        return adjustedLeaderAndIsr;
     }
 
     @Nullable

@@ -21,7 +21,6 @@ import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.InvalidRequestException;
-import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
@@ -36,6 +35,7 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.function.CheckedSupplier;
 
 import javax.annotation.Nullable;
 
@@ -107,8 +107,11 @@ public final class BulkLoadManager {
     }
 
     /** Publishes an allocated snapshot, or acknowledges an already committed bucket. */
-    public Optional<LeaderAndIsr> commitBucketSnapshot(
-            String bulkLoadId, TableBucket bucket, CompletedSnapshotStoreManager snapshotStores)
+    public void commitBucketSnapshot(
+            String bulkLoadId,
+            TableBucket bucket,
+            CompletedSnapshotStoreManager snapshotStores,
+            BucketPublisher publisher)
             throws Exception {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
@@ -117,7 +120,7 @@ public final class BulkLoadManager {
         Optional<BulkLoadBucket> record =
                 zooKeeperClient.getBulkLoadBucket(bulkLoadTransaction, bucket);
         if (record.isPresent() && record.get().state == BulkLoadBucket.COMMITTED) {
-            return Optional.empty();
+            return;
         }
         VersionedData<BulkLoadTarget> target = resolveTarget(bulkLoadTransaction, bucket);
         BulkLoadBucket allocation =
@@ -129,27 +132,26 @@ public final class BulkLoadManager {
                 validateBuildContext(bulkLoadTransaction, target.data(), currentTable.data());
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(tablePath, target.data(), bucket, allocation);
-        LeaderAndIsr role = getBucketLeader(bucket);
         BucketSnapshot reference =
                 new BucketSnapshot(
                         snapshot.getSnapshotID(),
                         snapshot.getLogOffset(),
                         snapshot.getMetadataFilePath().toString());
+        CheckedSupplier<Optional<LeaderAndIsr>> publication =
+                () ->
+                        zooKeeperClient.commitBulkLoadBucket(
+                                transaction,
+                                target,
+                                bucket,
+                                reference,
+                                currentTable.zkVersion(),
+                                partitionVersion,
+                                epochVersion);
         try {
-            return snapshotStores
+            snapshotStores
                     .getOrCreateCompletedSnapshotStore(tablePath, bucket)
                     .publishImportedSnapshot(
-                            snapshot,
-                            () ->
-                                    zooKeeperClient.commitBulkLoadBucket(
-                                            transaction,
-                                            target,
-                                            bucket,
-                                            reference,
-                                            role,
-                                            currentTable.zkVersion(),
-                                            partitionVersion,
-                                            epochVersion));
+                            snapshot, () -> publisher.publish(bucket, publication));
         } catch (KeeperException.NoNodeException | KeeperException.BadVersionException e) {
             checkMutationTarget(bulkLoadTransaction, target.data());
             throw e;
@@ -175,16 +177,6 @@ public final class BulkLoadManager {
                         () ->
                                 new BulkLoadNotFoundException(
                                         "The original BulkLoad table no longer exists."));
-    }
-
-    private LeaderAndIsr getBucketLeader(TableBucket bucket) throws Exception {
-        return zooKeeperClient
-                .getLeaderAndIsr(bucket)
-                .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
-                .orElseThrow(
-                        () ->
-                                new NotLeaderOrFollowerException(
-                                        "BulkLoad bucket has no leader: " + bucket));
     }
 
     private VersionedData<BulkLoadTarget> resolveTarget(
@@ -257,5 +249,12 @@ public final class BulkLoadManager {
         if (transaction.state != BulkLoadTransaction.RUNNING) {
             throw new BulkLoadStateException("BulkLoad transaction has ended.");
         }
+    }
+
+    /** Serializes the durable bucket publication with Coordinator role changes. */
+    @FunctionalInterface
+    public interface BucketPublisher {
+        boolean publish(TableBucket bucket, CheckedSupplier<Optional<LeaderAndIsr>> publication)
+                throws Exception;
     }
 }
