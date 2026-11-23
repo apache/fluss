@@ -23,7 +23,6 @@ import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -221,19 +220,8 @@ class BulkLoadMetadataStoreTest {
         client.registerTable(
                 TablePath.of("db", "t"),
                 TableRegistration.newTable(
-                        1, "file:/remote", transaction("a").value.tableInfo.toTableDescriptor()));
-    }
-
-    private Versioned<BulkLoadTransaction> transaction(String id) throws Exception {
-        return store.transaction(1, id).get();
-    }
-
-    private void begin(String id, Long... partitions) throws Exception {
-        TableInfo table =
-                TableInfo.of(
-                        TablePath.of("db", "t"),
                         1,
-                        1,
+                        "file:/remote",
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()
@@ -243,12 +231,25 @@ class BulkLoadMetadataStoreTest {
                                                 .build())
                                 .partitionedBy("p")
                                 .distributedBy(1, "k")
-                                .build(),
-                        "file:/remote",
-                        1,
-                        1);
+                                .build()));
+    }
+
+    private Versioned<BulkLoadTransaction> transaction(String id) throws Exception {
+        return store.transaction(1, id).get();
+    }
+
+    private void begin(String id, Long... partitions) throws Exception {
         BulkLoadTransaction transaction =
-                new BulkLoadTransaction(1, id, table, BulkLoadTransaction.RUNNING, 10, null, null);
+                new BulkLoadTransaction(
+                        1,
+                        id,
+                        TablePath.of("db", "t"),
+                        1,
+                        "file:/remote",
+                        BulkLoadTransaction.RUNNING,
+                        10,
+                        null,
+                        null);
         List<BulkLoadTarget> targets = new ArrayList<>();
         for (long partition : partitions) {
             targets.add(new BulkLoadTarget(partition, "p" + partition, 1, "file:/remote", false));

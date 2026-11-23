@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator.bulkload;
 
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileStatus;
@@ -26,7 +27,7 @@ import org.apache.fluss.metadata.KvSnapshotFileMetadata;
 import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
@@ -46,10 +47,14 @@ final class BulkLoadSnapshotValidator {
     private BulkLoadSnapshotValidator() {}
 
     static CompletedSnapshot validate(
-            TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation)
+            TablePath tablePath,
+            TableConfig tableConfig,
+            BulkLoadTarget target,
+            TableBucket bucket,
+            BulkLoadBucket allocation)
             throws InvalidBulkLoadSnapshotException {
         try {
-            return validateInput(table, target, bucket, allocation);
+            return validateInput(tablePath, tableConfig, target, bucket, allocation);
         } catch (InvalidBulkLoadSnapshotException e) {
             throw e;
         } catch (Exception e) {
@@ -59,12 +64,16 @@ final class BulkLoadSnapshotValidator {
     }
 
     private static CompletedSnapshot validateInput(
-            TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation)
+            TablePath tablePath,
+            TableConfig tableConfig,
+            BulkLoadTarget target,
+            TableBucket bucket,
+            BulkLoadBucket allocation)
             throws Exception {
         PhysicalTablePath physical =
                 target.partitionName == null
-                        ? PhysicalTablePath.of(table.getTablePath())
-                        : PhysicalTablePath.of(table.getTablePath(), target.partitionName);
+                        ? PhysicalTablePath.of(tablePath)
+                        : PhysicalTablePath.of(tablePath, target.partitionName);
         FsPath tabletDir =
                 FlussPaths.remoteKvTabletDir(
                         new FsPath(target.remoteDataDir, FlussPaths.REMOTE_KV_DIR_NAME),
@@ -95,8 +104,8 @@ final class BulkLoadSnapshotValidator {
                         || metadata.getAutoIncrementRanges().isEmpty(),
                 "Unexpected auto-increment state.");
         require(
-                table.getTableConfig().getChangelogImage() != ChangelogImage.WAL
-                                && !table.getTableConfig().getKvTTL().isPresent()
+                tableConfig.getChangelogImage() != ChangelogImage.WAL
+                                && !tableConfig.getKvTTL().isPresent()
                         ? metadata.getRowCount() != null
                         : metadata.getRowCount() == null,
                 "Snapshot row count does not match the table changelog configuration.");

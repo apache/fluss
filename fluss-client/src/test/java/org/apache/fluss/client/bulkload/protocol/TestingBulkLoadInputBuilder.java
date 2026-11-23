@@ -57,18 +57,18 @@ final class TestingBulkLoadInputBuilder {
             BeginBulkLoadResponse begun,
             Map<PhysicalTablePath, List<Object[]>> rows)
             throws Exception {
-        PbTableInfo frozen = begun.getTableInfo();
+        PbTableInfo tableInfo = begun.getTableInfo();
         for (PbBulkLoadTargetInfo target : begun.getTargetsList()) {
             TableInfo table =
                     TableInfo.of(
                             path,
-                            frozen.getTableId(),
-                            frozen.getSchemaId(),
-                            TableDescriptor.fromJsonBytes(frozen.getTableJson())
+                            tableInfo.getTableId(),
+                            tableInfo.getSchemaId(),
+                            TableDescriptor.fromJsonBytes(tableInfo.getTableJson())
                                     .withBucketCount(target.getBucketCount()),
                             target.getRemoteDataDir(),
-                            frozen.getCreatedTime(),
-                            frozen.getModifiedTime());
+                            tableInfo.getCreatedTime(),
+                            tableInfo.getModifiedTime());
             PhysicalTablePath physical =
                     target.hasPartitionId()
                             ? PhysicalTablePath.of(path, target.getPartitionName())

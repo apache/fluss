@@ -18,11 +18,9 @@
 package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
-import org.apache.fluss.utils.json.TableDescriptorJsonSerde;
 
 import javax.annotation.Nullable;
 
@@ -35,7 +33,9 @@ public final class BulkLoadTransaction {
 
     public final long tableId;
     public final String bulkLoadId;
-    public final TableInfo tableInfo;
+    public final TablePath tablePath;
+    public final int schemaId;
+    public final String remoteDataDir;
     public final int state;
     public final long createdTime;
     public final @Nullable Long finishedTime;
@@ -45,14 +45,18 @@ public final class BulkLoadTransaction {
     public BulkLoadTransaction(
             long tableId,
             String bulkLoadId,
-            TableInfo tableInfo,
+            TablePath tablePath,
+            int schemaId,
+            String remoteDataDir,
             int state,
             long createdTime,
             @Nullable Long finishedTime,
             @Nullable String abortMessage) {
         this.tableId = tableId;
         this.bulkLoadId = bulkLoadId;
-        this.tableInfo = tableInfo;
+        this.tablePath = tablePath;
+        this.schemaId = schemaId;
+        this.remoteDataDir = remoteDataDir;
         this.state = state;
         this.createdTime = createdTime;
         this.finishedTime = finishedTime;
@@ -62,7 +66,15 @@ public final class BulkLoadTransaction {
     /** Returns a terminal record, preserving the original build context. */
     public BulkLoadTransaction finish(int terminalState, long now, @Nullable String message) {
         return new BulkLoadTransaction(
-                tableId, bulkLoadId, tableInfo, terminalState, createdTime, now, message);
+                tableId,
+                bulkLoadId,
+                tablePath,
+                schemaId,
+                remoteDataDir,
+                terminalState,
+                createdTime,
+                now,
+                message);
     }
 
     /** Encodes the version 1 JSON record. Physical identity is carried by the path. */
@@ -74,21 +86,11 @@ public final class BulkLoadTransaction {
                     out.writeNumberField("version", 1);
                     out.writeNumberField("state", state);
                     out.writeObjectFieldStart("table_path");
-                    out.writeStringField(
-                            "database_name", tableInfo.getTablePath().getDatabaseName());
-                    out.writeStringField("table_name", tableInfo.getTablePath().getTableName());
+                    out.writeStringField("database_name", tablePath.getDatabaseName());
+                    out.writeStringField("table_name", tablePath.getTableName());
                     out.writeEndObject();
-                    out.writeObjectFieldStart("table_info");
-                    out.writeNumberField("schema_id", tableInfo.getSchemaId());
-                    out.writeFieldName("table_json");
-                    TableDescriptorJsonSerde.INSTANCE.serialize(tableInfo.toTableDescriptor(), out);
-                    out.writeNumberField("created_time", tableInfo.getCreatedTime());
-                    out.writeNumberField("modified_time", tableInfo.getModifiedTime());
-                    if (tableInfo.getRemoteDataDir() != null) {
-                        out.writeStringField("remote_data_dir", tableInfo.getRemoteDataDir());
-                    }
-                    out.writeNumberField("bucket_count_epoch", tableInfo.getBucketCountEpoch());
-                    out.writeEndObject();
+                    out.writeNumberField("schema_id", schemaId);
+                    out.writeStringField("remote_data_dir", remoteDataDir);
                     out.writeNumberField("created_time", createdTime);
                     if (finishedTime != null) {
                         out.writeNumberField("finished_time", finishedTime);
@@ -105,27 +107,15 @@ public final class BulkLoadTransaction {
         return JsonSerdeUtils.readValue(
                 bytes,
                 node -> {
-                    JsonNode info = node.get("table_info");
                     JsonNode path = node.get("table_path");
-                    TableInfo table =
-                            TableInfo.of(
-                                    TablePath.of(
-                                            path.get("database_name").asText(),
-                                            path.get("table_name").asText()),
-                                    tableId,
-                                    info.get("schema_id").asInt(),
-                                    TableDescriptorJsonSerde.INSTANCE.deserialize(
-                                            info.get("table_json")),
-                                    info.has("remote_data_dir")
-                                            ? info.get("remote_data_dir").asText()
-                                            : null,
-                                    info.get("created_time").asLong(),
-                                    info.get("modified_time").asLong(),
-                                    info.path("bucket_count_epoch").asLong());
                     return new BulkLoadTransaction(
                             tableId,
                             bulkLoadId,
-                            table,
+                            TablePath.of(
+                                    path.get("database_name").asText(),
+                                    path.get("table_name").asText()),
+                            node.get("schema_id").asInt(),
+                            node.get("remote_data_dir").textValue(),
                             node.get("state").asInt(),
                             node.get("created_time").asLong(),
                             node.has("finished_time") ? node.get("finished_time").asLong() : null,

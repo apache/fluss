@@ -115,7 +115,7 @@ public final class BulkLoadMetadataStore {
         String path = transactionPath(transaction.tableId, transaction.bulkLoadId);
         ops.add(create(path, transaction.toJson()));
         ops.add(create(path + "/targets", new byte[0]));
-        if (transaction.tableInfo.isPartitioned()) {
+        if (targets.get(0).partitionId != null) {
             ops.add(create(path + "/targets/partitions", new byte[0]));
         }
         byte[] ownerBytes =
@@ -162,20 +162,19 @@ public final class BulkLoadMetadataStore {
     public List<Versioned<BulkLoadTarget>> targets(BulkLoadTransaction transaction)
             throws Exception {
         String path = transactionPath(transaction.tableId, transaction.bulkLoadId) + "/targets";
+        Optional<Versioned<BulkLoadTarget>> table = target(transaction, null);
+        if (table.isPresent()) {
+            return Collections.singletonList(table.get());
+        }
         List<Versioned<BulkLoadTarget>> result = new ArrayList<>();
-        if (!transaction.tableInfo.isPartitioned()) {
-            read(path + "/table", bytes -> BulkLoadTarget.fromJson(null, bytes))
+        List<Long> ids = new ArrayList<>();
+        for (String id : client.getChildren(path + "/partitions")) {
+            ids.add(Long.parseLong(id));
+        }
+        Collections.sort(ids);
+        for (long id : ids) {
+            read(path + "/partitions/" + id, bytes -> BulkLoadTarget.fromJson(id, bytes))
                     .ifPresent(result::add);
-        } else {
-            List<Long> ids = new ArrayList<>();
-            for (String id : children(path + "/partitions")) {
-                ids.add(Long.parseLong(id));
-            }
-            Collections.sort(ids);
-            for (long id : ids) {
-                read(path + "/partitions/" + id, bytes -> BulkLoadTarget.fromJson(id, bytes))
-                        .ifPresent(result::add);
-            }
         }
         return result;
     }
@@ -349,8 +348,7 @@ public final class BulkLoadMetadataStore {
                 continue;
             }
             Optional<PartitionRegistration> partition =
-                    client.getPartition(
-                            transaction.value.tableInfo.getTablePath(), target.value.partitionName);
+                    client.getPartition(transaction.value.tablePath, target.value.partitionName);
             if (partition.isPresent()
                     && partition.get().getPartitionId() == target.value.partitionId) {
                 continue;
@@ -418,8 +416,7 @@ public final class BulkLoadMetadataStore {
                     continue;
                 }
                 BulkLoadTransaction value = transaction.get().value;
-                Optional<TableRegistration> registration =
-                        client.getTable(value.tableInfo.getTablePath());
+                Optional<TableRegistration> registration = client.getTable(value.tablePath);
                 boolean deleted =
                         !registration.isPresent() || registration.get().tableId != tableId;
                 deletedTable |= deleted;

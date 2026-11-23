@@ -30,7 +30,9 @@ import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -42,10 +44,16 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
 import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.testutils.TestingBulkLoadSnapshot;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
@@ -69,6 +77,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Bulk-loaded snapshots through ordinary client reads, writes and scans. */
 final class BulkLoadServerITCase {
@@ -109,6 +118,73 @@ final class BulkLoadServerITCase {
     }
 
     @Test
+    void testBeginRetryAcrossTableChanges() throws Exception {
+        TablePath path = create("retry_table_changes", false);
+        AdminGateway gateway = admin.getAdminGateway();
+        BeginBulkLoadRequest request = new BeginBulkLoadRequest().setBulkLoadId("retry");
+        request.setTablePath()
+                .setDatabaseName(path.getDatabaseName())
+                .setTableName(path.getTableName());
+        BeginBulkLoadResponse first = gateway.beginBulkLoad(request).get();
+        PbBulkLoadHandle handle = first.getStatus().getHandle();
+
+        await(
+                admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.set(ConfigOptions.TABLE_LOG_TTL.key(), "1 d")),
+                        false));
+        BeginBulkLoadResponse retry = gateway.beginBulkLoad(request).get();
+        assertThat(retry.getStatus().getCreatedTime())
+                .isEqualTo(first.getStatus().getCreatedTime());
+        assertThat(
+                        TableDescriptor.fromJsonBytes(retry.getTableInfo().getTableJson())
+                                .getProperties())
+                .containsEntry(ConfigOptions.TABLE_LOG_TTL.key(), "1 d");
+
+        AllocateBulkLoadBucketSnapshotRequest allocate =
+                new AllocateBulkLoadBucketSnapshotRequest().setHandle(handle).setBucketId(0);
+        TableBucket bucket = new TableBucket(handle.getTableId(), 0);
+        cluster.waitUntilAllReplicaReady(bucket);
+        cluster.waitUntilAllReplicaReady(new TableBucket(handle.getTableId(), 1));
+        AllocateBulkLoadBucketSnapshotResponse allocation =
+                gateway.allocateBulkLoadBucketSnapshot(allocate).get();
+        gateway.allocateBulkLoadBucketSnapshot(allocate.setBucketId(1)).get();
+        TestingBulkLoadSnapshot.writeSnapshot(
+                new FsPath(first.getTargetAt(0).getRemoteDataDir()),
+                PhysicalTablePath.of(path),
+                bucket,
+                allocation.getSnapshotId(),
+                allocation.getLogOffset(),
+                0L,
+                Collections.emptyList());
+        CommitBulkLoadBucketSnapshotRequest commit =
+                new CommitBulkLoadBucketSnapshotRequest().setHandle(handle).setBucketId(0);
+        gateway.commitBulkLoadBucketSnapshot(commit).get();
+
+        await(
+                admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "extra",
+                                        DataTypes.INT(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false));
+        retry = gateway.beginBulkLoad(request).get();
+        assertThat(retry.getTableInfo().getSchemaId())
+                .isEqualTo(first.getTableInfo().getSchemaId());
+        assertThat(TableDescriptor.fromJsonBytes(retry.getTableInfo().getTableJson()).getSchema())
+                .isEqualTo(SCHEMA);
+        gateway.commitBulkLoadBucketSnapshot(commit).get();
+        assertThatThrownBy(() -> gateway.commitBulkLoadBucketSnapshot(commit.setBucketId(1)).get())
+                .rootCause()
+                .isInstanceOf(InvalidBulkLoadRequestException.class)
+                .hasMessageContaining("build context changed");
+    }
+
+    @Test
     void testPartitionsKeepIndependentFrozenBucketLayouts() throws Exception {
         TablePath path = create("partition_layouts", true);
         await(
@@ -123,12 +199,13 @@ final class BulkLoadServerITCase {
         assertThat(begun.getTargetAt(0).getBucketCount()).isEqualTo(2);
         assertThat(begun.getTargetAt(1).getBucketCount()).isEqualTo(3);
         Map<PhysicalTablePath, List<Object[]>> rows = new HashMap<>();
-        rows.put(first, Collections.singletonList(new Object[] {1, "first", "p1"}));
-        rows.put(second, Collections.singletonList(new Object[] {2, "second", "p4"}));
+        // Key 9 maps to bucket 1 with two buckets and bucket 2 with three.
+        rows.put(first, Collections.singletonList(new Object[] {9, "first", "p1"}));
+        rows.put(second, Collections.singletonList(new Object[] {9, "second", "p4"}));
         importRows(path, begun, rows);
         try (Table table = connection.getTable(path)) {
-            verify(table, PARTITIONED, new Object[] {1, "first", "p1"});
-            verify(table, PARTITIONED, new Object[] {2, "second", "p4"});
+            verify(table, PARTITIONED, new Object[] {9, "first", "p1"});
+            verify(table, PARTITIONED, new Object[] {9, "second", "p4"});
         }
     }
 

@@ -89,7 +89,12 @@ class BulkLoadSnapshotValidatorTest {
     void testEmptySnapshotIsAccepted() throws Exception {
         write(bucket, 100, 0L, Collections.emptyList(), 0);
         assertThat(
-                        BulkLoadSnapshotValidator.validate(table, target, bucket, allocation)
+                        BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation)
                                 .getSnapshotID())
                 .isEqualTo(7);
     }
@@ -98,7 +103,13 @@ class BulkLoadSnapshotValidatorTest {
     void testNegativeRowCountIsRejected() throws Exception {
         write(bucket, 100, -1L, Collections.emptyList(), 0);
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining("Negative snapshot row count");
     }
@@ -106,7 +117,13 @@ class BulkLoadSnapshotValidatorTest {
     @Test
     void testMissingMetadataIsRejected() {
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class);
     }
 
@@ -115,7 +132,8 @@ class BulkLoadSnapshotValidatorTest {
         FileHandle file = file("000001.sst", new byte[] {1, 2});
         write(bucket, 100, file);
         byte[] original = Files.readAllBytes(metadataPath());
-        BulkLoadSnapshotValidator.validate(table, target, bucket, allocation);
+        BulkLoadSnapshotValidator.validate(
+                table.getTablePath(), table.getTableConfig(), target, bucket, allocation);
         assertThat(Files.readAllBytes(metadataPath())).isEqualTo(original);
     }
 
@@ -124,12 +142,24 @@ class BulkLoadSnapshotValidatorTest {
         FileHandle file = file("000001.sst", new byte[] {1});
         write(new TableBucket(2, 0), 100, file);
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining("physical identity");
         write(bucket, 99, file);
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining("recovery offset");
     }
@@ -139,12 +169,24 @@ class BulkLoadSnapshotValidatorTest {
         FileHandle file = file("000001.sst", new byte[] {1});
         write(bucket, 100, new FileHandle(file.getPath(), 2, "000001.sst"));
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining("length");
         write(bucket, 100, new FileHandle(file.getPath(), 1, "../000001.sst"));
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining("Unsafe");
     }
@@ -153,7 +195,13 @@ class BulkLoadSnapshotValidatorTest {
     void testMalformedMetadataHasSnapshotInputError() throws Exception {
         Files.write(metadataPath(), new byte[] {0});
         assertThatThrownBy(
-                        () -> BulkLoadSnapshotValidator.validate(table, target, bucket, allocation))
+                        () ->
+                                BulkLoadSnapshotValidator.validate(
+                                        table.getTablePath(),
+                                        table.getTableConfig(),
+                                        target,
+                                        bucket,
+                                        allocation))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class);
     }
 

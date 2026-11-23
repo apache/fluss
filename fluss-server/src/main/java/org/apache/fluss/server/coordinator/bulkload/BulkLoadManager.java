@@ -26,6 +26,7 @@ import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -132,7 +133,9 @@ public final class BulkLoadManager {
                 new BulkLoadTransaction(
                         tableId,
                         id,
-                        table,
+                        path,
+                        table.getSchemaId(),
+                        table.getRemoteDataDir(),
                         BulkLoadTransaction.RUNNING,
                         System.currentTimeMillis(),
                         null,
@@ -147,20 +150,24 @@ public final class BulkLoadManager {
             }
             throw e;
         }
-        return beginResponse(transaction, store.targets(transaction));
+        return beginResponse(transaction, targets, table);
     }
 
     private BeginBulkLoadResponse existingBegin(BulkLoadTransaction transaction, List<String> names)
             throws Exception {
-        List<Versioned<BulkLoadTarget>> targets = store.targets(transaction);
+        List<BulkLoadTarget> targets = new ArrayList<>();
         Set<String> original = new HashSet<>();
-        for (Versioned<BulkLoadTarget> target : targets) {
+        for (Versioned<BulkLoadTarget> target : store.targets(transaction)) {
+            targets.add(target.value);
             if (target.value.partitionName != null) {
                 original.add(target.value.partitionName);
             }
         }
         require(original.equals(new HashSet<>(names)), "bulk_load_id has different targets.");
-        return beginResponse(transaction, targets);
+        SchemaInfo schema = metadata.getSchemaById(transaction.tablePath, transaction.schemaId);
+        TableRegistration table = getOriginalTable(transaction).data();
+        return beginResponse(
+                transaction, targets, table.toTableInfo(transaction.tablePath, schema));
     }
 
     private List<BulkLoadTarget> resolveTargets(
@@ -215,11 +222,7 @@ public final class BulkLoadManager {
                                 () ->
                                         new BulkLoadNotFoundException(
                                                 "BulkLoad transaction does not exist."));
-        Optional<TableRegistration> table =
-                client.getTable(transaction.value.tableInfo.getTablePath());
-        if (!table.isPresent() || table.get().tableId != tableId) {
-            throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
-        }
+        getOriginalTable(transaction.value);
         return transaction;
     }
 
@@ -238,7 +241,8 @@ public final class BulkLoadManager {
             return previous.get().value;
         }
         requireRunning(transaction);
-        List<CuratorOp> checks = buildContextChecks(transaction, target);
+        VersionedData<TableRegistration> table = getOriginalTable(value);
+        List<CuratorOp> checks = buildContextChecks(transaction, target, table);
         if (previous.isPresent()) {
             return previous.get().value;
         }
@@ -278,39 +282,39 @@ public final class BulkLoadManager {
         return target;
     }
 
-    /** Checks construction context without adding DDL serialization. */
+    private VersionedData<TableRegistration> getOriginalTable(BulkLoadTransaction transaction)
+            throws Exception {
+        return client.getTableWithVersion(transaction.tablePath)
+                .filter(table -> table.data().tableId == transaction.tableId)
+                .orElseThrow(
+                        () ->
+                                new BulkLoadNotFoundException(
+                                        "The original BulkLoad table no longer exists."));
+    }
+
     private List<CuratorOp> buildContextChecks(
-            Versioned<BulkLoadTransaction> transaction, Versioned<BulkLoadTarget> target)
+            Versioned<BulkLoadTransaction> transaction,
+            Versioned<BulkLoadTarget> target,
+            VersionedData<TableRegistration> current)
             throws Exception {
         if (target.value.withdrawn) {
             throw new BulkLoadTargetWithdrawnException("The original physical target was deleted.");
         }
-        TableInfo original = transaction.value.tableInfo;
-        VersionedData<TableRegistration> current =
-                client.getTableWithVersion(original.getTablePath())
-                        .orElseThrow(
-                                () ->
-                                        new BulkLoadNotFoundException(
-                                                "The original table was deleted."));
+        BulkLoadTransaction original = transaction.value;
+        TableRegistration table = current.data();
         require(
-                current.data().tableId == original.getTableId(),
-                "Table physical identity changed.");
-        TableInfo table =
-                current.data()
-                        .toTableInfo(
-                                original.getTablePath(),
-                                metadata.getLatestSchema(original.getTablePath()));
-        require(
-                table.toTableDescriptor().equals(original.toTableDescriptor())
-                        && Objects.equals(table.getRemoteDataDir(), original.getRemoteDataDir()),
+                client.getCurrentSchemaId(original.tablePath) == original.schemaId
+                        && Objects.equals(table.remoteDataDir, original.remoteDataDir),
                 "BulkLoad build context changed.");
         List<CuratorOp> checks = new ArrayList<>();
-        checks.add(
-                store.check(ZkData.TableZNode.path(original.getTablePath()), current.zkVersion()));
-        if (target.value.partitionId != null) {
+        checks.add(store.check(ZkData.TableZNode.path(original.tablePath), current.zkVersion()));
+        if (target.value.partitionId == null) {
+            require(
+                    table.bucketCount == target.value.bucketCount,
+                    "BulkLoad target bucket count changed.");
+        } else {
             Optional<VersionedData<PartitionRegistration>> partition =
-                    client.getPartitionWithVersion(
-                            original.getTablePath(), target.value.partitionName);
+                    client.getPartitionWithVersion(original.tablePath, target.value.partitionName);
             if (!partition.isPresent()
                     || partition.get().data().getPartitionId() != target.value.partitionId) {
                 throw new BulkLoadTargetWithdrawnException("The original partition was deleted.");
@@ -320,8 +324,7 @@ public final class BulkLoadManager {
                                             .get()
                                             .data()
                                             .getBucketCountOrDefault(
-                                                    table.getNumBuckets(),
-                                                    table.getBucketCountEpoch())
+                                                    table.bucketCount, table.bucketCountEpoch)
                                     == target.value.bucketCount
                             && Objects.equals(
                                     partition.get().data().getRemoteDataDir(),
@@ -330,7 +333,7 @@ public final class BulkLoadManager {
             checks.add(
                     store.check(
                             ZkData.PartitionZNode.path(
-                                    original.getTablePath(), target.value.partitionName),
+                                    original.tablePath, target.value.partitionName),
                             partition.get().zkVersion()));
         }
         return checks;
@@ -357,13 +360,17 @@ public final class BulkLoadManager {
             return false;
         }
         requireRunning(transaction);
-        List<CuratorOp> checks = buildContextChecks(transaction, target);
+        VersionedData<TableRegistration> table = getOriginalTable(value);
+        List<CuratorOp> checks = buildContextChecks(transaction, target, table);
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(
-                        transaction.value.tableInfo, target.value, bucket, allocation.value);
+                        value.tablePath,
+                        table.data().getTableConfig(),
+                        target.value,
+                        bucket,
+                        allocation.value);
         CompletedSnapshotStore snapshotStore =
-                snapshots.getOrCreateCompletedSnapshotStore(
-                        transaction.value.tableInfo.getTablePath(), bucket);
+                snapshots.getOrCreateCompletedSnapshotStore(transaction.value.tablePath, bucket);
         // The upstream job must pause writes through commit. An offset check detects a
         // changed WAL but cannot prevent appends after the check.
         long currentOffset = leaderOffset.apply(bucket);
@@ -510,10 +517,9 @@ public final class BulkLoadManager {
     }
 
     private static BeginBulkLoadResponse beginResponse(
-            BulkLoadTransaction transaction, List<Versioned<BulkLoadTarget>> targets) {
+            BulkLoadTransaction transaction, List<BulkLoadTarget> targets, TableInfo table) {
         BeginBulkLoadResponse response = new BeginBulkLoadResponse();
         response.setStatus(status(transaction));
-        TableInfo table = transaction.tableInfo;
         response.setTableInfo()
                 .setTableId(table.getTableId())
                 .setSchemaId(table.getSchemaId())
@@ -522,14 +528,13 @@ public final class BulkLoadManager {
                 .setModifiedTime(table.getModifiedTime())
                 .setBucketCountEpoch(table.getBucketCountEpoch())
                 .setRemoteDataDir(table.getRemoteDataDir());
-        for (Versioned<BulkLoadTarget> target : targets) {
+        for (BulkLoadTarget target : targets) {
             PbBulkLoadTargetInfo info =
                     response.addTarget()
-                            .setBucketCount(target.value.bucketCount)
-                            .setRemoteDataDir(target.value.remoteDataDir);
-            if (target.value.partitionId != null) {
-                info.setPartitionId(target.value.partitionId)
-                        .setPartitionName(target.value.partitionName);
+                            .setBucketCount(target.bucketCount)
+                            .setRemoteDataDir(target.remoteDataDir);
+            if (target.partitionId != null) {
+                info.setPartitionId(target.partitionId).setPartitionName(target.partitionName);
             }
         }
         return response;

@@ -520,8 +520,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             throws Exception {
         Versioned<BulkLoadTransaction> transaction = manager.transaction(handle);
         if (authorizer != null) {
-            authorizer.authorize(
-                    session, operation, Resource.table(transaction.value.tableInfo.getTablePath()));
+            authorizer.authorize(session, operation, Resource.table(transaction.value.tablePath));
         }
         return transaction;
     }
