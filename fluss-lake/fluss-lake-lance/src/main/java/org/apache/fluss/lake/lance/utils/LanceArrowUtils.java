@@ -31,6 +31,7 @@ import org.apache.fluss.types.DoubleType;
 import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.SmallIntType;
 import org.apache.fluss.types.StringType;
@@ -133,6 +134,19 @@ public class LanceArrowUtils {
             for (DataField field : rowType.getFields()) {
                 children.add(toArrowField(field.getName(), field.getType(), tableProperties));
             }
+        } else if (logicalType instanceof MapType) {
+            // Lance 0.33.0 does not support Arrow Map type natively.
+            // We convert MapType to List<Struct<key, value>> which is the equivalent
+            // representation that Lance supports.
+            MapType mapType = (MapType) logicalType;
+            Field keyField = toArrowField("key", mapType.getKeyType(), tableProperties);
+            Field valueField = toArrowField("value", mapType.getValueType(), tableProperties);
+            FieldType structFieldType = new FieldType(false, ArrowType.Struct.INSTANCE, null);
+            List<Field> structChildren = new ArrayList<>();
+            structChildren.add(keyField);
+            structChildren.add(valueField);
+            Field structField = new Field("element", structFieldType, structChildren);
+            children = Collections.singletonList(structField);
         }
         return new Field(fieldName, fieldType, children);
     }
@@ -202,6 +216,10 @@ public class LanceArrowUtils {
             return ArrowType.List.INSTANCE;
         } else if (dataType instanceof RowType) {
             return ArrowType.Struct.INSTANCE;
+        } else if (dataType instanceof MapType) {
+            // Lance 0.33.0 does not support Arrow Map type natively.
+            // We use List type as the Arrow representation for Map.
+            return ArrowType.List.INSTANCE;
         } else {
             throw new UnsupportedOperationException(
                     String.format(
