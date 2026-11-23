@@ -35,6 +35,7 @@ import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -943,9 +944,7 @@ public final class Replica {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
                 rowCount =
-                        tableConfig.supportsExactRowCount()
-                                ? completedSnapshot.getRowCount()
-                                : null;
+                        supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
@@ -971,7 +970,11 @@ public final class Replica {
                                 this::onKvFlushComplete);
 
                 rowCount =
-                        isHistoricalPartition() || !tableConfig.supportsExactRowCount() ? null : 0L;
+                        isHistoricalPartition()
+                                        || tableConfig.getChangelogImage() == ChangelogImage.WAL
+                                        || tableConfig.getKvTTL().isPresent()
+                                ? null
+                                : 0L;
                 // TODO: it is possible that this is a recovered kv tablet without kv snapshot but
                 //  with changelogs, in this case, the kv tablet should also have the
                 //  autoIncIDRange, we may need to get it from the changelog in the future.
@@ -1971,6 +1974,11 @@ public final class Replica {
                         return logTablet.getRowCount();
                     }
                 });
+    }
+
+    private static boolean supportsExactRowCount(TableConfig tableConfig) {
+        return tableConfig.getChangelogImage() != ChangelogImage.WAL
+                && !tableConfig.getKvTTL().isPresent();
     }
 
     public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)

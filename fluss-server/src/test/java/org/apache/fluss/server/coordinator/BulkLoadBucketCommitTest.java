@@ -93,6 +93,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -217,7 +219,9 @@ class BulkLoadBucketCommitTest {
         prepareAllocatedBucket();
         uploadSnapshot(snapshotId, offset + 1);
         assertThatThrownBy(this::commitAllocatedSnapshot)
-                .isInstanceOf(InvalidBulkLoadSnapshotException.class);
+                .isInstanceOf(InvalidBulkLoadSnapshotException.class)
+                .hasMessageContaining(
+                        "log_offset %d, but Allocate returned %d", offset + 1, offset);
         assertBucketNotCommitted();
     }
 
@@ -294,7 +298,9 @@ class BulkLoadBucketCommitTest {
                 shared ? files : Collections.emptyList(),
                 shared ? Collections.emptyList() : files);
         assertThatThrownBy(this::commitAllocatedSnapshot)
-                .isInstanceOf(InvalidBulkLoadSnapshotException.class);
+                .isInstanceOf(InvalidBulkLoadSnapshotException.class)
+                .hasMessageContaining(shared ? "private_file_handles" : files.get(0).getPath())
+                .hasMessageContaining(dir.toString());
         assertBucketNotCommitted();
     }
 
@@ -395,7 +401,7 @@ class BulkLoadBucketCommitTest {
                                 new FsPath(dir, name).toString(), Files.size(file), name));
             }
         }
-        writeManifest(dir, snapshotId, offset, rows.size(), Collections.emptyList(), files);
+        writeManifest(dir, snapshotId, offset, (long) rows.size(), Collections.emptyList(), files);
         return values.get(0);
     }
 
@@ -670,7 +676,7 @@ class BulkLoadBucketCommitTest {
     private FsPath uploadSnapshot(long id, long logOffset) throws Exception {
         FsPath dir = snapshotDirectory(id);
         return writeManifest(
-                dir, id, logOffset, 0L, Collections.emptyList(), Collections.emptyList());
+                dir, id, logOffset, null, Collections.emptyList(), Collections.emptyList());
     }
 
     private FsPath snapshotDirectory(long id) {
@@ -684,7 +690,7 @@ class BulkLoadBucketCommitTest {
             FsPath dir,
             long id,
             long logOffset,
-            long rowCount,
+            @Nullable Long rowCount,
             List<KvSnapshotFileMetadata.FileHandle> sharedFiles,
             List<KvSnapshotFileMetadata.FileHandle> privateFiles)
             throws Exception {

@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.coordinator.bulkload;
 
-import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.fs.FileStatus;
@@ -51,95 +51,155 @@ final class BulkLoadSnapshotValidator {
 
     static CompletedSnapshot validate(
             TablePath tablePath,
-            TableConfig tableConfig,
             BulkLoadTarget target,
             TableBucket bucket,
             BulkLoadBucket allocation) {
+        PhysicalTablePath physical = PhysicalTablePath.of(tablePath, target.partitionName);
+        FsPath tabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(target.remoteDataDir), physical, bucket);
+        FsPath directory = FlussPaths.remoteKvSnapshotDir(tabletDir, allocation.snapshotId);
+        FsPath metadataPath = CompletedSnapshot.getMetadataFilePath(directory);
+        byte[] metadata;
         try {
-            PhysicalTablePath physical = PhysicalTablePath.of(tablePath, target.partitionName);
-            FsPath tabletDir =
-                    FlussPaths.remoteKvTabletDir(
-                            FlussPaths.remoteKvDir(target.remoteDataDir), physical, bucket);
-            FsPath directory = FlussPaths.remoteKvSnapshotDir(tabletDir, allocation.snapshotId);
-            byte[] metadata =
-                    CompletedSnapshotHandle.readMetadataBytes(
-                            CompletedSnapshot.getMetadataFilePath(directory));
-            CompletedSnapshot snapshot;
-            try {
-                snapshot = CompletedSnapshotJsonSerde.fromJson(metadata);
-            } catch (RuntimeException e) {
-                throw new InvalidBulkLoadSnapshotException(
-                        "Invalid uploaded snapshot metadata.", e);
-            }
-            require(
-                    snapshot.getTableBucket().equals(bucket),
-                    "Snapshot physical identity differs.");
-            require(snapshot.getSnapshotID() == allocation.snapshotId, "Snapshot ID differs.");
-            require(
-                    snapshot.getLogOffset() == allocation.logOffset,
-                    "Snapshot recovery offset differs.");
-            require(snapshot.getSnapshotLocation().equals(directory), "Snapshot location differs.");
-            require(snapshot.getFirstAutoIncIDRange() == null, "Unexpected auto-increment state.");
-            require(
-                    (snapshot.getRowCount() != null) == tableConfig.supportsExactRowCount(),
-                    "Snapshot row count does not match the table changelog configuration.");
-            require(
-                    snapshot.getRowCount() == null || snapshot.getRowCount() >= 0,
-                    "Negative snapshot row count.");
-            KvSnapshotHandle files = snapshot.getKvSnapshotHandle();
-            require(
-                    files.getSharedKvFileHandles().isEmpty(),
-                    "BulkLoad snapshots must not reference shared files.");
-            long privateSize = validateFiles(files.getPrivateFileHandles(), directory);
-            require(
-                    files.getIncrementalSize() == privateSize,
-                    "Snapshot incremental size differs.");
-            return snapshot;
-        } catch (FileNotFoundException | NoSuchFileException | EOFException e) {
-            throw new InvalidBulkLoadSnapshotException(
-                    "Snapshot file is missing or incomplete.", e);
+            metadata = CompletedSnapshotHandle.readMetadataBytes(metadataPath);
         } catch (IOException | UncheckedIOException e) {
-            throw new StorageException("Could not read the uploaded snapshot.", e);
+            throw readFailure(metadataPath, e);
         }
+        CompletedSnapshot snapshot;
+        try {
+            snapshot = CompletedSnapshotJsonSerde.fromJson(metadata);
+        } catch (RuntimeException e) {
+            throw new InvalidBulkLoadSnapshotException(
+                    "Cannot decode '" + metadataPath + "' as KV snapshot metadata.", e);
+        }
+        if (!snapshot.getTableBucket().equals(bucket)) {
+            throw invalid(
+                    "%s identifies %s, but this commit is for %s.",
+                    metadataPath, snapshot.getTableBucket(), bucket);
+        }
+        if (snapshot.getSnapshotID() != allocation.snapshotId) {
+            throw invalid(
+                    "%s declares snapshot_id %d, but Allocate returned %d.",
+                    metadataPath, snapshot.getSnapshotID(), allocation.snapshotId);
+        }
+        if (snapshot.getLogOffset() != allocation.logOffset) {
+            throw invalid(
+                    "%s declares log_offset %d, but Allocate returned %d.",
+                    metadataPath, snapshot.getLogOffset(), allocation.logOffset);
+        }
+        if (!snapshot.getSnapshotLocation().equals(directory)) {
+            throw invalid(
+                    "%s declares snapshot_location '%s'. Expected the allocated directory '%s'.",
+                    metadataPath, snapshot.getSnapshotLocation(), directory);
+        }
+        if (snapshot.getFirstAutoIncIDRange() != null) {
+            throw invalid(
+                    "%s contains auto_inc_id_range. Omit this field from BulkLoad snapshots.",
+                    metadataPath);
+        }
+        KvSnapshotHandle files = snapshot.getKvSnapshotHandle();
+        if (!files.getSharedKvFileHandles().isEmpty()) {
+            throw invalid(
+                    "%s lists shared files. Upload all files into '%s' and list them in private_file_handles.",
+                    metadataPath, directory);
+        }
+        long privateSize = validateFiles(files.getPrivateFileHandles(), directory);
+        if (files.getIncrementalSize() != privateSize) {
+            throw invalid(
+                    "%s declares snapshot_incremental_size of %d bytes, but the private files total %d bytes.",
+                    metadataPath, files.getIncrementalSize(), privateSize);
+        }
+        return snapshot;
     }
 
-    private static long validateFiles(List<KvFileHandleAndLocalPath> files, FsPath ownerDirectory)
-            throws IOException {
+    private static long validateFiles(List<KvFileHandleAndLocalPath> files, FsPath ownerDirectory) {
         String prefix = ownerDirectory + "/";
-        FileSystem fileSystem = ownerDirectory.getFileSystem();
         Set<String> local = new HashSet<>();
         Set<String> remote = new HashSet<>();
         long size = 0;
-        for (KvFileHandleAndLocalPath entry : files) {
-            KvFileHandle file = entry.getKvFileHandle();
-            FsPath filePath;
-            try {
-                require(entry.hasSafeLocalPath(), "Unsafe snapshot local path.");
-                filePath = new FsPath(file.getFilePath());
-                size = Math.addExact(size, file.getSize());
-            } catch (IllegalArgumentException | ArithmeticException e) {
-                throw new InvalidBulkLoadSnapshotException("Invalid snapshot file descriptor.", e);
+        FsPath path = ownerDirectory;
+        try {
+            FileSystem fileSystem = ownerDirectory.getFileSystem();
+            for (KvFileHandleAndLocalPath entry : files) {
+                KvFileHandle file = entry.getKvFileHandle();
+                String localPath = entry.getLocalPath();
+                String remotePath = file.getFilePath();
+                try {
+                    if (!entry.hasSafeLocalPath()) {
+                        throw invalid(
+                                "Invalid local_path '%s' for '%s'. Use a normalized relative path inside the snapshot directory.",
+                                localPath, remotePath);
+                    }
+                    path = new FsPath(remotePath);
+                } catch (IllegalArgumentException e) {
+                    throw new InvalidBulkLoadSnapshotException(
+                            String.format(
+                                    "Invalid snapshot file path (path '%s', local_path '%s').",
+                                    remotePath, localPath),
+                            e);
+                }
+                try {
+                    size = Math.addExact(size, file.getSize());
+                } catch (ArithmeticException e) {
+                    throw new InvalidBulkLoadSnapshotException(
+                            "Total snapshot size exceeds the supported range at file '"
+                                    + remotePath
+                                    + "'.",
+                            e);
+                }
+                if (!remotePath.equals(path.toString())) {
+                    throw invalid("File path '%s' is not normalized. Use '%s'.", remotePath, path);
+                }
+                if (!local.add(localPath)) {
+                    throw invalid(
+                            "Snapshot '%s' lists local_path '%s' more than once.",
+                            ownerDirectory, localPath);
+                }
+                if (!remote.add(remotePath)) {
+                    throw invalid(
+                            "Snapshot '%s' lists remote file '%s' more than once.",
+                            ownerDirectory, remotePath);
+                }
+                if (!remotePath.startsWith(prefix)) {
+                    throw invalid(
+                            "File '%s' is outside the allocated snapshot directory '%s'.",
+                            remotePath, ownerDirectory);
+                }
+                FileStatus status = fileSystem.getFileStatus(path);
+                if (status.isDir()) {
+                    throw invalid(
+                            "Snapshot entry '%s' points to a directory. Expected a file.", path);
+                }
+                if (status.getLen() != file.getSize()) {
+                    throw invalid(
+                            "Snapshot metadata declares %d bytes for '%s', but the uploaded file is %d bytes.",
+                            file.getSize(), path, status.getLen());
+                }
             }
-            require(
-                    file.getFilePath().equals(filePath.toString()),
-                    "Noncanonical snapshot file path.");
-            require(
-                    local.add(entry.getLocalPath()) && remote.add(file.getFilePath()),
-                    "Duplicate snapshot file.");
-            require(
-                    file.getFilePath().startsWith(prefix),
-                    "Snapshot file escapes its owning directory.");
-            FileStatus fileStatus = fileSystem.getFileStatus(filePath);
-            require(
-                    !fileStatus.isDir() && fileStatus.getLen() == file.getSize(),
-                    "Snapshot file length differs.");
+        } catch (IOException | UncheckedIOException e) {
+            throw readFailure(path, e);
         }
         return size;
     }
 
-    private static void require(boolean condition, String message) {
-        if (!condition) {
-            throw new InvalidBulkLoadSnapshotException(message);
+    private static InvalidBulkLoadSnapshotException invalid(String format, Object... args) {
+        return new InvalidBulkLoadSnapshotException(String.format(format, args));
+    }
+
+    private static ApiException readFailure(FsPath path, Exception cause) {
+        if (cause instanceof FileNotFoundException || cause instanceof NoSuchFileException) {
+            return new InvalidBulkLoadSnapshotException(
+                    "Snapshot file '"
+                            + path
+                            + "' was not found. Check that the upload has finished before committing.",
+                    cause);
         }
+        if (cause instanceof EOFException) {
+            return new InvalidBulkLoadSnapshotException(
+                    "Snapshot file '" + path + "' ended before it could be read completely.",
+                    cause);
+        }
+        return new StorageException("Could not access snapshot storage at '" + path + "'.", cause);
     }
 }
