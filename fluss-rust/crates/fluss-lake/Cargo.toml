@@ -40,7 +40,6 @@ paimon = { version = "0.5.0", default-features = false, features = ["storage-mem
 # Paimon's REST client reports transport failures as reqwest errors.
 reqwest = { version = "0.12", default-features = false, optional = true }
 sha2 = "0.10"
-serde_json = { workspace = true }
 arrow = { workspace = true }
 serde = { workspace = true }
 fluss = { package = "fluss-rs", path = "../fluss" }
@@ -49,5 +48,6 @@ thiserror = "1.0"
 tokio = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 fluss-test-cluster = { path = "../fluss-test-cluster" }
 tempfile = "3.23.0"

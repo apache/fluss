@@ -113,7 +113,7 @@ Fluss evaluates binary range comparisons and timestamp predicates that Paimon ca
 
 `PaimonLakeSource::with_baseline_reader` permits replacing baseline reading while retaining Paimon planning. A replacement must preserve the pinned snapshot, file/deletion-vector association and requested PK current-view semantics. UnionRead does not support tables with `query-auth.enabled=true`; the Fluss log tail cannot enforce Paimon row filters or column masks. Primary-key UnionRead also rejects Paimon tables that keep something other than the last write of a key: `sequence.field`, or `ignore-delete=true` while the Fluss table applies deletes.
 
-Task payloads preserve Paimon's native file paths, including `data-file.external-paths`. They must come from a trusted planner; workers use runtime storage credentials to access those locations. Snapshot, partition and bucket identities are checked when tasks are opened.
+Paimon task payload V2 uses Paimon's versioned SplitSerializer binary format. Replan V1 (JSON) tasks before executing them on V2 workers. Task payloads preserve Paimon's native file paths, including `data-file.external-paths`. They must come from a trusted planner; workers use runtime storage credentials to access those locations. Snapshot, partition and bucket identities are checked when tasks are opened.
 
 Partition scope is passed to Paimon before planning. Paimon 0.5 does not expose a public bucket filter, so selected-bucket planning still scans the selected partitions' manifests and filters the resulting tasks by bucket.
 
