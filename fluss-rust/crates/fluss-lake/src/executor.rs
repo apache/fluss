@@ -34,7 +34,7 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
-const DEFAULT_SURVIVOR_BATCH_ROWS: usize = 4096;
+const DEFAULT_PK_BATCH_ROWS: usize = 4096;
 
 /// Resources shared only by tasks in one read attempt.
 #[derive(Default)]
@@ -57,14 +57,18 @@ pub(crate) fn execute_split(
         ));
     }
     let descriptor = split.descriptor();
+    #[cfg(not(feature = "kv-snapshot"))]
     if descriptor.kv_snapshot_id().is_some() {
         return Err(FlussLakeError::PlanningFailed(
-            "KV snapshot baseline execution is not yet supported by the UnionRead reader".into(),
+            "KV snapshot baseline execution requires the fluss-lake kv-snapshot feature".into(),
         ));
     }
-    if scan.lake_only() && descriptor.start_offset() != descriptor.stop_offset() {
+    if scan.lake_only()
+        && (descriptor.start_offset() != descriptor.stop_offset()
+            || descriptor.kv_snapshot_id().is_some())
+    {
         return Err(FlussLakeError::PlanningFailed(
-            "lake-only reader cannot execute a log range".into(),
+            "lake-only reader cannot execute Fluss logs or KV snapshots".into(),
         ));
     }
     let info = split.table_info();
@@ -140,39 +144,54 @@ async fn open_logical_stream(
         },
     )?;
     let physical_schema = physical.arrow_schema(table_info.row_type())?;
-    let lake_stream = if descriptor.lake_splits().is_empty() {
-        Box::pin(futures::stream::empty()) as RecordBatchStream
-    } else {
-        let source = resources
-            .lake_source
-            .get_or_try_init(|| async { scan.resolve_lake_source(table_info) })
-            .await?;
-        let snapshot_id = descriptor
-            .snapshot_id()
-            .ok_or_else(|| FlussLakeError::Internal("lake tasks need a snapshot".to_string()))?;
-        let tasks = descriptor.lake_splits();
-        source
-            .read(crate::LakeReaderContext {
-                table_info,
-                snapshot_id,
-                semantics: if split.is_primary_key() {
-                    crate::LakeReadSemantics::PrimaryKey
-                } else {
-                    crate::LakeReadSemantics::Append
-                },
-                reconcile_primary_key: pk_union,
-                splits: tasks,
-                projection: &physical.field_indexes,
-                schema: physical_schema.clone(),
-                filter,
-            })
-            .await?
-    };
-    let lake_stream = normalize_stream_schema(lake_stream, physical_schema.clone());
-    let output_column_count = output_projection.as_deref().map(|indexes| indexes.len());
     let batch_size = scan.max_batch_size();
+    let pk_batch_size = batch_size.unwrap_or(DEFAULT_PK_BATCH_ROWS);
+    let baseline = match descriptor.kv_snapshot_id() {
+        #[cfg(feature = "kv-snapshot")]
+        Some(id) => {
+            open_kv_baseline(
+                &table,
+                descriptor,
+                id,
+                &physical.field_indexes,
+                pk_batch_size,
+            )
+            .await?
+        }
+        _ if descriptor.lake_splits().is_empty() => {
+            Box::pin(futures::stream::empty()) as RecordBatchStream
+        }
+        _ => {
+            let source = resources
+                .lake_source
+                .get_or_try_init(|| async { scan.resolve_lake_source(table_info) })
+                .await?;
+            let snapshot_id = descriptor.snapshot_id().ok_or_else(|| {
+                FlussLakeError::Internal("lake tasks need a snapshot".to_string())
+            })?;
+            let tasks = descriptor.lake_splits();
+            source
+                .read(crate::LakeReaderContext {
+                    table_info,
+                    snapshot_id,
+                    semantics: if split.is_primary_key() {
+                        crate::LakeReadSemantics::PrimaryKey
+                    } else {
+                        crate::LakeReadSemantics::Append
+                    },
+                    reconcile_primary_key: pk_union,
+                    splits: tasks,
+                    projection: &physical.field_indexes,
+                    schema: physical_schema.clone(),
+                    filter,
+                })
+                .await?
+        }
+    };
+    let baseline = normalize_stream_schema(baseline, physical_schema.clone());
+    let output_column_count = output_projection.as_deref().map(|indexes| indexes.len());
     let stream = if !has_log_tail {
-        lake_stream
+        baseline
     } else if pk_union {
         let mut current_view = match memory_budget {
             Some(budget) => DeduplicateCurrentView::try_new_with_memory_budget(
@@ -186,11 +205,7 @@ async fn open_logical_stream(
         }
         .map_err(reconciliation_error)?;
         fold_logical_changelog_tail(&table, descriptor, &physical, &mut current_view).await?;
-        reconciled_stream(
-            current_view,
-            lake_stream,
-            batch_size.unwrap_or(DEFAULT_SURVIVOR_BATCH_ROWS),
-        )
+        reconciled_stream(current_view, baseline, pk_batch_size)
     } else {
         let log_filter = filter.to_pushdown_predicate();
         let log_stream = normalize_stream_schema(
@@ -198,7 +213,7 @@ async fn open_logical_stream(
                 .await?,
             physical_schema,
         );
-        Box::pin(lake_stream.chain(log_stream))
+        Box::pin(baseline.chain(log_stream))
     };
     Ok(apply_output_processing(
         stream,
@@ -206,6 +221,38 @@ async fn open_logical_stream(
         output_column_count,
         batch_size,
     ))
+}
+
+#[cfg(feature = "kv-snapshot")]
+async fn open_kv_baseline(
+    table: &FlussTable<'_>,
+    descriptor: &FlussLakeSplitDescriptor,
+    snapshot_id: i64,
+    projection: &[usize],
+    batch_size: usize,
+) -> Result<RecordBatchStream> {
+    let reader = table
+        .create_kv_snapshot_reader_with_options(
+            descriptor.table_bucket().clone(),
+            snapshot_id,
+            fluss::client::KvSnapshotReaderOptions {
+                projected_fields: Some(projection.to_vec()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|error| execution_client_error("open frozen KV snapshot", error))?;
+    if reader.log_offset() != descriptor.start_offset() {
+        return Err(FlussLakeError::InvalidReadContext(format!(
+            "KV snapshot {snapshot_id} for {} ends at {}, but the frozen log range starts at {}",
+            descriptor.table_bucket(),
+            reader.log_offset(),
+            descriptor.start_offset()
+        )));
+    }
+    Ok(Box::pin(reader.into_stream(batch_size).map_err(|error| {
+        execution_client_error("read frozen KV snapshot", error)
+    })))
 }
 
 async fn open_logical_append_log_stream(
@@ -345,7 +392,7 @@ where
     Box::pin(futures::stream::once(setup).try_flatten())
 }
 
-/// Reconciles a source-neutral deduplicate state with a lake baseline stream.
+/// Reconciles a source-neutral deduplicate state with a baseline stream.
 fn reconciled_stream(
     current_view: DeduplicateCurrentView,
     baseline_stream: RecordBatchStream,

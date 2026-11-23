@@ -194,6 +194,27 @@ async fn kv_snapshot_boundaries_plan_and_import_without_lake() {
         .await
         .unwrap();
     assert_eq!(imported[0].descriptor(), &tasks[0]);
+    #[cfg(feature = "kv-snapshot")]
+    {
+        use futures::TryStreamExt;
+        let batches: Vec<_> = scan
+            .new_reader()
+            .read_splits(&imported)
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+    }
     drop(writer);
     admin.drop_table(&path, false).await.unwrap();
 }

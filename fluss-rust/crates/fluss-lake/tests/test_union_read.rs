@@ -705,3 +705,118 @@ async fn complete_log_pk_read_applies_changes_only_up_to_the_frozen_stop() {
     assert_eq!(names, [Some("kept")]);
     admin.drop_table(&path, false).await.unwrap();
 }
+
+#[cfg(feature = "kv-snapshot")]
+#[tokio::test]
+async fn kv_snapshot_and_retained_tail_recover_the_frozen_pk_view() {
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "union_read_pk_truncated");
+    let descriptor = TableDescriptor::builder()
+        .schema(pk_schema())
+        .distributed_by(Some(1), vec!["id".into()])
+        .property("table.log.ttl", "2s")
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_upsert().unwrap().create_writer().unwrap();
+    for row in [
+        pk_row(1, "untouched"),
+        pk_row(2, "old"),
+        pk_row(3, "deleted"),
+    ] {
+        writer.upsert(&row).unwrap().await.unwrap();
+    }
+
+    // Wait for real retention: the untouched row can now only come from the snapshot.
+    let lake_table = FlussLakeTable::new(connection.clone(), &path);
+    let mut wire = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let context = lake_table.capture_read_context().await.unwrap();
+            if context.log_ranges()[0].earliest_offset() == 3 {
+                break context.to_protobuf().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("baseline changelog was never truncated");
+    assert!(wire.log_ranges[0].kv_snapshot_id.is_some());
+    // Keep the tail available even on a slow worker.
+    admin
+        .alter_table(
+            &path,
+            false,
+            AlterTableChanges {
+                config_changes: vec![fluss::metadata::AlterConfig::new(
+                    "table.log.ttl",
+                    None,
+                    fluss::metadata::AlterConfigOpType::Delete,
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    writer.upsert(&pk_row(2, "updated")).unwrap().await.unwrap();
+    writer.delete(&pk_row(3, "")).unwrap().await.unwrap();
+    writer
+        .upsert(&pk_row(4, "inserted"))
+        .unwrap()
+        .await
+        .unwrap();
+    let stop = admin
+        .list_offsets(&path, &[0], OffsetSpec::Latest)
+        .await
+        .unwrap()[&0];
+    // Select the stop after the writes while keeping the original snapshot ID and seam.
+    wire.log_ranges[0].stop_offset = Some(stop);
+    let scan = lake_table.new_scan().with_projection(vec![1]);
+    let read = async |wire: &fluss::protocol::PbUnionReadContext| {
+        let context = lake_table.import_read_context(wire).await?;
+        let plan = scan.plan_with_context(&context).await?;
+        scan.new_reader()
+            .read_splits(plan.splits())?
+            .try_collect::<Vec<_>>()
+            .await
+    };
+    writer
+        .upsert(&pk_row(2, "too late"))
+        .unwrap()
+        .await
+        .unwrap();
+    let batches = read(&wire).await.unwrap();
+    let mut names: Vec<_> = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+        })
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [Some("inserted"), Some("untouched"), Some("updated")]
+    );
+
+    let seam = wire.log_ranges[0].start_offset.unwrap();
+    wire.log_ranges[0].start_offset = Some(seam + 1);
+    assert!(matches!(
+        read(&wire).await,
+        Err(FlussLakeError::InvalidReadContext(_))
+    ));
+    wire.log_ranges[0].start_offset = Some(seam);
+    wire.log_ranges[0].kv_snapshot_id = Some(i64::MAX);
+    let missing = read(&wire).await;
+    assert!(
+        matches!(missing, Err(FlussLakeError::DataUnavailable(_))),
+        "{missing:?}"
+    );
+    admin.drop_table(&path, false).await.unwrap();
+}

@@ -81,11 +81,11 @@ The protocol starts at version 1. Optional additive fields are compatible only w
 | `None`, Append table | Start at the captured earliest retained offset. |
 | `None`, PK table | Complete log history from offset zero. Truncated history fails with `DataUnavailable`, even if the retained range is empty. |
 
-Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty; the reader rejects these tasks until KV snapshot execution is available. Boundary capture preserves merge-engine metadata; the default PK executor supports deduplicate tables.
+Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty. Boundary capture preserves merge-engine metadata; the default PK executor supports deduplicate tables.
 
 Call `validate_available()` for required ranges after safe pruning. It detects a baseline seam already below the captured retention boundary; execution must also detect later retention or truncation. Missing required data fails the attempt rather than advancing offsets or substituting a newer snapshot. Engines discard partial results before retrying; a fresh context may observe different data and is not guaranteed to recover missing history.
 
-KV capture queries metadata only and does not require the `kv-snapshot` feature or RocksDB. The context holds no lease. A worker must open the specified snapshot and verify its log seam; if it has expired, the attempt fails. Engines that need to protect queued tasks must hold a core snapshot lease until download completes. Snapshot leases do not protect the log tail.
+KV capture queries metadata only and does not require the `kv-snapshot` feature or RocksDB. The context holds no lease. With the `fluss-lake/kv-snapshot` feature, the worker opens the specified COMPACTED KV snapshot using the core reader and checks its log seam before merging the bounded tail. If the snapshot has expired, the attempt fails. Engines that need to protect queued tasks must hold a core snapshot lease until download completes. Snapshot leases do not protect the log tail.
 
 ## Follow-ups
 
@@ -125,4 +125,4 @@ Create one reader per execution attempt with `scan.new_reader()`. The reader and
 
 The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. For a deduplicate PK table, each bucket's unfiltered changelog tail is folded before the pinned baseline is reconciled. Filtering and output projection happen on the resulting current view. Use `reader.with_memory_budget(...)` to bound retained PK state across tasks; exhaustion fails the attempt without spilling.
 
-Tasks with a persisted KV snapshot baseline are rejected before reading until the default executor integrates that baseline. An empty log tail does not make a KV task empty.
+Without the `kv-snapshot` feature the reader rejects KV tasks before reading. An empty log tail still returns the snapshot rows.

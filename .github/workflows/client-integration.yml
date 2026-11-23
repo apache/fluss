@@ -213,7 +213,7 @@ jobs:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
       - name: UnionRead integration tests
-        run: cargo test --locked -p fluss-lake --features integration_tests --test test_prepare --test test_union_read
+        run: cargo test --locked -p fluss-lake --features integration_tests,kv-snapshot --test test_prepare --test test_union_read
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
