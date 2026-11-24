@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.rowmerger;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -75,9 +76,15 @@ public interface RowMerger {
                 String.format("%s does not support retract", this.getClass().getSimpleName()));
     }
 
-    /** Whether the fields present in the given input schema can be retracted. */
-    default boolean supportsRetract(short inputSchemaId) {
-        return false;
+    /**
+     * Validates that the participating fields in the input schema can be retracted.
+     *
+     * @param inputSchemaId schema ID of the retract record
+     * @throws InvalidRecordException if the merge engine or a participating field cannot retract
+     */
+    default void validateRetract(short inputSchemaId) {
+        throw new InvalidRecordException(
+                "RETRACT records are only supported for aggregation merge engine tables.");
     }
 
     /**

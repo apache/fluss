@@ -18,6 +18,7 @@
 package org.apache.fluss.server.kv.rowmerger;
 
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
@@ -171,9 +172,11 @@ public class AggregateRowMerger implements RowMerger {
     }
 
     @Override
-    public boolean supportsRetract(short inputSchemaId) {
-        return allAggregatorsSupportRetract(
-                contextCache.getContext(targetSchemaId), contextCache.getContext(inputSchemaId));
+    public void validateRetract(short inputSchemaId) {
+        validateRetractFields(
+                contextCache.getContext(targetSchemaId),
+                contextCache.getContext(inputSchemaId),
+                null);
     }
 
     @Override
@@ -219,18 +222,22 @@ public class AggregateRowMerger implements RowMerger {
                 });
     }
 
-    private static boolean allAggregatorsSupportRetract(
-            AggregationContext context, AggregationContext inputContext) {
+    private static void validateRetractFields(
+            AggregationContext context,
+            AggregationContext inputContext,
+            @Nullable BitSet targetColumnIds) {
         FieldAggregator[] aggregators = context.getAggregators();
         List<Schema.Column> columns = context.getSchema().getColumns();
         for (int i = 0; i < aggregators.length; i++) {
-            if (inputContext.getFieldIndex(columns.get(i).getColumnId()) != null
-                    && aggregators[i] != null
+            Schema.Column column = columns.get(i);
+            if (aggregators[i] != null
+                    && (targetColumnIds == null || targetColumnIds.get(column.getColumnId()))
+                    && inputContext.getFieldIndex(column.getColumnId()) != null
                     && !aggregators[i].supportsRetract()) {
-                return false;
+                throw new InvalidRecordException(
+                        String.format("Column '%s' does not support RETRACT.", column.getName()));
             }
         }
-        return true;
     }
 
     /**
@@ -454,23 +461,11 @@ public class AggregateRowMerger implements RowMerger {
         }
 
         @Override
-        public boolean supportsRetract(short inputSchemaId) {
-            // Only check aggregators for target columns, not all columns.
-            // A partial retract touching only SUM columns should succeed even if
-            // the table has non-retractable columns like MAX/MIN.
-            AggregationContext context = contextCache.getContext(targetSchemaId);
-            List<Schema.Column> columns = context.getSchema().getColumns();
-            AggregationContext inputContext = contextCache.getContext(inputSchemaId);
-            FieldAggregator[] aggregators = context.getAggregators();
-            for (int i = 0; i < aggregators.length; i++) {
-                if (aggregators[i] != null
-                        && targetColumnIdBitSet.get(columns.get(i).getColumnId())
-                        && inputContext.getFieldIndex(columns.get(i).getColumnId()) != null
-                        && !aggregators[i].supportsRetract()) {
-                    return false;
-                }
-            }
-            return true;
+        public void validateRetract(short inputSchemaId) {
+            validateRetractFields(
+                    contextCache.getContext(targetSchemaId),
+                    contextCache.getContext(inputSchemaId),
+                    targetColumnIdBitSet);
         }
 
         @Override

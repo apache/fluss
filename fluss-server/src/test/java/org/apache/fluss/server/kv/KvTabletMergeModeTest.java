@@ -735,8 +735,7 @@ class KvTabletMergeModeTest {
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
-                .hasMessageContaining("RETRACT")
-                .hasMessageContaining("retract-safe");
+                .hasMessageContaining("Column 'max_val' does not support RETRACT.");
     }
 
     @Test

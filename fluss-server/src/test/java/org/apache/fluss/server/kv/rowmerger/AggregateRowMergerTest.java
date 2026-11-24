@@ -206,7 +206,7 @@ class AggregateRowMergerTest {
         AggregateRowMerger merger = createMerger(schema, tableConfig);
         merger.configureTargetColumns(null, SCHEMA_ID, schema);
 
-        assertThat(merger.supportsRetract(SCHEMA_ID)).isTrue();
+        merger.validateRetract(SCHEMA_ID);
         BinaryValue result =
                 merger.retract(
                         toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 12.0})),
@@ -1200,8 +1200,12 @@ class AggregateRowMergerTest {
         TableConfig config = new TableConfig(new Configuration());
         AggregateRowMerger merger = new AggregateRowMerger(config, config.getKvFormat(), getter);
         merger.configureTargetColumns(null, (short) 2, newSchema);
-        assertThat(merger.supportsRetract((short) 1)).isTrue();
-        assertThat(merger.supportsRetract((short) 2)).isFalse();
+        merger.validateRetract((short) 1);
+        assertThatThrownBy(() -> merger.validateRetract((short) 2))
+                .isInstanceOf(InvalidRecordException.class)
+                .hasMessageContaining("Column 'maximum' does not support RETRACT.");
+        merger.configureTargetColumns(new int[] {0, 1}, (short) 2, newSchema)
+                .validateRetract((short) 2);
         BinaryValue result =
                 merger.retract(
                         new BinaryValue(
@@ -1227,7 +1231,7 @@ class AggregateRowMergerTest {
         conf.setString("fields.maximum.ignore-retract", "true");
         AggregateRowMerger merger = createMerger(schema, new TableConfig(conf));
         merger.configureTargetColumns(null, SCHEMA_ID, schema);
-        assertThat(merger.supportsRetract(SCHEMA_ID)).isTrue();
+        merger.validateRetract(SCHEMA_ID);
 
         BinaryValue oldValue =
                 toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 100L, 9}));
