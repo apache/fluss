@@ -54,7 +54,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -1767,25 +1766,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "table.aggregation.remove-record-on-delete, false, true, ignore",
-        "table.aggregation.remove-record-on-delete, false, true, allow",
-        "table.aggregation.remove-record-on-delete, true, false, allow",
-        "fields.mx.ignore-retract, false, true, ignore",
-        "fields.mx.ignore-retract, true, false, ignore"
-    })
+    @ValueSource(booleans = {false, true})
     @MultiVersionTest
-    void testRetractHintCannotOverrideTableRule(
-            String option, boolean tableValue, boolean hintValue, String deleteBehavior) {
+    void testRetractHintCannotOverrideFieldRule(boolean tableValue) {
+        String option = "fields.mx.ignore-retract";
+        boolean hintValue = !tableValue;
         tEnv.executeSql(
-                String.format(
-                        "CREATE TABLE retract_hint_target (k INT NOT NULL, mx INT, "
-                                + "PRIMARY KEY (k) NOT ENFORCED) WITH ("
-                                + "'table.merge-engine' = 'aggregation', "
-                                + "'table.delete.behavior' = '%s', 'fields.mx.agg' = '%s'%s)",
-                        deleteBehavior,
-                        option.startsWith("fields.") ? "max" : "sum",
-                        tableValue ? ", '" + option + "' = 'true'" : ""));
+                "CREATE TABLE retract_hint_target (k INT NOT NULL, mx INT, "
+                        + "PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'fields.mx.agg' = 'max'"
+                        + (tableValue ? ", '" + option + "' = 'true'" : "")
+                        + ")");
         String insert =
                 "INSERT INTO retract_hint_target /*+ OPTIONS("
                         + "'sink.enable-retract' = '%s', 'sink.ignore-delete' = '%s', "
@@ -1823,17 +1814,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 .isNotEmpty();
     }
 
-    /**
-     * Verifies field retraction and both DELETE policies through a partial Flink SQL sink.
-     *
-     * <p>The query exposes per-key SUM values from a primary-key input table. A non-target field
-     * distinguishes whole-row deletion from partial clearing. Updates retain their intermediate
-     * state transitions, independent of whether Flink simplifies the aggregation query.
-     */
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
+    /** Verifies field retraction through a partial Flink SQL sink. */
+    @Test
     @MultiVersionTest
-    void testRetractOnAggregationTableEndToEnd(boolean removeRecordOnDelete) throws Exception {
+    void testRetractOnAggregationTableEndToEnd() throws Exception {
         disableSinkRequireOnConflict();
         // The pipeline, changelog reader, and bounded writes run concurrently in a four-slot
         // mini-cluster. Give each job one task so writes can be scheduled while both readers run.
@@ -1857,9 +1841,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "'table.merge-engine' = 'aggregation', "
                         + "'sink.enable-retract' = 'true', "
                         + "'table.delete.behavior' = 'allow', "
-                        + "'table.aggregation.remove-record-on-delete' = '"
-                        + removeRecordOnDelete
-                        + "', "
                         + "'fields.total.agg' = 'sum'"
                         + ")");
 
@@ -1871,16 +1852,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "INSERT INTO retract_agg (k, total) SELECT k, SUM(b) FROM retract_input GROUP BY k");
 
         // Step 4: Start reading changelog from the aggregation table
-        TableResult queryResult = tEnv.executeSql("SELECT k, total FROM retract_agg");
+        TableResult queryResult = tEnv.executeSql("SELECT k, total, other FROM retract_agg");
 
         try (CloseableIterator<Row> rowIter = queryResult.collect()) {
             // Consume the seeded state before changing the input, establishing the read boundary.
-            assertResultsIgnoreOrder(rowIter, Arrays.asList("+I[1, 0]", "+I[2, 0]"), false);
+            assertResultsIgnoreOrder(rowIter, Arrays.asList("+I[1, 0, 7]", "+I[2, 0, 7]"), false);
             // Step 5: Insert initial data into the input table
             tEnv.executeSql("INSERT INTO retract_input VALUES (1, 10), (2, 20)").await();
 
             List<String> initialExpected =
-                    Arrays.asList("-U[1, 0]", "+U[1, 10]", "-U[2, 0]", "+U[2, 20]");
+                    Arrays.asList("-U[1, 0, 7]", "+U[1, 10, 7]", "-U[2, 0, 7]", "+U[2, 20, 7]");
             assertResultsIgnoreOrder(rowIter, initialExpected, false);
 
             // Each UPDATE_BEFORE retracts the old total to zero before UPDATE_AFTER adds the new
@@ -1889,23 +1870,18 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
             List<String> updateExpected =
                     Arrays.asList(
-                            "-U[1, 10]",
-                            "+U[1, 0]",
-                            "-U[1, 0]",
-                            "+U[1, 30]",
-                            "-U[2, 20]",
-                            "+U[2, 0]",
-                            "-U[2, 0]",
-                            "+U[2, 40]");
+                            "-U[1, 10, 7]",
+                            "+U[1, 0, 7]",
+                            "-U[1, 0, 7]",
+                            "+U[1, 30, 7]",
+                            "-U[2, 20, 7]",
+                            "+U[2, 0, 7]",
+                            "-U[2, 0, 7]",
+                            "+U[2, 40, 7]");
             assertResultsIgnoreOrder(rowIter, updateExpected, false);
 
             tBatchEnv.executeSql("DELETE FROM retract_input WHERE k = 1").await();
-            assertResultsIgnoreOrder(
-                    rowIter,
-                    removeRecordOnDelete
-                            ? Collections.singletonList("-D[1, 30]")
-                            : Arrays.asList("-U[1, 30]", "+U[1, 0]"),
-                    false);
+            assertResultsIgnoreOrder(rowIter, Arrays.asList("-U[1, 30, 7]", "+U[1, 0, 7]"), false);
         } finally {
             JobClient pipelineJob = pipelineResult.getJobClient().get();
             pipelineJob.cancel().get();

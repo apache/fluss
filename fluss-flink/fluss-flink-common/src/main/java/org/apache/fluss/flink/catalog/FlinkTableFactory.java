@@ -216,9 +216,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         boolean enableRetract = tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT);
         MergeEngineType mergeEngineType =
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
-        boolean removeRecordOnDelete =
-                tableOptions.get(
-                        toFlinkOption(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE));
         Set<String> nonRetractableColumns = Collections.emptySet();
         if (enableRetract) {
             TableInfo tableInfo = sinkTableInfoLoader.apply(tablePath, clientConfig);
@@ -231,12 +228,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             } else {
                 TableConfig persisted = tableInfo.getTableConfig();
                 mergeEngineType = persisted.getMergeEngineType().orElse(null);
-                validateRetractOption(
-                        tablePath,
-                        ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
-                        persisted.isAggregationRemoveRecordOnDelete(),
-                        removeRecordOnDelete);
-                removeRecordOnDelete = persisted.isAggregationRemoveRecordOnDelete();
                 for (String column : tableInfo.getSchema().getColumnNames()) {
                     String key = "fields." + column + ".ignore-retract";
                     validateRetractOption(
@@ -279,8 +270,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 distributionMode,
                 tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null),
                 nonRetractableColumns,
-                enableRetract,
-                removeRecordOnDelete);
+                enableRetract);
     }
 
     private static void validateRetractOption(

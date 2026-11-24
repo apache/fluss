@@ -63,9 +63,10 @@ class FlinkTableSinkTest {
 
     @Test
     void testRetractModeValidatesActualTargetFields() {
-        FlinkTableSink sink =
-                createPkTableSink(MergeEngineType.AGGREGATION, false, false, true, false);
-        assertThat(sink.getChangelogMode(ChangelogMode.all())).isEqualTo(ChangelogMode.all());
+        FlinkTableSink sink = createPkTableSink(MergeEngineType.AGGREGATION, false, false, true);
+        ChangelogMode deleteOnly =
+                ChangelogMode.newBuilder().addContainedKind(RowKind.DELETE).build();
+        assertThat(sink.getChangelogMode(deleteOnly)).isEqualTo(deleteOnly);
         assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(new int[][] {{0}, {1}})))
                 .doesNotThrowAnyException();
         assertThatThrownBy(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
@@ -77,8 +78,7 @@ class FlinkTableSinkTest {
 
     @Test
     void testRetractModeAllowsAppendInputWithNonRetractableFields() {
-        FlinkTableSink sink =
-                createPkTableSink(MergeEngineType.AGGREGATION, false, false, true, false);
+        FlinkTableSink sink = createPkTableSink(MergeEngineType.AGGREGATION, false, false, true);
         sink.getChangelogMode(ChangelogMode.insertOnly());
         assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
                 .doesNotThrowAnyException();
@@ -86,8 +86,7 @@ class FlinkTableSinkTest {
 
     @Test
     void testIgnoreDeleteRetainsLegacyNegotiationWhenRetractEnabled() {
-        FlinkTableSink sink =
-                createPkTableSink(MergeEngineType.AGGREGATION, false, true, true, false);
+        FlinkTableSink sink = createPkTableSink(MergeEngineType.AGGREGATION, false, true, true);
         assertThat(sink.getChangelogMode(ChangelogMode.all()).contains(RowKind.UPDATE_BEFORE))
                 .isFalse();
         assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
@@ -104,16 +103,14 @@ class FlinkTableSinkTest {
             MergeEngineType mergeEngineType,
             boolean schemaSupportsRetract,
             boolean sinkIgnoreDelete) {
-        return createPkTableSink(
-                mergeEngineType, schemaSupportsRetract, sinkIgnoreDelete, false, false);
+        return createPkTableSink(mergeEngineType, schemaSupportsRetract, sinkIgnoreDelete, false);
     }
 
     private static FlinkTableSink createPkTableSink(
             MergeEngineType mergeEngineType,
             boolean schemaSupportsRetract,
             boolean sinkIgnoreDelete,
-            boolean enableRetract,
-            boolean removeRecordOnDelete) {
+            boolean enableRetract) {
         return new FlinkTableSink(
                 TablePath.of("test_db", "test_table"),
                 new Configuration(),
@@ -136,8 +133,7 @@ class FlinkTableSinkTest {
                 DistributionMode.BUCKET,
                 null, // producerId
                 schemaSupportsRetract ? Collections.emptySet() : Collections.singleton("other"),
-                enableRetract,
-                removeRecordOnDelete);
+                enableRetract);
     }
 
     private static class TargetContext implements DynamicTableSink.Context {

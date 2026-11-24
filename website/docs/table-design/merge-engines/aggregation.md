@@ -1369,11 +1369,8 @@ In a Flink job, the failed write causes task failure. Recovery can replay the sa
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `fields.<column>.ignore-retract` | `false` | Preserve this field on retract while retaining its configured upsert aggregation. This also permits a function without a retract implementation, such as MAX, to coexist with retractable fields. |
-| `table.aggregation.remove-record-on-delete` | `false` | With Flink retract mode enabled, interpret changelog DELETE as whole-row deletion instead of field retraction. UPDATE_BEFORE still retracts fields. Requires `table.delete.behavior=allow`. |
 
-Both options belong to the aggregation table. They cannot be enabled together: whole-row deletion and retaining individual fields on retract have conflicting behavior, matching Paimon's restriction. Configure them when creating the table. The whole-row option does not change the Java writer's explicit `delete(row)` or `retract(row)` operations.
-
-Enabling `table.aggregation.remove-record-on-delete` requires an explicit `table.delete.behavior=allow`. Table creation rejects `ignore`, `disable`, and an omitted delete policy, which defaults to `ignore` for aggregation tables. With Flink retract mode enabled, this combination corresponds to Paimon's `aggregation.remove-record-on-delete=true`. With the whole-row option disabled, all three delete policies remain valid and field retraction is independent of them.
+Configure `fields.<column>.ignore-retract` on the aggregation table. Field retraction is independent of `table.delete.behavior`, which controls explicit delete operations.
 
 For example, an aggregation table can configure `fields.maximum.ignore-retract=true` alongside a SUM field. Retracting a row subtracts its SUM contribution and preserves the existing maximum. Upserting a row still applies MAX to that field. A field missing from an older input schema is preserved, rather than treated as an explicit null retract.
 
@@ -1381,7 +1378,7 @@ For example, an aggregation table can configure `fields.maximum.ignore-retract=t
 
 `sink.enable-retract` defaults to `false`. In this default mode, Flink keeps the existing upsert changelog negotiation: UPDATE_BEFORE is excluded, and DELETE follows the existing delete path. Existing jobs do not acquire field retract semantics automatically.
 
-For an existing table written through its Fluss Catalog with retract enabled, use SQL `OPTIONS` to set job options such as `sink.enable-retract` and `sink.ignore-delete`. The sink uses the target table's persisted aggregation rules. A statement cannot change the effective value of `table.aggregation.remove-record-on-delete` or `fields.<column>.ignore-retract`. Restating the same effective value is allowed.
+For an existing table written through its Fluss Catalog with retract enabled, use SQL `OPTIONS` to set job options such as `sink.enable-retract` and `sink.ignore-delete`. The sink uses the target table's persisted aggregation rules. A statement cannot change the effective value of `fields.<column>.ignore-retract`. Restating the same effective value is allowed.
 
 For contribution-based aggregation writes, set the following Flink SQL TableConfig before submitting the INSERT statement, matching [Paimon's aggregation recommendation](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/):
 
@@ -1399,9 +1396,9 @@ For an aggregation sink with `sink.enable-retract=true`:
 | --- | --- |
 | INSERT / UPDATE_AFTER | Upsert the input contribution. |
 | UPDATE_BEFORE | Retract the input contribution. |
-| DELETE | Retract the input contribution by default. If `table.aggregation.remove-record-on-delete=true`, delete the entire record, including fields outside a partial write's target columns. |
+| DELETE | Retract the input contribution. |
 
-`sink.ignore-delete=true` drops both UPDATE_BEFORE and DELETE before applying these rules, matching Paimon's `ignore-delete=true` input filtering. Explicit record deletion follows `table.delete.behavior`. The whole-row option requires `allow`; with that option disabled, `ignore` silently skips explicit deletes and `disable` rejects them. Field retraction is independent of that deletion policy.
+`sink.ignore-delete=true` drops both UPDATE_BEFORE and DELETE before applying these rules, matching Paimon's `ignore-delete=true` input filtering. Explicit deletes follow `table.delete.behavior`. `allow` permits deletion, `ignore` skips it, and `disable` rejects it.
 
 When the declared input changelog mode requires retraction, Flink validates the participating target fields after resolving partial writes. Each participating field must support retract or set `ignore-retract=true`. Non-target fields do not prevent a partial retract, and an input mode containing only INSERT / UPDATE_AFTER does not require retract-capable functions. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for the distinction between the declared mode and records observed at runtime.
 
@@ -1415,7 +1412,7 @@ The comparison below uses Paimon 2.1.0. Retract capability and validation timing
 
 With the default `sink.enable-retract=false`, Flink SQL retains the existing upsert changelog negotiation. A field without retract support does not by itself reject an existing upsert job. Enabling retract is an explicit change to this input contract.
 
-With `sink.enable-retract=true` and `sink.ignore-delete=false`, the Flink SQL sink checks the declared input changelog mode. UPDATE_BEFORE requires field retraction; DELETE also requires it unless `table.aggregation.remove-record-on-delete=true`. After resolving target columns, the sink rejects a required retract with a `ValidationException` if any participating value field lacks native retract support and does not set `ignore-retract=true`.
+With `sink.enable-retract=true` and `sink.ignore-delete=false`, the Flink SQL sink checks the declared input changelog mode. UPDATE_BEFORE and DELETE both require field retraction. After resolving target columns, the sink rejects a required retract with a `ValidationException` if any participating value field lacks native retract support and does not set `ignore-retract=true`.
 
 This check uses the declared mode, not the records observed so far. If a job declares UPDATE_BEFORE but happens to produce only INSERT / UPDATE_AFTER, Fluss can still reject it during planning. Conversely, a declared INSERT / UPDATE_AFTER-only input is allowed to aggregate into a MAX field. Fields outside a partial write's target columns do not participate in this check.
 

@@ -31,8 +31,8 @@ import java.io.Serializable;
  *   <li>{@code aggregationTable} — in retract mode, unsupported field retraction fails fast
  * </ol>
  *
- * <p>In aggregation retract mode, DELETE follows the same field rules unless the table selects
- * whole-row deletion. A legacy upsert mode keeps DELETE and UPDATE_BEFORE as delete operations.
+ * <p>In aggregation retract mode, DELETE follows the same field rules as UPDATE_BEFORE. A legacy
+ * upsert mode keeps DELETE and UPDATE_BEFORE as delete operations.
  */
 public final class SinkOperationMode implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -41,46 +41,31 @@ public final class SinkOperationMode implements Serializable {
     private final boolean ignoreDelete;
     private final boolean aggregationTable;
     private final boolean supportsRetract;
-    private final boolean removeRecordOnDelete;
 
     private SinkOperationMode(
             boolean appendOnly,
             boolean ignoreDelete,
             boolean aggregationTable,
-            boolean supportsRetract,
-            boolean removeRecordOnDelete) {
+            boolean supportsRetract) {
         this.appendOnly = appendOnly;
         this.ignoreDelete = ignoreDelete;
         this.aggregationTable = aggregationTable;
         this.supportsRetract = supportsRetract;
-        this.removeRecordOnDelete = removeRecordOnDelete;
     }
 
     /** Mode for append-only (log) tables. */
     public static SinkOperationMode appendOnly(boolean ignoreDelete) {
-        return new SinkOperationMode(true, ignoreDelete, false, false, false);
+        return new SinkOperationMode(true, ignoreDelete, false, false);
     }
 
     /** Mode for upsert (primary key) tables without aggregation. */
     public static SinkOperationMode upsert(boolean ignoreDelete) {
-        return new SinkOperationMode(false, ignoreDelete, false, false, false);
+        return new SinkOperationMode(false, ignoreDelete, false, false);
     }
 
     /** Mode for aggregation tables. */
     public static SinkOperationMode aggregation(boolean ignoreDelete, boolean supportsRetract) {
-        return aggregation(ignoreDelete, supportsRetract, false);
-    }
-
-    /** Mode for field retraction with an explicit policy for changelog DELETE. */
-    public static SinkOperationMode aggregation(
-            boolean ignoreDelete, boolean supportsRetract, boolean removeRecordOnDelete) {
-        return new SinkOperationMode(
-                false, ignoreDelete, true, supportsRetract, removeRecordOnDelete);
-    }
-
-    /** Whether changelog DELETE selects explicit record deletion in retract mode. */
-    public boolean removesRecordOnDelete() {
-        return removeRecordOnDelete;
+        return new SinkOperationMode(false, ignoreDelete, true, supportsRetract);
     }
 
     public boolean isAppendOnly() {
@@ -102,7 +87,7 @@ public final class SinkOperationMode implements Serializable {
     @Override
     public String toString() {
         return String.format(
-                "SinkOperationMode{appendOnly=%s, ignoreDelete=%s, aggregationTable=%s, supportsRetract=%s, removeRecordOnDelete=%s}",
-                appendOnly, ignoreDelete, aggregationTable, supportsRetract, removeRecordOnDelete);
+                "SinkOperationMode{appendOnly=%s, ignoreDelete=%s, aggregationTable=%s, supportsRetract=%s}",
+                appendOnly, ignoreDelete, aggregationTable, supportsRetract);
     }
 }

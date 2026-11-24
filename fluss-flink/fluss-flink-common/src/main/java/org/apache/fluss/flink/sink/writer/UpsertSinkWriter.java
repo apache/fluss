@@ -47,10 +47,8 @@ import java.util.concurrent.CompletableFuture;
 public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     @VisibleForTesting transient UpsertWriter upsertWriter;
-    @Nullable private transient UpsertWriter deleteWriter;
     @Nullable private transient UpsertWriter retractWriter;
     @Nullable private transient int[] retractInputColumns;
-    private final boolean removeRecordOnDelete;
 
     /**
      * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
@@ -85,11 +83,10 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 mailboxExecutor,
                 flussSerializationSchema,
                 offsetReporter,
-                false,
                 false);
     }
 
-    /** Creates a writer with an explicit whole-row policy for changelog DELETE. */
+    /** Creates a writer with the supplied retract capability. */
     public UpsertSinkWriter(
             TablePath tablePath,
             Configuration flussConfig,
@@ -98,8 +95,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> flussSerializationSchema,
             @Nullable ProducerOffsetReporter offsetReporter,
-            boolean schemaSupportsRetract,
-            boolean removeRecordOnDelete) {
+            boolean schemaSupportsRetract) {
         super(
                 tablePath,
                 flussConfig,
@@ -109,7 +105,6 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 flussSerializationSchema);
         this.offsetReporter = offsetReporter;
         this.schemaSupportsRetract = schemaSupportsRetract;
-        this.removeRecordOnDelete = removeRecordOnDelete;
     }
 
     @Override
@@ -120,11 +115,6 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             upsert = upsert.partialUpdate(targetColumnIndexes);
         }
         upsertWriter = upsert.createWriter();
-        // Both writers share the connection's WriterClient and its per-bucket sequence. A full
-        // delete must not inherit partial-update target columns from the aggregate writer.
-        if (removeRecordOnDelete && targetColumnIndexes != null) {
-            deleteWriter = table.newUpsert().createWriter();
-        }
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
 
@@ -181,8 +171,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             }
             return future;
         } else if (opType == OperationType.DELETE) {
-            CompletableFuture<DeleteResult> future =
-                    (deleteWriter == null ? upsertWriter : deleteWriter).delete(internalRow);
+            CompletableFuture<DeleteResult> future = upsertWriter.delete(internalRow);
             if (offsetReporter != null) {
                 return future.thenAccept(
                         result ->

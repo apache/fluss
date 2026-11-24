@@ -148,7 +148,7 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
-        checkAggregationRetractOptions(tableConf, schema);
+        checkAggregationRetractOptions(tableConf);
         checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
@@ -627,31 +627,11 @@ public class TableDescriptorValidation {
         }
     }
 
-    private static void checkAggregationRetractOptions(Configuration tableConf, Schema schema) {
-        boolean hasRetractOptions =
-                tableConf.contains(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE)
-                        || tableConf.keySet().stream()
-                                .anyMatch(key -> isFieldIgnoreRetractConfig(key));
-        if (hasRetractOptions
-                && tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE) != MergeEngineType.AGGREGATION) {
+    private static void checkAggregationRetractOptions(Configuration tableConf) {
+        if (tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE) != MergeEngineType.AGGREGATION
+                && tableConf.keySet().stream().anyMatch(key -> isFieldIgnoreRetractConfig(key))) {
             throw new InvalidConfigException(
                     "Aggregation retract options require the aggregation merge engine.");
-        }
-        TableConfig config = new TableConfig(tableConf);
-        if (config.isAggregationRemoveRecordOnDelete()) {
-            for (String column : schema.getColumnNames()) {
-                if (config.isFieldIgnoreRetract(column)) {
-                    throw new InvalidConfigException(
-                            "table.aggregation.remove-record-on-delete and fields."
-                                    + column
-                                    + ".ignore-retract have conflicting behavior and cannot both be enabled.");
-                }
-            }
-            if (config.getDeleteBehavior().orElse(DeleteBehavior.IGNORE) != DeleteBehavior.ALLOW) {
-                throw new InvalidConfigException(
-                        "table.aggregation.remove-record-on-delete=true requires "
-                                + "table.delete.behavior=allow. Aggregation tables default to ignore.");
-            }
         }
     }
 

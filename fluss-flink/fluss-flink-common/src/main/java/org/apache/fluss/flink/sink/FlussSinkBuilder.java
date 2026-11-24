@@ -244,11 +244,7 @@ public class FlussSinkBuilder<InputT> {
                             serializationSchema,
                             enableUndoRecovery,
                             producerId,
-                            enableRetract,
-                            enableRetract
-                                    && tableInfo
-                                            .getTableConfig()
-                                            .isAggregationRemoveRecordOnDelete());
+                            enableRetract);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
             writerBuilder =

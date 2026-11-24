@@ -188,11 +188,6 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
     }
 
-    /** Whether changelog DELETE removes a record instead of retracting its fields. */
-    public boolean isAggregationRemoveRecordOnDelete() {
-        return config.get(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE);
-    }
-
     /** Whether the named field preserves its accumulator when processing a retract. */
     public boolean isFieldIgnoreRetract(String fieldName) {
         return config.get(

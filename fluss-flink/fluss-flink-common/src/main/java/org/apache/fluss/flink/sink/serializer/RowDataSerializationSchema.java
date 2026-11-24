@@ -100,8 +100,6 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     private final boolean isAggregationTable;
 
-    private final boolean removeRecordOnDelete;
-
     /**
      * The converter used to transform Flink {@link RowData} to Fluss {@link InternalRow}.
      * Initialized in {@link #open(InitializationContext)}.
@@ -141,7 +139,6 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         this.ignoreDelete = mode.isIgnoreDelete();
         this.isAggregationTable = mode.isAggregationTable();
         this.schemaSupportsRetract = mode.supportsRetract();
-        this.removeRecordOnDelete = mode.removesRecordOnDelete();
     }
 
     /** Creates a serializer with the existing append/upsert and ignore-delete behavior. */
@@ -251,9 +248,6 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                     return OperationType.UPSERT;
                 case UPDATE_BEFORE:
                 case DELETE:
-                    if (rowKind == RowKind.DELETE && removeRecordOnDelete) {
-                        return OperationType.DELETE;
-                    }
                     if (schemaSupportsRetract) {
                         return OperationType.RETRACT;
                     } else if (isAggregationTable) {

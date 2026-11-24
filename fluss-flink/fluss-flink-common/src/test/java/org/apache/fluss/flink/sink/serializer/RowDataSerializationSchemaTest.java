@@ -84,12 +84,7 @@ class RowDataSerializationSchemaTest {
                 Arguments.of(
                         "aggregation retract with ignore-delete",
                         new RowDataSerializationSchema(SinkOperationMode.aggregation(true, true)),
-                        new OperationType[] {UPSERT, IGNORE, UPSERT, IGNORE}),
-                Arguments.of(
-                        "aggregation retract with whole-row delete",
-                        new RowDataSerializationSchema(
-                                SinkOperationMode.aggregation(false, true, true)),
-                        new OperationType[] {UPSERT, RETRACT, UPSERT, DELETE}));
+                        new OperationType[] {UPSERT, IGNORE, UPSERT, IGNORE}));
     }
 
     @ParameterizedTest

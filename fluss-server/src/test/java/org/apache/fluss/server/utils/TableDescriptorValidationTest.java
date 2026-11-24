@@ -40,7 +40,6 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Collections;
@@ -54,45 +53,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link TableDescriptorValidation}. */
 class TableDescriptorValidationTest {
-
-    @ParameterizedTest
-    @CsvSource({
-        "false, , true",
-        "false, allow, true",
-        "false, ignore, true",
-        "false, disable, true",
-        "true, , false",
-        "true, allow, true",
-        "true, ignore, false",
-        "true, disable, false"
-    })
-    void testAggregationWholeRowDeletePolicy(
-            boolean removeRecordOnDelete, String deleteBehavior, boolean valid) {
-        TableDescriptor.Builder builder =
-                TableDescriptor.builder(pkTableWithProperty("table.merge-engine", "aggregation"))
-                        .property(
-                                "table.aggregation.remove-record-on-delete",
-                                Boolean.toString(removeRecordOnDelete));
-        if (deleteBehavior != null) {
-            builder.property("table.delete.behavior", deleteBehavior);
-        }
-        TableDescriptor descriptor = builder.build();
-        if (valid) {
-            assertThatCode(
-                            () ->
-                                    TableDescriptorValidation.validateTableDescriptor(
-                                            descriptor, 100, null))
-                    .doesNotThrowAnyException();
-        } else {
-            assertThatThrownBy(
-                            () ->
-                                    TableDescriptorValidation.validateTableDescriptor(
-                                            descriptor, 100, null))
-                    .isInstanceOf(InvalidConfigException.class)
-                    .hasMessageContaining("table.aggregation.remove-record-on-delete")
-                    .hasMessageContaining("table.delete.behavior=allow");
-        }
-    }
 
     @Test
     void testAggregationRetractProperties() {
@@ -111,19 +71,6 @@ class TableDescriptorValidationTest {
                         .build()
                         .withReplicationFactor(3);
         TableDescriptorValidation.validateTableDescriptor(descriptor, 100, null);
-
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        TableDescriptor.builder(descriptor)
-                                                .property(
-                                                        "table.aggregation.remove-record-on-delete",
-                                                        "true")
-                                                .build(),
-                                        100,
-                                        null))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("conflicting");
 
         assertThatThrownBy(
                         () ->
