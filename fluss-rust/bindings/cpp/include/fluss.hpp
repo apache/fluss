@@ -1326,7 +1326,7 @@ struct ConsumerGroupOptions {
     std::string group_id;
     uint64_t timeout_ms{30000};
     /// Zero disables periodic commits; otherwise checked before each poll.
-    uint64_t auto_commit_interval_ms{0};
+    uint64_t auto_commit_interval_ms{5000};
 };
 
 struct ConsumerOffset {
@@ -2448,14 +2448,22 @@ class LogScanner {
     /// Resolution failure leaves subscriptions unchanged. Assignment remains manual.
     Result Subscribe(const std::vector<TableBucket>& buckets,
                      const OffsetsInitializer& initializer);
-    /// Commits positions delivered by Poll. Process all returned records first.
+    /// Commits current next positions. Process all returned records first.
     OffsetCommitResult CommitSync();
+    /// Resolves this group's positions on poll. Only missing commits use the fallback.
+    Result SubscribeFromCommitted(
+        const std::vector<TableBucket>& buckets,
+        const OffsetsInitializer& fallback = OffsetsInitializer::Earliest());
+    /// Registers a table on a multi-table scanner and returns its current ID.
+    Result RegisterTable(const TablePath& path, int64_t& table_id);
+    /// Closes the scanner; with auto-commit enabled waits for the final commit.
+    OffsetCommitResult Close();
     /// Commits explicit next offsets, allowing partially processed poll results.
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     /// Enqueues a snapshot now. Calls on one scanner execute in invocation order.
     /// The operation owns its resources and survives scanner destruction. Dropping
     /// the returned future does not cancel the write. No cross-scanner fencing exists.
-    /// Unknown outcomes block further commits; reads do not fence a late write.
+    /// After an unknown outcome, unsafe rewinds are rejected.
     /// Drive polls, subscriptions and commit initiation from one consumer thread.
     std::future<OffsetCommitResult> CommitAsync();
     std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);
@@ -2475,6 +2483,8 @@ class LogScanner {
     friend class ConsumerGroupScan;
     friend class Connection;
     friend class RecordBatchLogScanner;
+    Result SubscribeOffsets(const std::vector<TableBucket>& buckets,
+                            const OffsetsInitializer& initializer, bool deferred);
     LogScanner(ffi::LogScanner* scanner) noexcept;
 
     void Destroy() noexcept;
@@ -2530,6 +2540,14 @@ class RecordBatchLogScanner {
     Result Subscribe(const std::vector<TableBucket>& buckets,
                      const OffsetsInitializer& initializer);
     OffsetCommitResult CommitSync();
+    /// Resolves this group's positions on poll. Only missing commits use the fallback.
+    Result SubscribeFromCommitted(
+        const std::vector<TableBucket>& buckets,
+        const OffsetsInitializer& fallback = OffsetsInitializer::Earliest());
+    /// Registers a table on a multi-table scanner and returns its current ID.
+    Result RegisterTable(const TablePath& path, int64_t& table_id);
+    /// Closes the scanner; with auto-commit enabled waits for the final commit.
+    OffsetCommitResult Close();
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     std::future<OffsetCommitResult> CommitAsync();
     std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);

@@ -2703,8 +2703,11 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
         ASSERT_OK(writer.Flush());
     }
     fluss::LogScanner scanner;
-    ASSERT_OK(conn.CreateMultiTableLogScanner(paths, {group}, scanner));
-    ASSERT_OK(scanner.Subscribe(buckets, fluss::OffsetsInitializer::Committed(group)));
+    ASSERT_OK(conn.CreateMultiTableLogScanner({paths[0]}, {group, 30000, 0}, scanner));
+    int64_t registered_id = -1;
+    ASSERT_OK(scanner.RegisterTable(paths[1], registered_id));
+    ASSERT_EQ(registered_id, buckets[1].table_id);
+    ASSERT_OK(scanner.SubscribeFromCommitted(buckets));
     fluss::ScanRecords first, second;
     ASSERT_OK(scanner.Poll(10000, first));
     ASSERT_OK(scanner.Poll(10000, second));
@@ -2765,7 +2768,16 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     fluss::ScanRecords remaining;
     ASSERT_OK(single.Poll(10000, remaining));
     EXPECT_EQ(remaining.Count(), 2);
-    EXPECT_TRUE(single.CommitSync().Ok());
+    EXPECT_TRUE(single.Close().Ok());
+    EXPECT_FALSE(single.Available());
+    // The source remains readable even when the server rejects the group's commits.
+    ASSERT_OK(
+        single_table.NewScan().WithConsumerGroup({"bad.group", 30000, 1}).CreateLogScanner(single));
+    ASSERT_OK(single.Subscribe(0, 1));
+    ASSERT_OK(single.Poll(10000, remaining));
+    EXPECT_EQ(remaining.Count(), 2);
+    EXPECT_EQ(single.Close().result.error_code, 75);
+    EXPECT_FALSE(single.Available());
     EXPECT_TRUE(adm.DeleteConsumerOffsets(group, {buckets[0]}).Ok());
     std::vector<fluss::ConsumerGroupDeleteResult> deleted;
     ASSERT_OK(adm.DeleteConsumerGroups({group}, deleted));

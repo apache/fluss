@@ -928,6 +928,7 @@ mod ffi {
             self: &LogScanner,
             buckets: Vec<FfiConsumerOffset>,
             initializer: Vec<FfiOffsetsInitializer>,
+            deferred: bool,
         ) -> FfiResult;
         fn list_consumer_offsets(self: &Admin, group_id: &str) -> FfiConsumerOffsetsResult;
         fn alter_consumer_offsets(
@@ -949,6 +950,8 @@ mod ffi {
             buckets: Vec<FfiConsumerOffset>,
         ) -> FfiConsumerOffsetsResult;
         fn delivered(self: &LogScanner);
+        fn register_table(self: &mut LogScanner, db: &str, name: &str, id: &mut i64) -> FfiResult;
+        fn close_log_scanner(scanner: Box<LogScanner>) -> FfiConsumerOffsetsResult;
         fn begin_commit(
             self: &LogScanner,
             current: bool,
@@ -2163,6 +2166,8 @@ impl Table {
                     Ok(scan) => scan,
                     Err(error) => return err_ptr_from_core(&error),
                 }
+            } else if group.enabled {
+                scan.without_auto_commit()
             } else {
                 scan
             };
@@ -2598,6 +2603,10 @@ unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
             drop(Box::from_raw(lookuper));
         }
     }
+}
+
+fn close_log_scanner(scanner: Box<LogScanner>) -> ffi::FfiConsumerOffsetsResult {
+    scanner.close()
 }
 
 // LogScanner implementation

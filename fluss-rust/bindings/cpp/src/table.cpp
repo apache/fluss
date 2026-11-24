@@ -2406,13 +2406,31 @@ std::future<OffsetCommitResult> start_commit(ffi::LogScanner* scanner, bool curr
 
 Result LogScanner::Subscribe(const std::vector<TableBucket>& buckets,
                              const OffsetsInitializer& initializer) {
+    return SubscribeOffsets(buckets, initializer, false);
+}
+Result LogScanner::SubscribeFromCommitted(const std::vector<TableBucket>& buckets,
+                                          const OffsetsInitializer& fallback) {
+    return SubscribeOffsets(buckets, fallback, true);
+}
+Result LogScanner::RegisterTable(const TablePath& path, int64_t& table_id) {
+    if (!Available()) return utils::make_client_error("LogScanner not available");
+    return utils::from_ffi_result(
+        scanner_->register_table(path.database_name, path.table_name, table_id));
+}
+OffsetCommitResult LogScanner::Close() {
+    if (!scanner_) return {};
+    return commit_result(ffi::close_log_scanner(
+        rust::Box<ffi::LogScanner>::from_raw(std::exchange(scanner_, nullptr))));
+}
+Result LogScanner::SubscribeOffsets(const std::vector<TableBucket>& buckets,
+                                    const OffsetsInitializer& initializer, bool deferred) {
     if (!Available()) return utils::make_client_error("LogScanner not available");
     rust::Vec<ffi::FfiOffsetsInitializer> steps;
     for (const auto& step : initializer.steps_) {
         steps.push_back({step.kind, step.value, rust::String(step.group_id)});
     }
     return utils::from_ffi_result(
-        scanner_->subscribe_with_initializer(offset_buckets(buckets), std::move(steps)));
+        scanner_->subscribe_with_initializer(offset_buckets(buckets), std::move(steps), deferred));
 }
 
 Result Admin::GetConsumerOffsets(const std::string& group_id,
@@ -2511,6 +2529,14 @@ Result RecordBatchLogScanner::Subscribe(const std::vector<TableBucket>& buckets,
                                         const OffsetsInitializer& initializer) {
     return scanner_.Subscribe(buckets, initializer);
 }
+Result RecordBatchLogScanner::SubscribeFromCommitted(const std::vector<TableBucket>& buckets,
+                                                     const OffsetsInitializer& fallback) {
+    return scanner_.SubscribeFromCommitted(buckets, fallback);
+}
+Result RecordBatchLogScanner::RegisterTable(const TablePath& path, int64_t& id) {
+    return scanner_.RegisterTable(path, id);
+}
+OffsetCommitResult RecordBatchLogScanner::Close() { return scanner_.Close(); }
 std::future<OffsetCommitResult> RecordBatchLogScanner::CommitAsync() {
     return scanner_.CommitAsync();
 }

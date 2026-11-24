@@ -479,9 +479,6 @@ impl TableScan {
         mut slf: PyRefMut<'_, Self>,
         interval_ms: u64,
     ) -> PyResult<PyRefMut<'_, Self>> {
-        if interval_ms == 0 {
-            return Err(FlussError::new_err("Auto-commit interval must be positive"));
-        }
         slf.auto_commit_ms = Some(interval_ms);
         Ok(slf)
     }
@@ -669,7 +666,9 @@ impl TableScan {
                     .with_consumer_group(group)
                     .map_err(|error| FlussError::from_core_error(&error))?;
             }
-            if let Some(ms) = auto_commit_ms {
+            if auto_commit_ms == Some(0) {
+                table_scan = table_scan.without_auto_commit();
+            } else if let Some(ms) = auto_commit_ms {
                 table_scan = table_scan
                     .with_auto_commit(Duration::from_millis(ms))
                     .map_err(|error| FlussError::from_core_error(&error))?;

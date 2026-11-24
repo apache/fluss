@@ -204,7 +204,9 @@ async fn create(
         timeout: Duration::from_millis(timeout_ms),
     };
     let mut scan = connection.new_multi_table_scan(&tables, options).await?;
-    if let Some(ms) = auto_commit_ms {
+    if auto_commit_ms == Some(0) {
+        scan = scan.without_auto_commit();
+    } else if let Some(ms) = auto_commit_ms {
         scan = scan.with_auto_commit(Duration::from_millis(ms))?;
     }
     let mut columns = HashMap::new();

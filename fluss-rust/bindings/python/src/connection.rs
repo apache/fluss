@@ -68,7 +68,9 @@ impl FlussConnection {
                 .new_multi_table_scan(&tables, options)
                 .await
                 .map_err(|error| FlussError::from_core_error(&error))?;
-            if let Some(ms) = auto_commit_interval_ms {
+            if auto_commit_interval_ms == Some(0) {
+                scan = scan.without_auto_commit();
+            } else if let Some(ms) = auto_commit_interval_ms {
                 scan = scan
                     .with_auto_commit(Duration::from_millis(ms))
                     .map_err(|error| FlussError::from_core_error(&error))?;

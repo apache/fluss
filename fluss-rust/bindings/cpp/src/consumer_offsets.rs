@@ -128,6 +128,7 @@ impl LogScanner {
         &self,
         buckets: Vec<ffi::FfiConsumerOffset>,
         initializer: Vec<ffi::FfiOffsetsInitializer>,
+        deferred: bool,
     ) -> ffi::FfiResult {
         use fcore::client::OffsetsInitializer;
         let buckets: Vec<_> = buckets.iter().map(bucket).collect();
@@ -148,21 +149,64 @@ impl LogScanner {
             };
         }
         let result = RUNTIME.block_on(async {
+            macro_rules! subscribe {
+                ($s:expr) => {
+                    if deferred {
+                        $s.subscribe_from_committed(&buckets, &strategy)
+                    } else {
+                        $s.subscribe_with_initializer(&buckets, &strategy).await
+                    }
+                };
+            }
             match &self.scanner {
-                ScannerKind::Record(s) => s.subscribe_with_initializer(&buckets, &strategy).await,
-                ScannerKind::Batch(s) => s.subscribe_with_initializer(&buckets, &strategy).await,
-                ScannerKind::MultiRecord(s) => {
-                    s.subscribe_with_initializer(&buckets, &strategy).await
-                }
-                ScannerKind::MultiBatch(s) => {
-                    s.subscribe_with_initializer(&buckets, &strategy).await
-                }
+                ScannerKind::Record(s) => subscribe!(s),
+                ScannerKind::Batch(s) => subscribe!(s),
+                ScannerKind::MultiRecord(s) => subscribe!(s),
+                ScannerKind::MultiBatch(s) => subscribe!(s),
             }
         });
         match result {
             Ok(()) => ok_result(),
             Err(error) => err_from_core_error(&error),
         }
+    }
+
+    pub(super) fn register_table(&mut self, db: &str, name: &str, id: &mut i64) -> ffi::FfiResult {
+        let path = fcore::metadata::TablePath::new(db, name);
+        let info = match &mut self.scanner {
+            ScannerKind::MultiRecord(s) => RUNTIME.block_on(s.register_table(&path)),
+            ScannerKind::MultiBatch(s) => RUNTIME.block_on(s.register_table(&path)),
+            _ => return client_err("RegisterTable requires a multi-table scanner".into()),
+        };
+        match info {
+            Ok(info) => {
+                *id = info.table_id;
+                self.table_columns
+                    .insert(*id, info.schema.columns().to_vec());
+                ok_result()
+            }
+            Err(e) => err_from_core_error(&e),
+        }
+    }
+
+    pub(super) fn close(self) -> ffi::FfiConsumerOffsetsResult {
+        use fcore::client::AutoCommitError;
+        if let Err(error) = self.check_delivery() {
+            return commit_response(Err(OffsetCommitError::Rejected(error)));
+        }
+        let result = RUNTIME.block_on(async {
+            match self.scanner {
+                ScannerKind::Record(s) => s.close().await,
+                ScannerKind::Batch(s) => s.close().await,
+                ScannerKind::MultiRecord(s) => s.close().await,
+                ScannerKind::MultiBatch(s) => s.close().await,
+            }
+        });
+        commit_response(match result {
+            Ok(()) => Ok(Default::default()),
+            Err(AutoCommitError::Request(err)) => Err(err),
+            Err(AutoCommitError::Buckets(buckets)) => Ok(buckets),
+        })
     }
 
     pub(super) fn begin_commit(
@@ -253,6 +297,8 @@ impl Connection {
             let mut scan = self.inner.new_multi_table_scan(&paths, options).await?;
             if auto_commit_ms > 0 {
                 scan = scan.with_auto_commit(Duration::from_millis(auto_commit_ms))?;
+            } else {
+                scan = scan.without_auto_commit();
             }
             let mut table_columns = HashMap::new();
             for info in scan.table_infos() {
