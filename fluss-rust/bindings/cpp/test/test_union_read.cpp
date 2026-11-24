@@ -127,8 +127,11 @@ TEST(UnionReadTest, CheckpointAdvancesPastFilteredAppends) {
         ASSERT_OK(writer.Append(row, ack));
         ASSERT_OK(ack.Wait());
     };
+    // The append ACK confirms the new bucket has a leader before capture requests its offsets.
+    append(0);
     std::vector<uint8_t> context;
-    ASSERT_OK(table.CaptureUnionReadContext(context));
+    auto captured = table.CaptureUnionReadContext(context);
+    ASSERT_OK(captured);
     auto scan = table.NewScan();
     scan.Filter(Col("value").GreaterThan(0));
     UnionReadReader reader;
