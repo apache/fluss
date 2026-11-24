@@ -54,10 +54,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT Case for {@link BatchScanner}. */
@@ -284,14 +286,17 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
 
         expectedRowByBuckets = putRows(tableId, tablePath, 10);
-        // wait snapshot2 finish
-        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
-        // as all leases are dropped, and new snapshot is generated, all old snapshot are
-        // cleared.
-        for (TableBucket tb : expectedRowByBuckets.keySet()) {
-            assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isFalse();
-            assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
-        }
+        Set<TableBucket> tableBuckets = expectedRowByBuckets.keySet();
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(tableBuckets);
+        // Publishing the new snapshot precedes cleanup of snapshots whose leases were dropped.
+        retry(
+                Duration.ofSeconds(30),
+                () -> {
+                    for (TableBucket tb : tableBuckets) {
+                        assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isFalse();
+                        assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
+                    }
+                });
 
         // drop no exist lease, no exception.
         admin.createKvSnapshotLease("no-exist-lease", Duration.ofDays(1).toMillis())
