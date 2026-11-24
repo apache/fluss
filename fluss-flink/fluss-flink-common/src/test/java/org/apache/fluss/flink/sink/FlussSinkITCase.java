@@ -29,6 +29,7 @@ import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -45,6 +46,8 @@ import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.Serializable;
 import java.time.Duration;
@@ -310,6 +313,65 @@ public class FlussSinkITCase extends FlinkTestBase {
         assertThat(rows.containsAll(orders)).isTrue();
 
         logScanner.close();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCustomRetractUsesWriterProjection(boolean partial) throws Exception {
+        TablePath path = TablePath.of(DEFAULT_DB, "custom_retract_" + partial);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.INT(), AggFunctions.SUM())
+                        .column("other", DataTypes.INT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                path,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .distributedBy(1)
+                        .build());
+        FlussSinkBuilder<Integer> builder =
+                FlussSink.<Integer>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(path.getTableName())
+                        .setOption("sink.enable-retract", "true")
+                        .setSerializationSchema(new ContributionSerializer());
+        if (partial) {
+            builder.setPartialUpdateColumns("id", "total");
+        }
+        env.setParallelism(1);
+        env.fromData(5, -3).sinkTo(builder.build());
+        env.execute("Write and retract contributions");
+
+        try (Table table = conn.getTable(path)) {
+            InternalRow actual =
+                    table.newLookup().createLookuper().lookup(row(1)).get().getSingletonRow();
+            assertThat(actual.getInt(1)).isEqualTo(2);
+            if (partial) {
+                assertThat(actual.isNullAt(2)).isTrue();
+            } else {
+                assertThat(actual.getInt(2)).isEqualTo(2);
+            }
+        }
+    }
+
+    private static class ContributionSerializer implements FlussSerializationSchema<Integer> {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public void open(InitializationContext context) {}
+
+        @Override
+        public RowWithOp serialize(Integer value) {
+            int amount = Math.abs(value);
+            return new RowWithOp(
+                    row(1, amount, amount),
+                    value < 0 ? OperationType.RETRACT : OperationType.UPSERT);
+        }
     }
 
     @Test

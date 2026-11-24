@@ -22,7 +22,6 @@ import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
-import java.util.Arrays;
 import java.util.Objects;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -46,8 +45,6 @@ public class RowWithOp {
 
     private final Long estimatedSizeInBytes;
 
-    @Nullable private final int[] targetColumns;
-
     /**
      * Constructs a {@code RowWithOp} with the specified internal row and operation type.
      *
@@ -70,31 +67,9 @@ public class RowWithOp {
      * @throws NullPointerException if {@code row} or {@code opType} is null
      */
     public RowWithOp(InternalRow row, OperationType opType, @Nullable Long estimatedSizeInBytes) {
-        this(row, opType, estimatedSizeInBytes, null);
-    }
-
-    /**
-     * Creates a row with optional columns participating in retract. The target column array is
-     * reused and must not be modified; null denotes all columns. Other operation types use their
-     * writer's target columns.
-     */
-    public RowWithOp(
-            InternalRow row,
-            OperationType opType,
-            @Nullable Long estimatedSizeInBytes,
-            @Nullable int[] targetColumns) {
         this.row = checkNotNull(row, "row cannot be null");
         this.opType = checkNotNull(opType, "opType cannot be null");
         this.estimatedSizeInBytes = estimatedSizeInBytes;
-        this.targetColumns = targetColumns;
-    }
-
-    /**
-     * Returns the retract target columns, or null for all columns. The array must not be modified.
-     */
-    @Nullable
-    public int[] getTargetColumns() {
-        return targetColumns;
     }
 
     /**
@@ -125,7 +100,7 @@ public class RowWithOp {
 
     /**
      * Indicates whether some other object is "equal to" this one. Two {@code RowWithOp} objects are
-     * considered equal if their internal rows, operation types and target columns are equal.
+     * considered equal if their internal rows and operation types are equal.
      *
      * @param o the reference object with which to compare
      * @return {@code true} if this object is the same as the obj argument; {@code false} otherwise
@@ -136,9 +111,7 @@ public class RowWithOp {
             return false;
         }
         RowWithOp rowWithOp = (RowWithOp) o;
-        return Objects.equals(row, rowWithOp.row)
-                && opType == rowWithOp.opType
-                && Arrays.equals(targetColumns, rowWithOp.targetColumns);
+        return Objects.equals(row, rowWithOp.row) && opType == rowWithOp.opType;
     }
 
     /**
@@ -148,7 +121,6 @@ public class RowWithOp {
      */
     @Override
     public int hashCode() {
-        int hash = Objects.hash(row, opType);
-        return targetColumns == null ? hash : 31 * hash + Arrays.hashCode(targetColumns);
+        return Objects.hash(row, opType);
     }
 }

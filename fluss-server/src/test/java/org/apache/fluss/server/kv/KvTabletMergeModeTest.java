@@ -725,8 +725,13 @@ class KvTabletMergeModeTest {
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
         kvTablet.putAsLeader(initBatch, null, MergeMode.DEFAULT);
 
+        long endOffset = logTablet.localLogEndOffset();
         List<MutationRecordEntry> entries =
-                Collections.singletonList(
+                Arrays.asList(
+                        MutationRecordEntry.of(
+                                MutationType.UPSERT,
+                                aggKvRecordFactory.ofRecord(
+                                        "k2".getBytes(), new Object[] {2, 7L, 9, "new"})),
                         MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 aggKvRecordFactory.ofRecord(
@@ -736,6 +741,8 @@ class KvTabletMergeModeTest {
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
                 .hasMessageContaining("Column 'max_val' does not support RETRACT.");
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(endOffset);
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k2".getBytes()))).isNull();
     }
 
     @Test

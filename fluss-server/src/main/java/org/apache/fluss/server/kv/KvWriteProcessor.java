@@ -400,6 +400,7 @@ public final class KvWriteProcessor {
         long logOffset = startLogOffset;
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
+        boolean retractValidated = false;
         // Each mutation observes the previous mutation's state. Client batching does not establish
         // a retract/upsert pair or suppress its intermediate CDC transition.
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
@@ -443,7 +444,10 @@ public final class KvWriteProcessor {
                                     historicalValueLookup);
                     break;
                 case RETRACT:
-                    currentMerger.validateRetract(schemaIdOfNewData);
+                    if (!retractValidated) {
+                        currentMerger.validateRetract(schemaIdOfNewData);
+                        retractValidated = true;
+                    }
                     if (value == null) {
                         throw new InvalidRecordException(
                                 "RETRACT record must carry a non-null row value.");

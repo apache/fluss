@@ -94,8 +94,7 @@ public class KvWriteBatch extends WriteBatch {
 
     @Override
     boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
-        // Target columns belong to the batch header. Keep full-row deletes and partial field
-        // writes in separate, ordered batches within the same writer session.
+        // A PUT_KV request carries one projection for all of its batches.
         if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
             return false;
         }

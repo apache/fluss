@@ -1402,7 +1402,7 @@ For an aggregation sink with `sink.enable-retract=true`:
 
 When the declared input changelog mode requires retraction, Flink validates the participating target fields after resolving partial writes. Each participating field must support retract or set `ignore-retract=true`. Non-target fields do not prevent a partial retract, and an input mode containing only INSERT / UPDATE_AFTER does not require retract-capable functions. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for the distinction between the declared mode and records observed at runtime.
 
-The sink option does not gate the Java client's explicit `retract(row)` API. DataStream applications with custom serializers choose their operation types explicitly; `FlussSinkBuilder.setOption("sink.enable-retract", "true")` enables their RETRACT operations, while the table's field rules remain authoritative.
+Java callers can use `retract(row)` in the default merge mode independently of the sink option. An `OVERWRITE` writer rejects retract calls before enqueueing them. DataStream applications with custom serializers choose their operation types explicitly; `FlussSinkBuilder.setOption("sink.enable-retract", "true")` enables their RETRACT operations, and both UPSERT and RETRACT use the target columns configured on the writer. The table's field rules apply to each retract.
 
 ### Retract Validation and Paimon Compatibility
 

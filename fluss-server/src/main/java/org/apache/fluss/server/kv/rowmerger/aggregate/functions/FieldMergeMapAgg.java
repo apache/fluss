@@ -108,14 +108,17 @@ public class FieldMergeMapAgg extends FieldAggregator {
         }
         InternalMap accumulated = (InternalMap) accumulator;
         Map<Object, Object> result = new HashMap<>();
+        boolean removed = false;
         for (int i = 0; i < accumulated.size(); i++) {
             Object key = keyGetter.getElementOrNull(accumulated.keyArray(), i);
             Object mapKey = binaryKeys ? new ByteArrayWrapper((byte[]) key) : key;
-            if (!retractedKeys.contains(mapKey)) {
+            if (retractedKeys.contains(mapKey)) {
+                removed = true;
+            } else {
                 result.put(mapKey, valueGetter.getElementOrNull(accumulated.valueArray(), i));
             }
         }
-        return toInternalMap(result);
+        return removed ? toInternalMap(result) : accumulator;
     }
 
     private InternalMap toInternalMap(Map<Object, Object> resultMap) {

@@ -58,6 +58,7 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -2208,6 +2209,68 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             InternalRow zeroResult = lookupRow(lookuper, row(2));
             assertThat(zeroResult).isNotNull();
             assertThat(zeroResult.getLong(1)).isZero();
+        }
+    }
+
+    @Test
+    void testOverwriteWriterRejectsRetractBeforeEnqueue() throws Exception {
+        TablePath path = TablePath.of("test_db_1", "overwrite_retract");
+        createTable(path, aggSumTableDescriptor(), false);
+        try (Table table = conn.getTable(path)) {
+            UpsertWriter writer = table.newUpsert().mergeMode(MergeMode.OVERWRITE).createWriter();
+            assertThatThrownBy(() -> writer.retract(row(1, 5L)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("RETRACT")
+                    .hasMessageContaining("OVERWRITE");
+            writer.upsert(row(1, 8L));
+            writer.flush();
+            assertThat(lookupRow(table.newLookup().createLookuper(), row(1)).getLong(1))
+                    .isEqualTo(8L);
+        }
+    }
+
+    @Test
+    void testMergeMapRetractMissingKeyProducesNoUpdate() throws Exception {
+        TablePath path = TablePath.of("test_db_1", "merge_map_missing_key");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "attrs",
+                                DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
+                                AggFunctions.MERGE_MAP())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                path,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .distributedBy(1)
+                        .build(),
+                false);
+        try (Table table = conn.getTable(path);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribeFromBeginning(0);
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, GenericMap.of(2, 20, 1, 10))).get();
+            writer.retract(row(1, GenericMap.of(3, 30))).get();
+            Lookuper lookup = table.newLookup().createLookuper();
+            assertThat(lookupRow(lookup, row(1)).getMap(1).size()).isEqualTo(2);
+            long end = writer.retract(row(1, GenericMap.of(2, 20))).get().getLogEndOffset();
+            assertThat(lookupRow(lookup, row(1)).getMap(1).keyArray().toIntArray())
+                    .containsExactly(1);
+            List<ChangeType> changes = new ArrayList<>();
+            long last = -1;
+            while (last < end - 1) {
+                for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                    changes.add(record.getChangeType());
+                    last = record.logOffset();
+                }
+            }
+            assertThat(changes)
+                    .containsExactly(
+                            ChangeType.INSERT, ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER);
         }
     }
 

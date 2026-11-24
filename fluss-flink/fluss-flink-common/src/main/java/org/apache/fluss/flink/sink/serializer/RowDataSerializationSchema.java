@@ -209,24 +209,29 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         if (outputProjection != null) {
             row = outputProjection.replaceRow(row);
         }
-        if (opType == OperationType.RETRACT) {
-            // Padding supplies storage nulls, not retract contributions for absent input fields.
-            if (lastInputArity != value.getArity()) {
-                lastInputArity = value.getArity();
-                List<Integer> present = new ArrayList<>();
-                for (int i = 0; i < inputIndexes.length; i++) {
-                    if (inputIndexes[i] >= 0 && inputIndexes[i] < lastInputArity) {
-                        present.add(i);
-                    }
-                }
-                retractTargetColumns =
-                        present.size() == inputIndexes.length
-                                ? null
-                                : present.stream().mapToInt(Integer::intValue).toArray();
-            }
-            return new RowWithOp(row, opType, estimatedSizeInBytes, retractTargetColumns);
-        }
         return new RowWithOp(row, opType, estimatedSizeInBytes);
+    }
+
+    /** Returns the columns present in an unbound SQL input after schema alignment. */
+    @Nullable
+    protected final int[] presentRetractColumns(int arity) {
+        if (useBoundRetractSchema) {
+            return null;
+        }
+        if (lastInputArity != arity) {
+            lastInputArity = arity;
+            List<Integer> present = new ArrayList<>();
+            for (int i = 0; i < inputIndexes.length; i++) {
+                if (inputIndexes[i] >= 0 && inputIndexes[i] < arity) {
+                    present.add(i);
+                }
+            }
+            retractTargetColumns =
+                    present.size() == inputIndexes.length
+                            ? null
+                            : present.stream().mapToInt(Integer::intValue).toArray();
+        }
+        return retractTargetColumns;
     }
 
     /** Keeps retract rows in the exact input schema bound by the SQL plan. */

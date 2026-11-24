@@ -29,6 +29,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.row.RowWithOp;
+import org.apache.fluss.flink.sink.FlinkTableSink.SqlUpsertSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.undo.ProducerOffsetReporter;
@@ -153,10 +154,13 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
         if (historicalRetractWriter != null) {
             return writeRow(OperationType.RETRACT, row.getRow(), historicalRetractWriter);
         }
-        if (row.getTargetColumns() == null) {
+        int[] columns =
+                serializationSchema instanceof SqlUpsertSerializationSchema
+                        ? ((SqlUpsertSerializationSchema) serializationSchema).getRetractColumns()
+                        : null;
+        if (columns == null) {
             return super.writeRow(row);
         }
-        int[] columns = row.getTargetColumns();
         if (retractWriter == null || !Arrays.equals(columns, retractInputColumns)) {
             retractInputColumns = columns;
             if (targetColumnIndexes != null) {

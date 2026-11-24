@@ -235,6 +235,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                             + "Table: "
                             + tablePath);
         }
+        if (mergeMode == MergeMode.OVERWRITE) {
+            throw new IllegalStateException("RETRACT cannot be applied in OVERWRITE merge mode.");
+        }
         // Retract is not idempotent (a duplicated retract subtracts twice), so it must not be
         // used when the idempotent writer is disabled: retries could silently corrupt the
         // aggregated value without server-side batch deduplication.

@@ -17,7 +17,10 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.row.OperationType;
+import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
@@ -299,7 +302,7 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 distributionMode,
-                                new RowDataSerializationSchema(
+                                new SqlUpsertSerializationSchema(
                                         enableRetract
                                                 ? SinkOperationMode.aggregation(
                                                         sinkIgnoreDelete, writerSupportsRetract)
@@ -329,6 +332,32 @@ public class FlinkTableSink
             columns.add(tableRowType.getFieldNames().get(columnIndex));
         }
         return columns;
+    }
+
+    /** Keeps SQL input presence information local to the serializer and its sink writer. */
+    @Internal
+    public static final class SqlUpsertSerializationSchema extends RowDataSerializationSchema {
+        private static final long serialVersionUID = 1L;
+        @Nullable private transient int[] retractColumns;
+
+        private SqlUpsertSerializationSchema(SinkOperationMode mode) {
+            super(mode);
+        }
+
+        @Override
+        public RowWithOp serialize(RowData value) throws Exception {
+            RowWithOp result = super.serialize(value);
+            if (result.getOperationType() == OperationType.RETRACT) {
+                retractColumns = presentRetractColumns(value.getArity());
+            }
+            return result;
+        }
+
+        /** Returns the fields present in the just-serialized SQL retract. */
+        @Nullable
+        public int[] getRetractColumns() {
+            return retractColumns;
+        }
     }
 
     private boolean supportsRetract(@Nullable int[] targetColumnIndexes) {

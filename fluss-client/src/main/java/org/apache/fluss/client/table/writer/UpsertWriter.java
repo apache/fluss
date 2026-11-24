@@ -53,6 +53,9 @@ public interface UpsertWriter extends TableWriter {
      * configured with {@code fields.<column>.ignore-retract=true} keep their accumulators. The
      * table's changelog DELETE policy and Flink's sink opt-in do not change this explicit API.
      *
+     * <p>RETRACT requires the default merge mode. OVERWRITE bypasses aggregation and rejects
+     * retract calls before enqueueing the write.
+     *
      * <p>When removing a previously added contribution, use its original primary key and input
      * values for the target fields being retracted. Upstream lookup joins and non-deterministic
      * expressions must preserve those values for retraction. A key-changing update retracts the old
