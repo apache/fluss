@@ -7,7 +7,7 @@ C++ bindings for Fluss, built on top of the [fluss-rust](../../crates/fluss) cli
 - Rust 1.95+
 - C++17-capable compiler
 - CMake 3.22+ and/or Bazel
-- Apache Arrow C++ and, on Linux, the OpenSSL development package
+- Apache Arrow C++, libclang (for the RocksDB bindings), and the OpenSSL development package on Linux
 
 ## Build
 
@@ -276,9 +276,9 @@ Streaming follows only the partitions and buckets in the captured boundary. A pa
 later needs a new capture. On `PartitionsDropped`, remove the retired buckets from the
 checkpoint; their last consumed offsets do not guarantee that the reader reached the end.
 
-For PK bootstrap, the C++ build supports a Paimon baseline or a complete Fluss log.
-If a bucket needs a KV snapshot because it lacks a lake baseline and its log has been
-truncated, the read fails. The C++ build does not enable the Rust KV snapshot reader.
+For each PK bucket, bounded reads and streaming bootstrap use the baseline captured in
+the context: a readable Paimon snapshot, a Fluss KV snapshot, or the complete log.
+A KV snapshot must remain available until the reader downloads it.
 
 PK streaming requires FULL images. Both phases return exactly the requested columns.
 Request key columns explicitly for a keyed sink. FULL preserves matching change images, including

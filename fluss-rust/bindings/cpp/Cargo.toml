@@ -32,7 +32,7 @@ arrow = { workspace = true, features = ["ffi"] }
 bigdecimal = { workspace = true }
 cxx = "1.0"
 fluss = { workspace = true, features = ["storage-all"] }
-fluss-lake = { path = "../../crates/fluss-lake", features = ["paimon"] }
+fluss-lake = { path = "../../crates/fluss-lake", features = ["paimon", "kv-snapshot"] }
 futures = "0.3"
 prost = "0.14"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }

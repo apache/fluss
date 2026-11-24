@@ -178,9 +178,9 @@ Streaming follows only the partitions and buckets in the captured boundary. A pa
 later needs a new capture. On `PartitionsDropped`, remove the retired buckets from the
 checkpoint; their last consumed offsets do not guarantee that the reader reached the end.
 
-For PK bootstrap, the C++ build supports a Paimon baseline or a complete Fluss log.
-If a bucket needs a KV snapshot because it lacks a lake baseline and its log has been
-truncated, the read fails. The C++ build does not enable the Rust KV snapshot reader.
+For each PK bucket, bounded reads and streaming bootstrap use the baseline captured in
+the context: a readable Paimon snapshot, a Fluss KV snapshot, or the complete log.
+A KV snapshot must remain available until the reader downloads it.
 
 ## `TableScan`
 

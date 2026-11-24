@@ -48,6 +48,7 @@ base64@0.21.7		X									X
 base64@0.22.1		X									X							
 base64@0.23.1		X									X							
 bigdecimal@0.4.10		X									X							
+bindgen@0.72.1					X													
 bitflags@2.11.0		X									X							
 bitpacking@0.9.3											X							
 bitvec@1.0.1											X							
@@ -66,12 +67,15 @@ bytemuck@1.25.2		X									X					X
 byteorder@1.5.0											X				X			
 bytes@1.11.1											X							
 bzip2@0.6.1		X									X							
+bzip2-sys@0.1.13+1.0.8		X									X							
 cc@1.2.59		X									X							
 cedarwood@0.5.0				X														
 census@0.4.2											X							
+cexpr@0.6.0		X									X							
 cfg-if@1.0.4		X									X							
 chrono@0.4.44		X									X							
 chrono-tz@0.10.4		X									X							
+clang-sys@1.9.1		X																
 clap@4.6.0		X									X							
 clap_builder@4.6.0		X									X							
 clap_derive@4.6.0		X									X							
@@ -169,6 +173,7 @@ generic-array@0.14.7											X
 getrandom@0.2.17		X									X							
 getrandom@0.3.4		X									X							
 getrandom@0.4.2		X									X							
+glob@0.3.4		X									X							
 gloo-timers@0.3.0		X									X							
 h2@0.4.13											X							
 half@2.7.1		X									X							
@@ -218,6 +223,7 @@ inventory@0.3.24		X									X
 ipnet@2.12.0		X									X							
 iri-string@0.7.12		X									X							
 is_terminal_polyfill@1.70.2		X									X							
+itertools@0.13.0		X									X							
 itertools@0.14.0		X									X							
 itoa@1.0.18		X									X							
 jieba-macros@0.10.4											X							
@@ -244,11 +250,14 @@ libbz2-rs-sys@0.2.6																	X
 libc@0.2.184		X									X							
 libflate@2.3.2											X							
 libflate_lz77@2.3.0											X							
+libloading@0.8.9									X									
 libloading@0.9.0									X									
 liblzma@0.4.9		X									X							
 liblzma-sys@0.4.9		X									X							
 libm@0.2.16											X							
 libredox@0.1.15											X							
+librocksdb-sys@0.17.3+10.4.2		X			X						X							
+libz-sys@1.1.31		X									X							
 link-cplusplus@1.0.12		X									X							
 linked-hash-map@0.5.6		X									X							
 linux-raw-sys@0.12.1		X	X								X							
@@ -257,6 +266,7 @@ lock_api@0.4.14		X									X
 log@0.4.35		X									X							
 lru@0.16.4											X							
 lru@0.18.5											X							
+lz4-sys@1.11.1+lz4-1.10.0											X							
 lz4_flex@0.11.6											X							
 lz4_flex@0.13.1											X							
 lz4_flex@0.14.2											X							
@@ -382,6 +392,7 @@ reqwest@0.13.5		X									X
 ring@0.17.14		X							X									
 rle-decode-fast@1.0.3		X									X							
 roaring@0.11.5		X									X							
+rocksdb@0.24.0		X																
 rust-ini@0.21.3											X							
 rust-stemmers@1.2.0					X						X							
 rustc-hash@2.1.2		X									X							
