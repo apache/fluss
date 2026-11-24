@@ -1476,7 +1476,7 @@ fn resolve_environment_variable(variable: &str) -> Result<ResolvedKey, ConfigErr
     }
     if let Some((id, rest)) = suffix
         .strip_prefix("TLS__PROFILE__")
-        .and_then(|rest| rest.split_once("__"))
+        .and_then(|rest| rest.rsplit_once("__"))
     {
         let id = id.to_ascii_lowercase();
         if !valid_cluster_id(&id) {
@@ -1991,6 +1991,45 @@ mod tests {
         assert_eq!(config.security.authentication, AuthenticationMode::Trust);
         assert_eq!(config.request_limits, RequestLimitsConfig::default());
         assert!(config.warnings().is_empty());
+    }
+
+    #[test]
+    fn tls_env_matches_file_for_profiles_with_multi_underscore_ids() {
+        for id in ["public", "a_b", "a__b", "a__b__c", "a_", "a__"] {
+            let contents = format!(
+                "gateway.tls.profiles: {id}\n\
+                 gateway.tls.profile.{id}.certificate-file: /certs/{id}.pem\n\
+                 gateway.tls.profile.{id}.private-key-file: /certs/{id}.key\n\
+                 gateway.tls.profile.{id}.handshake-timeout: 3s\n\
+                 gateway.rest.tls.profile: {id}\n"
+            );
+            let expected = load_file(&contents).expect("parse file config");
+            let env_key = |suffix: &str| format!("FLUSS_GATEWAY__TLS__PROFILE__{}", suffix);
+            let mut env = BTreeMap::new();
+            env.insert("FLUSS_GATEWAY__TLS__PROFILES".to_string(), id.to_string());
+            env.insert(
+                env_key(&format!("{}__CERTIFICATE_FILE", id.to_ascii_uppercase())),
+                format!("/certs/{id}.pem"),
+            );
+            env.insert(
+                env_key(&format!("{}__PRIVATE_KEY_FILE", id.to_ascii_uppercase())),
+                format!("/certs/{id}.key"),
+            );
+            env.insert(
+                env_key(&format!("{}__HANDSHAKE_TIMEOUT", id.to_ascii_uppercase())),
+                "3s".to_string(),
+            );
+            env.insert(
+                "FLUSS_GATEWAY__REST__TLS__PROFILE".to_string(),
+                id.to_string(),
+            );
+            let actual = load(None, &env, &CliOverrides::default()).expect("parse env config");
+            assert_eq!(
+                actual, expected,
+                "ID {id:?} env config should equal file config"
+            );
+            assert_eq!(actual.server.rest.tls_profile.as_deref(), Some(id));
+        }
     }
 
     #[test]
