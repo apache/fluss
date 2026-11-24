@@ -163,7 +163,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
@@ -179,10 +178,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Repl
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
-import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
-import static org.apache.fluss.utils.concurrent.FutureUtils.completedExceptionally;
-import static org.apache.fluss.utils.concurrent.FutureUtils.runAsync;
 
 /** An implementation for {@link EventProcessor}. */
 @NotThreadSafe
@@ -362,30 +358,18 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             return;
         }
 
-        registerImportedSnapshot(event)
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure == null) {
-                                event.result.complete(null);
-                            } else {
-                                event.result.completeExceptionally(
-                                        new UnknownServerException(
-                                                "BulkLoad snapshot "
-                                                        + snapshot.getSnapshotID()
-                                                        + " for "
-                                                        + bucket
-                                                        + " was committed, but local registration failed.",
-                                                stripCompletionException(failure)));
-                            }
-                        });
-    }
-
-    private CompletableFuture<Void> registerImportedSnapshot(CommitBulkLoadBucketEvent event) {
         try {
-            return runAsync(
-                    () -> event.snapshotStore.registerImportedSnapshot(event.snapshot), ioExecutor);
-        } catch (RejectedExecutionException rejected) {
-            return completedExceptionally(rejected);
+            event.snapshotStore.registerImportedSnapshot(snapshot);
+            event.result.complete(null);
+        } catch (Exception failure) {
+            event.result.completeExceptionally(
+                    new UnknownServerException(
+                            "BulkLoad snapshot "
+                                    + snapshot.getSnapshotID()
+                                    + " for "
+                                    + bucket
+                                    + " was committed, but local registration failed.",
+                            failure));
         }
     }
 
@@ -486,17 +470,15 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             notifyOnlineReplicas(bucket);
         }
         if (verification.committed) {
-            registerImportedSnapshot(commit)
-                    .whenComplete(
-                            (ignored, failure) -> {
-                                if (failure != null) {
-                                    LOG.warn(
-                                            "Failed to register committed BulkLoad snapshot {} for {}.",
-                                            commit.snapshot.getSnapshotID(),
-                                            bucket,
-                                            stripCompletionException(failure));
-                                }
-                            });
+            try {
+                commit.snapshotStore.registerImportedSnapshot(commit.snapshot);
+            } catch (Exception failure) {
+                LOG.warn(
+                        "Failed to register committed BulkLoad snapshot {} for {}.",
+                        commit.snapshot.getSnapshotID(),
+                        bucket,
+                        failure);
+            }
         }
     }
 

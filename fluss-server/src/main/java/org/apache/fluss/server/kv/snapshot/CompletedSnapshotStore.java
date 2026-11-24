@@ -43,7 +43,6 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -139,8 +138,7 @@ public class CompletedSnapshotStore {
                     long id = snapshot.getSnapshotID();
                     TableBucket bucket = snapshot.getTableBucket();
                     if (!holdsSnapshot(id)) {
-                        // A repeated callback may arrive after retention removed the durable
-                        // handle.
+                        // Delayed verification can find an import already retired by retention.
                         if (!completedSnapshotHandleStore.get(bucket, id).isPresent()) {
                             return;
                         }
@@ -149,8 +147,7 @@ public class CompletedSnapshotStore {
                     Optional<CompletedSnapshotHandle> selected =
                             completedSnapshotHandleStore.getRecoverySnapshot(bucket);
                     if (selected.isPresent()) {
-                        long selectedId = selected.get().getSnapshotId();
-                        recoverySnapshotId = selectedId;
+                        recoverySnapshotId = selected.get().getSnapshotId();
                         // An import allocated earlier can retire ordinary snapshots with higher
                         // IDs.
                         retainSnapshots(Long.MAX_VALUE, null);
@@ -192,18 +189,6 @@ public class CompletedSnapshotStore {
             @Nullable Long previousRecoverySnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
-        // The leader can checkpoint a published import before its local registration runs.
-        // Adopt that predecessor before retention can release any of its shared SSTs.
-        if (previousRecoverySnapshotId != null
-                && previousRecoverySnapshotId != NO_SNAPSHOT_ID
-                && !holdsSnapshot(previousRecoverySnapshotId)) {
-            Optional<CompletedSnapshotHandle> selected =
-                    completedSnapshotHandleStore.getRecoverySnapshot(snapshot.getTableBucket());
-            if (selected.isPresent()
-                    && selected.get().getSnapshotId() == previousRecoverySnapshotId) {
-                trackSnapshot(selected.get().retrieveCompleteSnapshot());
-            }
-        }
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
