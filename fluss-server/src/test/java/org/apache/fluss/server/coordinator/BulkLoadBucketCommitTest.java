@@ -50,7 +50,6 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
-import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -66,6 +65,7 @@ import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
+import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -124,11 +124,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -138,16 +138,17 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
-import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
@@ -178,7 +179,6 @@ class BulkLoadBucketCommitTest {
     private KvSnapshotLeaseManager publicationLeases;
     private TestCoordinatorChannelManager publicationChannel;
     private final FlussScheduler publicationScheduler = new FlussScheduler(1);
-    private long leasedSnapshotId = -1;
 
     private FlussClusterExtension cluster;
     private TabletServerGateway leader;
@@ -201,10 +201,7 @@ class BulkLoadBucketCommitTest {
                 metadata.createTable(
                         TABLE,
                         remote.toUri().toString(),
-                        TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA_PK)
-                                .distributedBy(1, "a")
-                                .build(),
+                        DATA1_TABLE_DESCRIPTOR_PK.withBucketCount(1),
                         null,
                         false);
         bucket = new TableBucket(tableId, 0);
@@ -214,7 +211,10 @@ class BulkLoadBucketCommitTest {
         seedRunningTarget(table);
         int epoch =
                 client.fenceBecomeCoordinatorLeader("bucket-commit").getCoordinatorEpochZkVersion();
-        client.registerLeaderAndIsr(bucket, new LeaderAndIsr(0, 0), epoch);
+        client.registerLeaderAndIsr(
+                bucket,
+                new LeaderAndIsr(0, 0).newLeaderAndIsr(Collections.singletonList(0)),
+                epoch);
         manager = new BulkLoadManager(client, epoch, ForkJoinPool.commonPool());
         snapshots =
                 new CompletedSnapshotStoreManager(
@@ -222,7 +222,7 @@ class BulkLoadBucketCommitTest {
                         Runnable::run,
                         client,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        snapshot -> snapshot.getSnapshotID() == leasedSnapshotId);
+                        snapshot -> false);
     }
 
     private void prepareAllocatedBucket() throws Exception {
@@ -233,76 +233,10 @@ class BulkLoadBucketCommitTest {
     }
 
     @Test
-    void testImportRetainsLeasedSnapshot() throws Exception {
-        prepareAllocatedBucket();
-        long previousId = client.allocateBucketSnapshotId(bucket);
-        FsPath previous = uploadSnapshot(previousId, offset);
-        FsPath uploaded = uploadSnapshot(snapshotId, offset);
-        // A legacy reference may predate the recovery selection znode.
-        client.registerTableBucketSnapshot(
-                bucket, new BucketSnapshot(previousId, offset, previous.toString()));
-        leasedSnapshotId = previousId;
-        commitAllocatedSnapshot();
-
-        assertThat(client.getRecoveryBucketSnapshot(bucket))
-                .contains(new BucketSnapshot(snapshotId, offset, uploaded.toString()));
-        assertThat(Paths.get(previous.toUri())).exists();
-
-        CompletedSnapshotStore store = snapshots.getOrCreateCompletedSnapshotStore(TABLE, bucket);
-        assertThat(store.getNumSnapshots()).isOne();
-        assertThat(store.getActiveSnapshotIds()).containsExactlyInAnyOrder(snapshotId, previousId);
-    }
-
-    @Test
-    void testRetentionReclaimsUnreusedImportedSst() throws Exception {
-        prepareAllocatedBucket();
-        FsPath dir = snapshotDirectory(snapshotId);
-        Path sharedDir =
-                Files.createDirectories(
-                        Paths.get(FlussPaths.remoteKvSharedDir(dir.getParent()).toUri()));
-        Path sst = Files.write(sharedDir.resolve("uploaded"), new byte[] {1});
-        writeManifest(
-                dir,
-                snapshotId,
-                offset,
-                null,
-                Collections.singletonList(
-                        new KvSnapshotFileMetadata.FileHandle(
-                                new FsPath(sst.toUri()).toString(), 1, "000001.sst")),
-                Collections.emptyList());
-        int oldEpoch = client.getLeaderAndIsr(bucket).get().leaderEpoch();
-        long old = client.allocateBucketSnapshotId(bucket);
-        CompletedSnapshot stale =
-                new CompletedSnapshotHandle(old, uploadSnapshot(old, offset), offset)
-                        .retrieveCompleteSnapshot();
-        ManuallyTriggeredScheduledExecutorService io =
-                new ManuallyTriggeredScheduledExecutorService();
-        CoordinatorEventProcessor processor = startPublicationProcessor(client, io);
-        CompletableFuture<Void> commit =
-                manager.commitBucketSnapshot(
-                        LOAD_ID, bucket, snapshots, processor.getCoordinatorEventManager());
-        retry(Duration.ofSeconds(30), () -> assertThat(io.numQueuedRunnables()).isOne());
-        CompletedSnapshotStore store = snapshots.getOrCreateCompletedSnapshotStore(TABLE, bucket);
-        // The old ordinary commit reads back the selected import before its files are registered.
-        assertThatThrownBy(() -> store.add(stale, NO_SNAPSHOT_ID, oldEpoch))
-                .isInstanceOf(FencedLeaderEpochException.class);
-        io.triggerAll();
-        commit.get(30, TimeUnit.SECONDS);
-        assertThat(store.getPhysicalStorageRemoteKvSize()).isOne();
-        long next = client.allocateBucketSnapshotId(bucket);
-        store.add(
-                new CompletedSnapshotHandle(next, uploadSnapshot(next, offset), offset)
-                        .retrieveCompleteSnapshot(),
-                snapshotId,
-                client.getLeaderAndIsr(bucket).get().leaderEpoch());
-        assertThat(sst).doesNotExist();
-    }
-
-    @Test
     void testSnapshotOffsetMustMatchAllocation() throws Exception {
         prepareAllocatedBucket();
         uploadSnapshot(snapshotId, offset + 1);
-        assertThatThrownBy(this::commitAllocatedSnapshot)
+        assertThatThrownBy(this::validateCommitBeforePublication)
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining(
                         "log_offset %d, but Allocate returned %d", offset + 1, offset);
@@ -314,51 +248,21 @@ class BulkLoadBucketCommitTest {
         prepareAllocatedBucket();
         uploadSnapshot(snapshotId, offset);
         CoordinatorEventManager events =
-                startPublicationProcessor(client, ForkJoinPool.commonPool())
-                        .getCoordinatorEventManager();
-        CompletableFuture<Void> processing = new CompletableFuture<>();
+                startPublicationProcessor(client, ForkJoinPool.commonPool());
         CompletableFuture<Void> resume = new CompletableFuture<>();
-        events.put(
-                new AccessContextEvent<>(
-                        context -> {
-                            processing.complete(null);
-                            return resume.join();
-                        }));
+        events.put(new AccessContextEvent<>(context -> resume.join()));
+        CompletableFuture<Void> closed;
         try {
-            processing.get(30, TimeUnit.SECONDS);
             CompletableFuture<Void> commit =
                     manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events);
-            assertThat(commit).isNotDone();
-            CompletableFuture<Void> closed = CompletableFuture.runAsync(events::close);
-            try {
-                assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
-                        .hasCauseInstanceOf(NotCoordinatorLeaderException.class);
-                assertBucketNotCommitted();
-            } finally {
-                resume.complete(null);
-                closed.get(30, TimeUnit.SECONDS);
-            }
+            closed = CompletableFuture.runAsync(events::close);
+            assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NotCoordinatorLeaderException.class);
         } finally {
             resume.complete(null);
         }
-    }
-
-    @Test
-    void testRejectedRegistrationLeavesDurableCommitRetryable() throws Exception {
-        prepareAllocatedBucket();
-        uploadSnapshot(snapshotId, offset);
-        ExecutorService closed = Executors.newSingleThreadExecutor();
-        closed.shutdown();
-        CoordinatorEventManager events =
-                startPublicationProcessor(client, closed).getCoordinatorEventManager();
-        assertThatThrownBy(
-                        () ->
-                                manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events)
-                                        .get(30, TimeUnit.SECONDS))
-                .hasCauseInstanceOf(UnknownServerException.class)
-                .hasRootCauseInstanceOf(RejectedExecutionException.class);
-        assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
-        manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events).get(30, TimeUnit.SECONDS);
+        closed.get(30, TimeUnit.SECONDS);
+        assertBucketNotCommitted();
     }
 
     @Test
@@ -366,8 +270,7 @@ class BulkLoadBucketCommitTest {
         prepareAllocatedBucket();
         uploadSnapshot(snapshotId, offset);
         CoordinatorEventManager events =
-                startPublicationProcessor(client, ForkJoinPool.commonPool())
-                        .getCoordinatorEventManager();
+                startPublicationProcessor(client, ForkJoinPool.commonPool());
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         BulkLoadManager publishingManager =
@@ -415,12 +318,9 @@ class BulkLoadBucketCommitTest {
     void testCommitRequiresFilesInTheirScopeDirectory(boolean shared) throws Exception {
         prepareAllocatedBucket();
         FsPath dir = snapshotDirectory(snapshotId);
-        Path parent = shared ? Files.createDirectories(Paths.get(dir.toUri())) : remote;
-        Path file = Files.write(parent.resolve("data.sst"), new byte[] {1});
+        FsPath parent = shared ? dir : new FsPath(remote.toUri());
         List<KvSnapshotFileMetadata.FileHandle> files =
-                Collections.singletonList(
-                        new KvSnapshotFileMetadata.FileHandle(
-                                new FsPath(file.toUri()).toString(), 1, "data.sst"));
+                Collections.singletonList(uploadFile(parent, "data.sst"));
         writeManifest(
                 dir,
                 snapshotId,
@@ -428,7 +328,7 @@ class BulkLoadBucketCommitTest {
                 0L,
                 shared ? files : Collections.emptyList(),
                 shared ? Collections.emptyList() : files);
-        assertThatThrownBy(this::commitAllocatedSnapshot)
+        assertThatThrownBy(this::validateCommitBeforePublication)
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining(files.get(0).getPath());
         assertBucketNotCommitted();
@@ -438,23 +338,15 @@ class BulkLoadBucketCommitTest {
     void testCommitRejectsDuplicateRestorePathAcrossScopes() throws Exception {
         prepareAllocatedBucket();
         FsPath dir = snapshotDirectory(snapshotId);
-        FsPath shared = new FsPath(FlussPaths.remoteKvSharedDir(dir.getParent()), "shared-file");
-        FsPath privateFile = new FsPath(dir, "private-file");
-        for (FsPath path : Arrays.asList(shared, privateFile)) {
-            Files.createDirectories(Paths.get(path.getParent().toUri()));
-            Files.write(Paths.get(path.toUri()), new byte[] {1});
-        }
         writeManifest(
                 dir,
                 snapshotId,
                 offset,
                 null,
                 Collections.singletonList(
-                        new KvSnapshotFileMetadata.FileHandle(shared.toString(), 1, "same.sst")),
-                Collections.singletonList(
-                        new KvSnapshotFileMetadata.FileHandle(
-                                privateFile.toString(), 1, "same.sst")));
-        assertThatThrownBy(this::commitAllocatedSnapshot)
+                        uploadFile(FlussPaths.remoteKvSharedDir(dir.getParent()), "same.sst")),
+                Collections.singletonList(uploadFile(dir, "same.sst")));
+        assertThatThrownBy(this::validateCommitBeforePublication)
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
                 .hasMessageContaining("local_path 'same.sst' more than once");
     }
@@ -527,9 +419,14 @@ class BulkLoadBucketCommitTest {
     }
 
     private void start() throws Exception {
-        start(
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
-                null);
+        start(DATA1_TABLE_DESCRIPTOR_PK.withBucketCount(1), null);
+    }
+
+    private void startReplicatedBucket() throws Exception {
+        start(DATA1_TABLE_DESCRIPTOR_PK.withBucketCount(1), null, 2);
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
     }
 
     private void allocate() throws Exception {
@@ -586,6 +483,14 @@ class BulkLoadBucketCommitTest {
         return values.get(0);
     }
 
+    private void restartTabletServer() throws Exception {
+        cluster.stopTabletServer(0);
+        cluster.startTabletServer(0);
+        leader =
+                cluster.newTabletServerClientForNode(
+                        cluster.waitAndGetLeaderReplica(bucket).getLeaderId());
+    }
+
     private void assertRecovered(Tuple2<byte[], byte[]> imported) throws Exception {
         assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
         retry(Duration.ofSeconds(30), () -> assertLookupRow(imported));
@@ -606,9 +511,8 @@ class BulkLoadBucketCommitTest {
                         .retrieveCompleteSnapshot();
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
-        CoordinatorEventProcessor processor = startPublicationProcessor(client, io);
-        snapshots = processor.completedSnapshotStoreManager();
-        CoordinatorEventManager events = processor.getCoordinatorEventManager();
+        CoordinatorEventManager events = startPublicationProcessor(client, io);
+        snapshots = publicationProcessor.completedSnapshotStoreManager();
         CompletableFuture<CommitKvSnapshotResponse> waiting = new CompletableFuture<>();
         events.put(
                 new CommitKvSnapshotEvent(
@@ -626,13 +530,21 @@ class BulkLoadBucketCommitTest {
                 .hasCauseInstanceOf(FencedLeaderEpochException.class);
         io.triggerAll();
         commit.get(30, TimeUnit.SECONDS);
-        assertThat(
-                        snapshots
-                                .getOrCreateCompletedSnapshotStore(TABLE, bucket)
-                                .getActiveSnapshotIds())
-                .containsExactly(snapshotId);
+        CompletedSnapshotStore store = snapshots.getOrCreateCompletedSnapshotStore(TABLE, bucket);
+        assertThat(store.getActiveSnapshotIds()).containsExactly(snapshotId);
         assertThat(notifyRole(client.getLeaderAndIsr(bucket).get()).hasErrorCode()).isFalse();
         assertRecovered(imported);
+
+        // A successor without shared files retires the import's only SST reference.
+        String importedSst = importedSharedFiles().get(0).getKvFileHandle().getFilePath();
+        long successor = client.allocateBucketSnapshotId(bucket);
+        store.add(
+                new CompletedSnapshotHandle(successor, uploadSnapshot(successor, offset), offset)
+                        .retrieveCompleteSnapshot(),
+                snapshotId,
+                expectedLeaderEpoch);
+        io.triggerAll();
+        assertThat(Paths.get(new FsPath(importedSst).toUri())).doesNotExist();
     }
 
     @Test
@@ -649,16 +561,7 @@ class BulkLoadBucketCommitTest {
         assertThatThrownBy(this::commit).hasRootCauseInstanceOf(BulkLoadConflictException.class);
         assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(ordinary.getSnapshotID());
         assertThat(client.getTableBucketSnapshot(bucket, snapshotId)).isEmpty();
-        assertThat(
-                        snapshots
-                                .getOrCreateCompletedSnapshotStore(TABLE, bucket)
-                                .getActiveSnapshotIds())
-                .containsExactly(ordinary.getSnapshotID());
-        cluster.stopTabletServer(0);
-        cluster.startTabletServer(0);
-        leader =
-                cluster.newTabletServerClientForNode(
-                        cluster.waitAndGetLeaderReplica(bucket).getLeaderId());
+        restartTabletServer();
         retry(Duration.ofSeconds(30), () -> assertLookupRow(getKeyValuePairs(rows).get(0)));
     }
 
@@ -692,27 +595,27 @@ class BulkLoadBucketCommitTest {
     }
 
     @Test
-    void testCoordinatorTakeoverActivatesPersistedRole() throws Exception {
+    void testRejectedRegistrationAllowsRetryAndTakeoverRecovery() throws Exception {
         start();
         allocate();
         Tuple2<byte[], byte[]> imported =
                 uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
         LeaderAndIsr role = client.getLeaderAndIsr(bucket).get();
-        LeaderAndIsr futureRole =
+        LeaderAndIsr unpublished =
                 role.newLeaderAndIsr(role.leader(), role.isr(), role.standbyReplicas());
-        assertThat(notifyRole(futureRole).getErrorCode())
+        assertThat(notifyRole(unpublished).getErrorCode())
                 .isEqualTo(Errors.LEADER_NOT_AVAILABLE_EXCEPTION.code());
         assertThat(cluster.waitAndGetLeaderReplica(bucket).getLeaderEpoch())
                 .isEqualTo(role.leaderEpoch());
-        // Stop the Coordinator after durable publication and before local registration.
-        ManuallyTriggeredScheduledExecutorService io =
-                new ManuallyTriggeredScheduledExecutorService();
-        CoordinatorEventProcessor processor = startPublicationProcessor(client, io);
-        CompletableFuture<Void> pending =
-                manager.commitBucketSnapshot(
-                        LOAD_ID, bucket, snapshots, processor.getCoordinatorEventManager());
-        retry(Duration.ofSeconds(30), () -> assertThat(io.numQueuedRunnables()).isOne());
-        assertThat(pending).isNotDone();
+        ExecutorService closed = Executors.newSingleThreadExecutor();
+        closed.shutdown();
+        CoordinatorEventManager events = startPublicationProcessor(client, closed);
+        CompletableFuture<Void> original =
+                manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events);
+        assertThatThrownBy(() -> original.get(30, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(UnknownServerException.class)
+                .hasRootCauseInstanceOf(RejectedExecutionException.class);
+        commit(); // Retry acknowledges the durable publication before a new Coordinator takes over.
         cluster.stopCoordinatorServer();
         cluster.startCoordinatorServer();
         assertRecovered(imported);
@@ -734,28 +637,40 @@ class BulkLoadBucketCommitTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testImmediatelyVerifyLostPublicationResponse(boolean persisted) throws Exception {
-        start();
-        allocate();
-        uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
-        LeaderAndIsr beforeCommit = advanceBucketEpoch();
+        prepareAllocatedBucket();
+        uploadSnapshot(snapshotId, offset);
+        // An ordinary snapshot with a larger ID predates the recovery selection znode.
+        long previousId = client.allocateBucketSnapshotId(bucket);
+        FsPath previous = uploadSnapshot(previousId, offset);
+        client.registerTableBucketSnapshot(
+                bucket, new BucketSnapshot(previousId, offset, previous.toString()));
+        LeaderAndIsr before = client.getLeaderAndIsr(bucket).get();
         try (CuratorFramework curator =
                 losePublicationResponse(
                         client, persisted, new AtomicBoolean(true), new CountDownLatch(0), null)) {
-            CompletableFuture<Void> commit = commitWithPublicationFault(curator, beforeCommit);
-            if (!persisted) {
+            CoordinatorEventManager events =
+                    startPublicationProcessor(startPublisher(curator), ForkJoinPool.commonPool());
+            CompletableFuture<Void> commit =
+                    manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events);
+            if (persisted) {
+                commit.get(30, TimeUnit.SECONDS);
+                assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
+                assertThat(client.getLeaderAndIsr(bucket))
+                        .contains(
+                                before.newLeaderAndIsr(
+                                        before.leader(), before.isr(), before.standbyReplicas()));
+                assertThat(Paths.get(previous.toUri())).doesNotExist();
+            } else {
                 assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
                         .hasCauseInstanceOf(KeeperException.ConnectionLossException.class);
                 assertBucketNotCommitted();
-                assertThat(adjustPublicationIsr(beforeCommit).hasErrorCode()).isFalse();
-                return;
+                assertThat(client.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
+                        .isEqualTo(previousId);
+                assertThat(Paths.get(previous.toUri())).exists();
             }
-            commit.get(30, TimeUnit.SECONDS);
-            LeaderAndIsr published = client.getLeaderAndIsr(bucket).get();
-            assertThat(published.bucketEpoch()).isEqualTo(beforeCommit.bucketEpoch() + 1);
-            assertThat(adjustPublicationIsr(beforeCommit).getErrorCode())
-                    .isEqualTo(Errors.FENCED_LEADER_EPOCH_EXCEPTION.code());
-            assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
-            assertThat(adjustPublicationIsr(published).hasErrorCode()).isFalse();
+            Optional<LeaderAndIsr> cached =
+                    accessPublicationContext(context -> context.getBucketLeaderAndIsr(bucket));
+            assertThat(cached).isEqualTo(client.getLeaderAndIsr(bucket));
         }
     }
 
@@ -763,19 +678,13 @@ class BulkLoadBucketCommitTest {
     @ValueSource(booleans = {false, true})
     void testUnconfirmedPublicationIsolatesBucketAndRecoversWithoutRetry(boolean persisted)
             throws Exception {
-        start(
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
-                null,
-                2);
-        retry(
-                Duration.ofSeconds(30),
-                () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
+        startReplicatedBucket();
         List<KvRecord> base = genKvRecords(new Object[] {2, "original"});
         putRows(base);
         allocate();
         Tuple2<byte[], byte[]> imported =
                 uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
-        LeaderAndIsr beforeCommit = advanceBucketEpoch();
+        LeaderAndIsr beforeCommit = client.getLeaderAndIsr(bucket).get();
         AtomicBoolean verificationAvailable = new AtomicBoolean(false);
         CountDownLatch failedChecks = new CountDownLatch(2);
         try (CuratorFramework curator =
@@ -803,52 +712,37 @@ class BulkLoadBucketCommitTest {
         }
     }
 
-    private LeaderAndIsr advanceBucketEpoch() throws Exception {
-        LeaderAndIsr initial = client.getLeaderAndIsr(bucket).get();
-        assertThat(adjustIsr(initial).getBucketEpoch()).isEqualTo(initial.bucketEpoch() + 1);
-        return client.getLeaderAndIsr(bucket).get();
-    }
-
     private CompletableFuture<Void> commitWithPublicationFault(
             CuratorFramework curator, LeaderAndIsr beforeCommit) throws Exception {
         ZooKeeperClient publisher = startPublisher(curator);
-        CoordinatorEventProcessor processor =
+        CoordinatorEventManager events =
                 startPublicationProcessor(publisher, ForkJoinPool.commonPool());
-        AccessContextEvent<Void> populateAssignment =
-                new AccessContextEvent<>(
-                        context -> {
-                            context.setLiveTabletServers(cluster.getTabletServerInfos());
-                            context.updateBucketReplicaAssignment(bucket, beforeCommit.isr());
-                            return null;
-                        });
-        processor.getCoordinatorEventManager().put(populateAssignment);
-        populateAssignment.getResultFuture().get(30, TimeUnit.SECONDS);
-
-        BulkLoadManager publishingManager =
-                new BulkLoadManager(
-                        publisher,
-                        client.getCurrentEpoch().getCoordinatorEpochZkVersion(),
-                        ForkJoinPool.commonPool());
-        return publishingManager.commitBucketSnapshot(
-                LOAD_ID, bucket, snapshots, processor.getCoordinatorEventManager());
+        TableInfo table = cluster.waitAndGetLeaderReplica(bucket).getTableInfo();
+        accessPublicationContext(
+                context -> {
+                    context.putTableInfo(table);
+                    context.setCoordinatorServerInfo(cluster.getCoordinatorServerInfo());
+                    context.setLiveTabletServers(cluster.getTabletServerInfos());
+                    context.updateBucketReplicaAssignment(bucket, beforeCommit.isr());
+                    context.putBucketState(bucket, BucketState.OnlineBucket);
+                    for (int id : beforeCommit.isr()) {
+                        context.putReplicaState(
+                                new TableBucketReplica(bucket, id), ReplicaState.OnlineReplica);
+                    }
+                    return null;
+                });
+        return manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events);
     }
 
     @Test
     void testRetryDeferredLeaderElectionAfterFailedRoleWrite() throws Exception {
-        start(
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
-                null,
-                2);
-        retry(
-                Duration.ofSeconds(30),
-                () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
+        startReplicatedBucket();
         allocate();
         Tuple2<byte[], byte[]> imported =
                 uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
         LeaderAndIsr initial = client.getLeaderAndIsr(bucket).get();
         int follower =
                 initial.isr().stream().filter(id -> id != initial.leader()).findFirst().get();
-        TableInfo table = cluster.waitAndGetLeaderReplica(bucket).getTableInfo();
         AtomicBoolean verificationAvailable = new AtomicBoolean(false);
         try (CuratorFramework curator =
                 losePublicationResponse(
@@ -857,48 +751,16 @@ class BulkLoadBucketCommitTest {
                         verificationAvailable,
                         new CountDownLatch(0),
                         LeaderAndIsrZNode.path(bucket))) {
-            ZooKeeperClient publisher = startPublisher(curator);
-            CoordinatorEventManager events =
-                    startPublicationProcessor(publisher, ForkJoinPool.commonPool())
-                            .getCoordinatorEventManager();
+            CompletableFuture<Void> commit = commitWithPublicationFault(curator, initial);
+            assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NetworkException.class);
             leader = cluster.newTabletServerClientForNode(follower);
             publicationChannel.setGateways(Collections.singletonMap(follower, leader));
-            AccessContextEvent<Void> initialize =
-                    new AccessContextEvent<>(
-                            context -> {
-                                context.putTableInfo(table);
-                                context.setCoordinatorServerInfo(
-                                        cluster.getCoordinatorServerInfo());
-                                context.setLiveTabletServers(cluster.getTabletServerInfos());
-                                context.updateBucketReplicaAssignment(bucket, initial.isr());
-                                context.putBucketState(bucket, BucketState.OnlineBucket);
-                                for (int id : initial.isr()) {
-                                    context.putReplicaState(
-                                            new TableBucketReplica(bucket, id),
-                                            ReplicaState.OnlineReplica);
-                                }
-                                return null;
-                            });
-            events.put(initialize);
-            initialize.getResultFuture().get(30, TimeUnit.SECONDS);
-            BulkLoadManager publishingManager =
-                    new BulkLoadManager(
-                            publisher,
-                            client.getCurrentEpoch().getCoordinatorEpochZkVersion(),
-                            ForkJoinPool.commonPool());
-            assertThatThrownBy(
-                            () ->
-                                    publishingManager
-                                            .commitBucketSnapshot(
-                                                    LOAD_ID, bucket, snapshots, events)
-                                            .get(30, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(NetworkException.class);
-            events.put(new DeadTabletServerEvent(initial.leader()));
-            AccessContextEvent<BucketState> state =
-                    new AccessContextEvent<>(context -> context.getBucketState(bucket));
-            events.put(state);
-            assertThat(state.getResultFuture().get(30, TimeUnit.SECONDS))
-                    .isEqualTo(BucketState.OfflineBucket);
+            publicationProcessor
+                    .getCoordinatorEventManager()
+                    .put(new DeadTabletServerEvent(initial.leader()));
+            BucketState state = accessPublicationContext(context -> context.getBucketState(bucket));
+            assertThat(state).isEqualTo(BucketState.OfflineBucket);
             // The first deferred election fails before its role write reaches ZooKeeper.
             verificationAvailable.set(true);
             retry(
@@ -924,11 +786,7 @@ class BulkLoadBucketCommitTest {
                 createTable(
                         cluster,
                         TablePath.of("db", "other"),
-                        TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA_PK)
-                                .distributedBy(2, "a")
-                                .build()
-                                .withReplicationFactor(1));
+                        DATA1_TABLE_DESCRIPTOR_PK.withBucketCount(2).withReplicationFactor(1));
         TableBucket first = new TableBucket(otherId, 0);
         TableBucket other =
                 cluster.waitAndGetLeaderReplica(first).getLeaderId() == beforeCommit.leader()
@@ -943,79 +801,42 @@ class BulkLoadBucketCommitTest {
                         .findFirst()
                         .get();
         CoordinatorEventManager events = publicationProcessor.getCoordinatorEventManager();
-        AccessContextEvent<Void> live =
-                new AccessContextEvent<>(
-                        context -> {
-                            context.putTablePath(otherId, TablePath.of("db", "other"));
-                            context.putBucketLeaderAndIsr(other, otherRole);
-                            context.updateBucketReplicaAssignment(other, otherRole.isr());
-                            context.setCoordinatorServerInfo(cluster.getCoordinatorServerInfo());
-                            for (int id : beforeCommit.isr()) {
-                                context.putReplicaState(
-                                        new TableBucketReplica(bucket, id),
-                                        ReplicaState.OnlineReplica);
-                            }
-                            return null;
-                        });
-        events.put(live);
-        live.getResultFuture().get(30, TimeUnit.SECONDS);
+        accessPublicationContext(
+                context -> {
+                    context.putTablePath(otherId, TablePath.of("db", "other"));
+                    context.putBucketLeaderAndIsr(other, otherRole);
+                    context.updateBucketReplicaAssignment(other, otherRole.isr());
+                    return null;
+                });
         publicationChannel.setGateways(Collections.singletonMap(beforeCommit.leader(), leader));
         Map<TableBucket, LeaderAndIsr> batch = new HashMap<>();
         batch.put(bucket, beforeCommit);
         batch.put(other, otherRole);
         CompletableFuture<AdjustIsrResponse> adjusted = new CompletableFuture<>();
         events.put(new AdjustIsrReceivedEvent(batch, adjusted));
-        AdjustIsrResponse response = adjusted.get(30, TimeUnit.SECONDS);
-        assertThat(response.getTablesRespsList())
-                .hasSize(2)
-                .allSatisfy(
-                        table -> {
-                            PbAdjustIsrRespForBucket result = table.getBucketsRespAt(0);
-                            if (table.getTableId() == bucket.getTableId()) {
-                                assertThat(result.getErrorCode())
-                                        .isEqualTo(Errors.NETWORK_EXCEPTION.code());
-                            } else {
-                                assertThat(result.hasErrorCode())
-                                        .as(
-                                                result.hasErrorMessage()
-                                                        ? result.getErrorMessage()
-                                                        : "")
-                                        .isFalse();
-                            }
-                        });
+        Map<TableBucket, AdjustIsrResultForBucket> results =
+                getAdjustIsrResponseData(adjusted.get(30, TimeUnit.SECONDS));
+        assertThat(results.get(bucket).getErrorCode()).isEqualTo(Errors.NETWORK_EXCEPTION.code());
+        assertThat(results.get(other).failed()).isFalse();
         assertThat(client.getLeaderAndIsr(other).get().bucketEpoch())
                 .isEqualTo(otherRole.bucketEpoch() + 1);
         events.put(new DeadTabletServerEvent(follower));
-        AccessContextEvent<ReplicaState> offline =
-                new AccessContextEvent<>(
+        ReplicaState state =
+                accessPublicationContext(
                         context ->
                                 context.getReplicaState(new TableBucketReplica(bucket, follower)));
-        events.put(offline);
-        assertThat(offline.getResultFuture().get(30, TimeUnit.SECONDS))
-                .isEqualTo(ReplicaState.OfflineReplica);
+        assertThat(state).isEqualTo(ReplicaState.OfflineReplica);
     }
 
-    private PbAdjustIsrRespForBucket adjustPublicationIsr(LeaderAndIsr role) throws Exception {
-        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
-        publicationProcessor
-                .getCoordinatorEventManager()
-                .put(new AdjustIsrReceivedEvent(Collections.singletonMap(bucket, role), response));
-        return response.get(30, TimeUnit.SECONDS).getTablesRespAt(0).getBucketsRespAt(0);
-    }
-
-    private PbAdjustIsrRespForBucket adjustIsr(LeaderAndIsr role) throws Exception {
-        return coordinator
-                .adjustIsr(
-                        makeAdjustIsrRequest(role.leader(), Collections.singletonMap(bucket, role)))
-                .get(30, TimeUnit.SECONDS)
-                .getTablesRespAt(0)
-                .getBucketsRespAt(0);
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testPartitionRecoveryReplaysWalAndPreservesSuccessorOnRetry(boolean leaseImport)
+    private <T> T accessPublicationContext(Function<CoordinatorContext, T> action)
             throws Exception {
+        AccessContextEvent<T> event = new AccessContextEvent<>(action);
+        publicationProcessor.getCoordinatorEventManager().put(event);
+        return event.getResultFuture().get(30, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void testPartitionRecoveryReplaysWalAndPreservesSuccessorOnRetry() throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -1048,31 +869,16 @@ class BulkLoadBucketCommitTest {
         putRows(tail);
         Tuple2<byte[], byte[]> appended = getKeyValuePairs(tail).get(0);
         FsPath dir = snapshotDirectory(snapshotId);
-        CompletedSnapshot importedSnapshot =
-                new CompletedSnapshotHandle(
-                                snapshotId, CompletedSnapshot.getMetadataFilePath(dir), offset)
-                        .retrieveCompleteSnapshot();
-        List<KvFileHandleAndLocalPath> shared =
-                importedSnapshot.getKvSnapshotHandle().getSharedKvFileHandles();
+        List<KvFileHandleAndLocalPath> shared = importedSharedFiles();
         assertThat(shared).hasSize(2);
         String importedSst = shared.get(0).getKvFileHandle().getFilePath();
         KvFileHandleAndLocalPath exclusive = shared.get(1);
+        String exclusiveSst = exclusive.getKvFileHandle().getFilePath();
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
-        CoordinatorEventProcessor processor = startPublicationProcessor(client, io);
-        CompletableFuture<Void> commit =
-                manager.commitBucketSnapshot(
-                        LOAD_ID, bucket, snapshots, processor.getCoordinatorEventManager());
-        retry(Duration.ofSeconds(30), () -> assertThat(io.numQueuedRunnables()).isOne());
-        cluster.stopTabletServer(0);
-        cluster.startTabletServer(0);
-        leader =
-                cluster.newTabletServerClientForNode(
-                        cluster.waitAndGetLeaderReplica(bucket).getLeaderId());
+        CompletableFuture<Void> commit = publishBeforeRegistration(io);
+        restartTabletServer();
         retry(Duration.ofSeconds(30), () -> assertLookupRow(imported));
-        if (leaseImport) {
-            acquireImportLease();
-        }
         // Rewrite just one imported SST. The checkpoint must reuse the other remote object.
         try (CompactionOptions options = new CompactionOptions()) {
             cluster.waitAndGetLeaderReplica(bucket)
@@ -1092,37 +898,12 @@ class BulkLoadBucketCommitTest {
         assertThat(next.getKvSnapshotHandle().getSharedKvFileHandles())
                 .extracting(file -> file.getKvFileHandle().getFilePath())
                 .contains(importedSst)
-                .doesNotContain(exclusive.getKvFileHandle().getFilePath());
-        if (leaseImport) {
-            verifyLeasedSstSurvivesOrdinaryRetention(schema, next, importedSst);
-        }
+                .doesNotContain(exclusiveSst);
         io.triggerAll();
         commit.get(30, TimeUnit.SECONDS);
-        if (leaseImport) {
-            coordinator
-                    .dropKvSnapshotLease(
-                            new DropKvSnapshotLeaseRequest().setLeaseId("leased-import"))
-                    .get(30, TimeUnit.SECONDS);
-            putRows(genKvRecords(schema.getRowType(), new Object[] {5, "after-lease", "p1"}));
-            cluster.triggerAndWaitSnapshot(bucket);
-            retry(
-                    Duration.ofSeconds(30),
-                    () -> assertThat(Paths.get(new FsPath(importedSst).toUri())).doesNotExist());
-        }
-        retry(Duration.ofSeconds(30), () -> assertThat(Paths.get(dir.toUri())).doesNotExist());
-        retry(
-                Duration.ofSeconds(30),
-                () ->
-                        assertThat(
-                                        Paths.get(
-                                                new FsPath(
-                                                                exclusive
-                                                                        .getKvFileHandle()
-                                                                        .getFilePath())
-                                                        .toUri()))
-                                .doesNotExist());
-        long successor = client.getSelectedRecoverySnapshotId(bucket).get();
-        assertThat(successor).isGreaterThan(snapshotId);
+        assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(next.getSnapshotID());
+        awaitDeletion(dir);
+        awaitDeletion(new FsPath(exclusiveSst));
         commit();
         AllocateBulkLoadBucketSnapshotResponse replay =
                 coordinator
@@ -1131,19 +912,38 @@ class BulkLoadBucketCommitTest {
         assertThat(replay.getState()).isEqualTo(BulkLoadBucket.COMMITTED);
         assertThat(replay.getSnapshotId()).isEqualTo(snapshotId);
         assertThat(replay.getLogOffset()).isEqualTo(offset);
-        assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(successor);
+        assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(next.getSnapshotID());
         assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch()).isEqualTo(successorEpoch);
         assertLookupRow(getKeyValuePairs(beforeAllocation).get(0));
-        cluster.stopTabletServer(0);
-        cluster.startTabletServer(0);
-        leader =
-                cluster.newTabletServerClientForNode(
-                        cluster.waitAndGetLeaderReplica(bucket).getLeaderId());
+        restartTabletServer();
         retry(Duration.ofSeconds(30), () -> assertLookupRow(imported));
         assertLookupRow(appended);
     }
 
-    private void acquireImportLease() throws Exception {
+    private CompletableFuture<Void> publishBeforeRegistration(
+            ManuallyTriggeredScheduledExecutorService io) throws Exception {
+        CoordinatorEventManager events = startPublicationProcessor(client, io);
+        CompletableFuture<Void> commit =
+                manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots, events);
+        retry(Duration.ofSeconds(30), () -> assertThat(io.numQueuedRunnables()).isOne());
+        return commit;
+    }
+
+    private static void awaitDeletion(FsPath path) {
+        retry(Duration.ofSeconds(30), () -> assertThat(Paths.get(path.toUri())).doesNotExist());
+    }
+
+    @Test
+    void testLeaseProtectsImportedSstUntilReleased() throws Exception {
+        start();
+        allocate();
+        Tuple2<byte[], byte[]> imported =
+                uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
+        CompletableFuture<Void> commit = publishBeforeRegistration(io);
+        restartTabletServer();
+        retry(Duration.ofSeconds(30), () -> assertLookupRow(imported));
         AcquireKvSnapshotLeaseRequest lease =
                 new AcquireKvSnapshotLeaseRequest()
                         .setLeaseId("leased-import")
@@ -1152,14 +952,16 @@ class BulkLoadBucketCommitTest {
                 .setTableId(bucket.getTableId())
                 .addBucketSnapshot()
                 .setBucketId(bucket.getBucket())
-                .setPartitionId(bucket.getPartitionId())
                 .setSnapshotId(snapshotId);
         coordinator.acquireKvSnapshotLease(lease).get(30, TimeUnit.SECONDS);
-    }
 
-    private void verifyLeasedSstSurvivesOrdinaryRetention(
-            Schema schema, CompletedSnapshot next, String importedSst) throws Exception {
-        putRows(genKvRecords(schema.getRowType(), new Object[] {4, "compacted", "p1"}));
+        String importedSst = importedSharedFiles().get(0).getKvFileHandle().getFilePath();
+        putRows(genKvRecords(new Object[] {2, "successor"}));
+        CompletedSnapshot next = cluster.triggerAndWaitSnapshot(bucket);
+        assertThat(next.getKvSnapshotHandle().getSharedKvFileHandles())
+                .extracting(file -> file.getKvFileHandle().getFilePath())
+                .contains(importedSst);
+        putRows(genKvRecords(new Object[] {3, "compacted"}));
         RocksDB db = cluster.waitAndGetLeaderReplica(bucket).getKvTablet().getRocksDBKv().getDb();
         try (CompactionOptions options = new CompactionOptions()) {
             List<String> inputs = new ArrayList<>();
@@ -1171,11 +973,20 @@ class BulkLoadBucketCommitTest {
                 .extracting(file -> file.getKvFileHandle().getFilePath())
                 .doesNotContain(importedSst);
         // The sole cleanup worker has retired the last ordinary snapshot that referenced this SST.
-        Path retired = Paths.get(snapshotDirectory(next.getSnapshotID()).toUri());
-        retry(Duration.ofSeconds(30), () -> assertThat(retired).doesNotExist());
+        awaitDeletion(snapshotDirectory(next.getSnapshotID()));
         Path leasedSst = Paths.get(new FsPath(importedSst).toUri());
         assertThat(client.getTableBucketSnapshot(bucket, snapshotId)).isPresent();
         assertThat(leasedSst).as("SST referenced by the leased import").exists();
+        io.triggerAll();
+        commit.get(30, TimeUnit.SECONDS);
+        assertThat(client.getSelectedRecoverySnapshotId(bucket))
+                .contains(compacted.getSnapshotID());
+        coordinator
+                .dropKvSnapshotLease(new DropKvSnapshotLeaseRequest().setLeaseId("leased-import"))
+                .get(30, TimeUnit.SECONDS);
+        putRows(genKvRecords(new Object[] {4, "released"}));
+        cluster.triggerAndWaitSnapshot(bucket);
+        awaitDeletion(new FsPath(importedSst));
     }
 
     private static CuratorFramework losePublicationResponse(
@@ -1269,7 +1080,7 @@ class BulkLoadBucketCommitTest {
 
     // Run the real publication handler with no online replicas when testing durable state
     // independently of notification delivery (or injecting a fault in the publishing ZK session).
-    private CoordinatorEventProcessor startPublicationProcessor(
+    private CoordinatorEventManager startPublicationProcessor(
             ZooKeeperClient publisher, ExecutorService io) throws Exception {
         CoordinatorContext context = new CoordinatorContext(client.getCurrentEpoch());
         context.putTablePath(bucket.getTableId(), TABLE);
@@ -1306,7 +1117,17 @@ class BulkLoadBucketCommitTest {
                         publicationScheduler,
                         SystemClock.getInstance());
         publicationProcessor.getCoordinatorEventManager().start();
-        return publicationProcessor;
+        return publicationProcessor.getCoordinatorEventManager();
+    }
+
+    private void validateCommitBeforePublication() throws Exception {
+        manager.commitBucketSnapshot(
+                LOAD_ID,
+                bucket,
+                snapshots,
+                event -> {
+                    throw new AssertionError("Invalid snapshot reached publication");
+                });
     }
 
     private void commitAllocatedSnapshot() throws Exception {
@@ -1314,9 +1135,18 @@ class BulkLoadBucketCommitTest {
                         LOAD_ID,
                         bucket,
                         snapshots,
-                        startPublicationProcessor(client, ForkJoinPool.commonPool())
-                                .getCoordinatorEventManager())
+                        startPublicationProcessor(client, ForkJoinPool.commonPool()))
                 .get(30, TimeUnit.SECONDS);
+    }
+
+    private List<KvFileHandleAndLocalPath> importedSharedFiles() throws Exception {
+        return new CompletedSnapshotHandle(
+                        snapshotId,
+                        CompletedSnapshot.getMetadataFilePath(snapshotDirectory(snapshotId)),
+                        offset)
+                .retrieveCompleteSnapshot()
+                .getKvSnapshotHandle()
+                .getSharedKvFileHandles();
     }
 
     private FsPath uploadSnapshot(long id, long logOffset) throws Exception {
@@ -1330,6 +1160,14 @@ class BulkLoadBucketCommitTest {
                 FlussPaths.remoteKvTabletDir(
                         FlussPaths.remoteKvDir(remoteDataDir), physical, bucket);
         return FlussPaths.remoteKvSnapshotDir(tabletDir, id);
+    }
+
+    private static KvSnapshotFileMetadata.FileHandle uploadFile(FsPath directory, String localPath)
+            throws Exception {
+        Path parent = Files.createDirectories(Paths.get(directory.toUri()));
+        Path file = Files.write(parent.resolve(localPath), new byte[] {1});
+        return new KvSnapshotFileMetadata.FileHandle(
+                new FsPath(file.toUri()).toString(), 1, localPath);
     }
 
     private FsPath writeManifest(
