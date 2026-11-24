@@ -19,8 +19,10 @@ package org.apache.fluss.client.table.scanner.log.internals;
 
 import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
+import org.apache.fluss.client.table.scanner.log.LogScannerStatus;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.NetworkException;
@@ -46,6 +48,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.testutils.common.CommonTestUtils;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.Test;
 
@@ -58,18 +61,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.concurrent.FutureUtils.completedExceptionally;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -78,27 +80,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for {@link ConsumerGroupClient}. */
 class ConsumerGroupClientTest {
 
+    private final TestingLogScannerStatus logScannerStatus = new TestingLogScannerStatus();
+    private final Configuration conf =
+            new Configuration()
+                    .set(ConfigOptions.CLIENT_CONSUMER_GROUP_ID, "group-1")
+                    .set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, false);
+
     @Test
     void testOwnerDiscoveryIsCachedAndCanBeInvalidated() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         AtomicReference<ServerNode> owner = new AtomicReference<>(TestingMetadataUpdater.NODE2);
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return CompletableFuture.completedFuture(ownerResponse(owner.get()));
-                    }
-                };
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return CompletableFuture.completedFuture(ownerResponse(owner.get()));
+                        });
         TestTabletServerGateway nextOwnerGateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        return gateway.findConsumerGroupOwner(request);
-                    }
-                };
+                discoveryGateway(gateway::findConsumerGroupOwner);
         Map<Integer, TestTabletServerGateway> gateways = new HashMap<>();
         gateways.put(TestingMetadataUpdater.NODE1.id(), gateway);
         gateways.put(TestingMetadataUpdater.NODE2.id(), gateway);
@@ -113,7 +112,8 @@ class ConsumerGroupClientTest {
                         Collections.emptyMap(),
                         gateways,
                         new Configuration());
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater);
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater, logScannerStatus);
 
         assertThat(manager.getOrDiscoverOwner().get()).isSameAs(gateway);
         assertThat(manager.getOrDiscoverOwner().get()).isSameAs(gateway);
@@ -152,7 +152,7 @@ class ConsumerGroupClientTest {
                         return super.newTabletServerClientForNode(node);
                     }
                 };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", updater);
+        ConsumerGroupClient manager = new ConsumerGroupClient(conf, updater, logScannerStatus);
 
         assertThat(manager.commitOffsetsSync(sampleOffsets(), 5000L)).isTrue();
         assertThat(manager.commitOffsetsSync(sampleOffsets(), 5000L)).isTrue();
@@ -169,17 +169,15 @@ class ConsumerGroupClientTest {
     void testCachedOwnerIsUsedWhenMetadataNoLongerContainsOwner() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return CompletableFuture.completedFuture(
-                                ownerResponse(TestingMetadataUpdater.NODE2));
-                    }
-                };
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return CompletableFuture.completedFuture(
+                                    ownerResponse(TestingMetadataUpdater.NODE2));
+                        });
         TestingMetadataUpdater metadataUpdater = metadataUpdater(gateway);
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater);
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater, logScannerStatus);
 
         assertThat(manager.getOrDiscoverOwner().get()).isSameAs(gateway);
 
@@ -198,15 +196,13 @@ class ConsumerGroupClientTest {
         CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
         AtomicInteger requests = new AtomicInteger();
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return rpcResponse;
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return rpcResponse;
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         int callers = 4;
         CyclicBarrier startBarrier = new CyclicBarrier(callers);
@@ -249,7 +245,8 @@ class ConsumerGroupClientTest {
                         Collections.<TablePath, TableInfo>emptyMap(),
                         Collections.emptyMap(),
                         new Configuration());
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater);
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater, logScannerStatus);
 
         assertThatThrownBy(() -> manager.getOrDiscoverOwner().get())
                 .isInstanceOf(ExecutionException.class)
@@ -261,15 +258,13 @@ class ConsumerGroupClientTest {
         CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
         AtomicInteger requests = new AtomicInteger();
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return rpcResponse;
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return rpcResponse;
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         CompletableFuture<TabletServerGateway> discovery = manager.getOrDiscoverOwner();
         AtomicBoolean cacheIsUsableOnCompletion = new AtomicBoolean(false);
@@ -290,15 +285,13 @@ class ConsumerGroupClientTest {
         AtomicReference<CompletableFuture<FindConsumerGroupOwnerResponse>> rpcResponse =
                 new AtomicReference<>(new CompletableFuture<>());
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return rpcResponse.get();
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return rpcResponse.get();
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         CompletableFuture<TabletServerGateway> firstDiscovery = manager.getOrDiscoverOwner();
         CompletableFuture<TabletServerGateway> retryDiscovery;
@@ -321,15 +314,9 @@ class ConsumerGroupClientTest {
     @Test
     void testCloseCancelsDiscoveryAndRejectsLateResponse() throws Exception {
         CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
-        TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        return rpcResponse;
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        TestTabletServerGateway gateway = discoveryGateway(request -> rpcResponse);
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         CompletableFuture<TabletServerGateway> discovery = manager.getOrDiscoverOwner();
         manager.close();
@@ -343,7 +330,8 @@ class ConsumerGroupClientTest {
     void testGetOrDiscoverOwnerAfterClose() {
         TestTabletServerGateway gateway =
                 new TestTabletServerGateway(false, Collections.emptySet());
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         manager.close();
 
@@ -357,15 +345,13 @@ class ConsumerGroupClientTest {
         CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
         AtomicInteger requests = new AtomicInteger();
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return rpcResponse;
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return rpcResponse;
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         CompletableFuture<TabletServerGateway> discovery = manager.getOrDiscoverOwner();
         discovery.cancel(false);
@@ -384,15 +370,13 @@ class ConsumerGroupClientTest {
                 new AtomicReference<>(firstRpcResponse);
         AtomicInteger requests = new AtomicInteger();
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        requests.incrementAndGet();
-                        return rpcResponse.get();
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            requests.incrementAndGet();
+                            return rpcResponse.get();
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         CompletableFuture<TabletServerGateway> firstDiscovery = manager.getOrDiscoverOwner();
         firstDiscovery.cancel(false);
@@ -417,16 +401,14 @@ class ConsumerGroupClientTest {
     @Test
     void testDecodeFailureIsNotWrappedInCompletionException() {
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        // The response violates the owner contract, so decoding must fail.
-                        return CompletableFuture.completedFuture(
-                                new FindConsumerGroupOwnerResponse());
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            // The response violates the owner contract, so decoding must fail.
+                            return CompletableFuture.completedFuture(
+                                    new FindConsumerGroupOwnerResponse());
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         AtomicReference<Throwable> error = new AtomicReference<>();
         manager.getOrDiscoverOwner().whenComplete((owner, e) -> error.set(e));
@@ -439,17 +421,15 @@ class ConsumerGroupClientTest {
     @Test
     void testDecodeFailureOnIncompleteOwner() {
         TestTabletServerGateway gateway =
-                new TestTabletServerGateway(false, Collections.emptySet()) {
-                    @Override
-                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
-                            FindConsumerGroupOwnerRequest request) {
-                        // The owner is present but its host and port are missing.
-                        return CompletableFuture.completedFuture(
-                                new FindConsumerGroupOwnerResponse()
-                                        .setOwner(new PbServerNode().setNodeId(1)));
-                    }
-                };
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+                discoveryGateway(
+                        request -> {
+                            // The owner is present but its host and port are missing.
+                            return CompletableFuture.completedFuture(
+                                    new FindConsumerGroupOwnerResponse()
+                                            .setOwner(new PbServerNode().setNodeId(1)));
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         AtomicReference<Throwable> error = new AtomicReference<>();
         manager.getOrDiscoverOwner().whenComplete((owner, e) -> error.set(e));
@@ -472,7 +452,8 @@ class ConsumerGroupClientTest {
                             return CompletableFuture.completedFuture(
                                     new CommitConsumerOffsetsResponse());
                         });
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         Map<TableBucket, OffsetMetadata> offsets = new LinkedHashMap<>();
         offsets.put(new TableBucket(2L, null, 3), new OffsetMetadata(23L, "second"));
@@ -522,7 +503,8 @@ class ConsumerGroupClientTest {
                                     ownerResponse(TestingMetadataUpdater.NODE2));
                         },
                         request -> CompletableFuture.completedFuture(response));
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
 
         CompletableFuture<Exception> callbackError = new CompletableFuture<>();
         manager.commitOffsetsAsync(
@@ -544,7 +526,8 @@ class ConsumerGroupClientTest {
                                 CompletableFuture.completedFuture(
                                         ownerResponse(TestingMetadataUpdater.NODE2)),
                         request -> response);
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
         Map<TableBucket, OffsetMetadata> offsets = Collections.unmodifiableMap(sampleOffsets());
         AtomicInteger callbacks = new AtomicInteger();
         CompletableFuture<Map<TableBucket, OffsetMetadata>> callbackOffsets =
@@ -578,7 +561,8 @@ class ConsumerGroupClientTest {
                                 CompletableFuture.completedFuture(
                                         ownerResponse(TestingMetadataUpdater.NODE2)),
                         request -> response);
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
         CompletableFuture<Exception> callbackError = new CompletableFuture<>();
         AtomicReference<Thread> callbackThread = new AtomicReference<>();
 
@@ -608,15 +592,10 @@ class ConsumerGroupClientTest {
                                 CompletableFuture.completedFuture(
                                         ownerResponse(TestingMetadataUpdater.NODE2)),
                         request -> response);
+        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofMillis(50));
         ConsumerGroupClient manager =
                 new ConsumerGroupClient(
-                        "group-1",
-                        metadataUpdater(gateway),
-                        new ManualClock(),
-                        10L,
-                        false,
-                        0L,
-                        50L);
+                        conf, metadataUpdater(gateway), logScannerStatus, new ManualClock(), 10L);
         CompletableFuture<Exception> callbackError = new CompletableFuture<>();
         AtomicInteger callbacks = new AtomicInteger();
 
@@ -643,7 +622,44 @@ class ConsumerGroupClientTest {
     }
 
     @Test
-    void testCloseReportsCancellationToPendingCommitCallbackOnce() throws Exception {
+    void testCloseWaitsForPendingCommitAndInvokesCallbacksOnClosingThread() throws Exception {
+        CompletableFuture<FindConsumerGroupOwnerResponse> discovery = new CompletableFuture<>();
+        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
+        TestTabletServerGateway gateway = gateway(request -> discovery, request -> response);
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
+        CompletableFuture<Thread> firstCallback = new CompletableFuture<>();
+        CompletableFuture<Thread> secondCallback = new CompletableFuture<>();
+        manager.commitOffsetsAsync(
+                Collections.emptyMap(),
+                (offsets, error) -> {
+                    assertThat(error).isNull();
+                    firstCallback.complete(Thread.currentThread());
+                });
+        manager.commitOffsetsAsync(
+                sampleOffsets(),
+                (offsets, error) -> {
+                    assertThat(error).isNull();
+                    secondCallback.complete(Thread.currentThread());
+                });
+
+        FutureTask<Void> closing = new FutureTask<>(manager::close, null);
+        Thread closingThread = new Thread(closing, "consumer-group-close");
+        closingThread.start();
+        try {
+            assertThat(firstCallback.get(5, TimeUnit.SECONDS)).isSameAs(closingThread);
+            assertThat(closing).isNotDone();
+            assertThat(secondCallback).isNotDone();
+        } finally {
+            discovery.complete(ownerResponse(TestingMetadataUpdater.NODE2));
+            response.complete(new CommitConsumerOffsetsResponse());
+        }
+        closing.get(5, TimeUnit.SECONDS);
+        assertThat(secondCallback).isCompletedWithValue(closingThread);
+    }
+
+    @Test
+    void testCloseDeadlineDropsUnfinishedCommitCallback() throws Exception {
         CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
         TestTabletServerGateway gateway =
                 gateway(
@@ -651,25 +667,71 @@ class ConsumerGroupClientTest {
                                 CompletableFuture.completedFuture(
                                         ownerResponse(TestingMetadataUpdater.NODE2)),
                         request -> response);
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
-        CompletableFuture<Exception> callbackError = new CompletableFuture<>();
-        AtomicInteger callbacks = new AtomicInteger();
-
+        ManualClock clock = new ManualClock();
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
+        Duration elapsed = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT);
         manager.commitOffsetsAsync(
-                sampleOffsets(),
-                (ignored, error) -> {
-                    callbacks.incrementAndGet();
-                    callbackError.complete(error);
-                });
-        manager.close();
+                Collections.emptyMap(), (offsets, error) -> clock.advanceTime(elapsed));
+        AtomicInteger callbacks = new AtomicInteger();
+        manager.commitOffsetsAsync(
+                sampleOffsets(), (offsets, error) -> callbacks.incrementAndGet());
 
-        manager.invokeCompletedOffsetCommitCallbacks();
-        assertThat(callbackError.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(CancellationException.class);
+        CompletableFuture.runAsync(manager::close).get(5, TimeUnit.SECONDS);
         response.complete(new CommitConsumerOffsetsResponse());
         manager.close();
         manager.invokeCompletedOffsetCommitCallbacks();
-        assertThat(callbacks).hasValue(1);
+
+        assertThat(callbacks).hasValue(0);
+    }
+
+    @Test
+    void testCloseSkipsAutoCommitBeforeIntervalElapses() {
+        conf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, true);
+        ManualClock clock = new ManualClock();
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(
+                        conf,
+                        metadataUpdater(new TestTabletServerGateway(false, Collections.emptySet())),
+                        logScannerStatus,
+                        clock,
+                        10L);
+        clock.advanceTime(
+                conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL).minusMillis(1));
+        manager.close();
+        assertThat(logScannerStatus.snapshots).isZero();
+    }
+
+    @Test
+    void testCloseSkipsCallbacksWhenFinalAutoCommitExhaustsTimeout() {
+        conf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, true);
+        ManualClock clock = new ManualClock();
+        TestTabletServerGateway gateway =
+                gateway(
+                        request ->
+                                CompletableFuture.completedFuture(
+                                        ownerResponse(TestingMetadataUpdater.NODE2)),
+                        request -> {
+                            clock.advanceTime(conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT));
+                            return CompletableFuture.completedFuture(
+                                    new CommitConsumerOffsetsResponse());
+                        });
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
+        AtomicInteger callbacks = new AtomicInteger();
+        manager.commitOffsetsAsync(
+                Collections.emptyMap(), (offsets, error) -> callbacks.incrementAndGet());
+        Duration interval = conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL);
+        clock.advanceTime(interval);
+
+        manager.close();
+
+        assertThat(clock.milliseconds())
+                .isEqualTo(
+                        interval.plus(conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT)).toMillis());
+        assertThat(callbacks).hasValue(0);
     }
 
     @Test
@@ -685,7 +747,8 @@ class ConsumerGroupClientTest {
                             return CompletableFuture.completedFuture(
                                     new CommitConsumerOffsetsResponse());
                         });
-        ConsumerGroupClient manager = new ConsumerGroupClient("group-1", metadataUpdater(gateway));
+        ConsumerGroupClient manager =
+                new ConsumerGroupClient(conf, metadataUpdater(gateway), logScannerStatus);
         AtomicInteger callbacks = new AtomicInteger();
         CompletableFuture<Exception> callbackError = new CompletableFuture<>();
 
@@ -722,7 +785,8 @@ class ConsumerGroupClientTest {
                         });
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 10L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
 
         assertThat(manager.commitOffsetsSync(sampleOffsets(), 100L)).isTrue();
         assertThat(commits).hasValue(2);
@@ -753,7 +817,8 @@ class ConsumerGroupClientTest {
                         });
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 10L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
 
         // First commit fails (NOT_CONSUMER_GROUP_OWNER) → owner invalidated → rediscovery
         // finds NODE3 → second commit succeeds.
@@ -788,7 +853,8 @@ class ConsumerGroupClientTest {
                         });
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 10L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
 
         Map<TableBucket, OffsetMetadata> offsets =
                 manager.fetchCommittedOffsets(
@@ -824,7 +890,8 @@ class ConsumerGroupClientTest {
                         });
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 10L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
 
         assertThat(manager.commitOffsetsSync(sampleOffsets(), 100L)).isTrue();
         assertThat(commits).hasValue(2);
@@ -848,7 +915,8 @@ class ConsumerGroupClientTest {
                         });
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 10L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
         Set<TableBucket> buckets =
                 new java.util.LinkedHashSet<>(
                         Arrays.asList(
@@ -898,7 +966,8 @@ class ConsumerGroupClientTest {
                         });
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 0L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 0L);
         Set<TableBucket> buckets = Collections.singleton(new TableBucket(1L, null, 0));
 
         // The first call sends the fetch and times out waiting for the shared response.
@@ -931,7 +1000,8 @@ class ConsumerGroupClientTest {
                                                 : fetchResponse()));
         TickingClock clock = new TickingClock();
         ConsumerGroupClient manager =
-                new ConsumerGroupClient("group-1", metadataUpdater(gateway), clock, 10L);
+                new ConsumerGroupClient(
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
 
         assertThat(
                         manager.fetchCommittedOffsets(
@@ -944,12 +1014,6 @@ class ConsumerGroupClientTest {
     @Test
     void testAutoCommitHonorsConfigurationAndInterval() {
         AtomicInteger commits = new AtomicInteger();
-        AtomicInteger snapshots = new AtomicInteger();
-        Supplier<Map<TableBucket, OffsetMetadata>> offsets =
-                () -> {
-                    snapshots.incrementAndGet();
-                    return sampleOffsets();
-                };
         TestTabletServerGateway gateway =
                 gateway(
                         request ->
@@ -962,48 +1026,39 @@ class ConsumerGroupClientTest {
                         });
         // nextAutoCommitDeadlineMs = 0 + 50 = 50 because ManualClock starts at 0.
         ManualClock clock = new ManualClock();
+        Configuration autoCommitConf =
+                new Configuration(conf)
+                        .set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, true)
+                        .set(
+                                ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL,
+                                Duration.ofMillis(50));
         ConsumerGroupClient enabled =
                 new ConsumerGroupClient(
-                        "group-1", metadataUpdater(gateway), clock, 10L, true, 50L, 30_000L);
+                        autoCommitConf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
 
-        assertThat(enabled.maybeAutoCommitOffsetsAsync(49L, offsets)).isFalse();
-        assertThat(snapshots).hasValue(0);
-        assertThat(enabled.maybeAutoCommitOffsetsAsync(50L, offsets)).isTrue();
-        assertThat(snapshots).hasValue(1);
-        assertThat(enabled.maybeAutoCommitOffsetsAsync(99L, offsets)).isFalse();
-        assertThat(snapshots).hasValue(1);
-        assertThat(enabled.maybeAutoCommitOffsetsAsync(100L, offsets)).isTrue();
-        assertThat(snapshots).hasValue(2);
+        clock.advanceTime(49L, TimeUnit.MILLISECONDS);
+        assertThat(enabled.maybeAutoCommitOffsetsAsync()).isFalse();
+        assertThat(logScannerStatus.snapshots).isZero();
+        clock.advanceTime(1L, TimeUnit.MILLISECONDS);
+        assertThat(enabled.maybeAutoCommitOffsetsAsync()).isTrue();
+        assertThat(logScannerStatus.snapshots).isEqualTo(1);
+        clock.advanceTime(49L, TimeUnit.MILLISECONDS);
+        assertThat(enabled.maybeAutoCommitOffsetsAsync()).isFalse();
+        assertThat(logScannerStatus.snapshots).isEqualTo(1);
+        clock.advanceTime(1L, TimeUnit.MILLISECONDS);
+        enabled.close();
+        clock.advanceTime(50L, TimeUnit.MILLISECONDS);
+        enabled.close();
+        assertThat(logScannerStatus.snapshots).isEqualTo(2);
         assertThat(commits).hasValue(2);
 
         ConsumerGroupClient disabled =
                 new ConsumerGroupClient(
-                        "group-1", metadataUpdater(gateway), clock, 10L, false, 0L, 30_000L);
-        assertThat(disabled.maybeAutoCommitOffsetsAsync(1000L, offsets)).isFalse();
-        assertThat(snapshots).hasValue(2);
+                        conf, metadataUpdater(gateway), logScannerStatus, clock, 10L);
+        assertThat(disabled.maybeAutoCommitOffsetsAsync()).isFalse();
+        disabled.close();
+        assertThat(logScannerStatus.snapshots).isEqualTo(2);
         assertThat(commits).hasValue(2);
-    }
-
-    @Test
-    void testFinalAutoCommitIsNoOpWhenDisabled() {
-        AtomicInteger commits = new AtomicInteger();
-        TestTabletServerGateway gateway =
-                gateway(
-                        request ->
-                                CompletableFuture.completedFuture(
-                                        ownerResponse(TestingMetadataUpdater.NODE2)),
-                        request -> {
-                            commits.incrementAndGet();
-                            return CompletableFuture.completedFuture(
-                                    new CommitConsumerOffsetsResponse());
-                        });
-        TickingClock clock = new TickingClock();
-        ConsumerGroupClient manager =
-                new ConsumerGroupClient(
-                        "group-1", metadataUpdater(gateway), clock, 10L, false, 0L, 30_000L);
-
-        assertThat(manager.maybeAutoCommitOffsetsSync(sampleOffsets(), 100L)).isTrue();
-        assertThat(commits).hasValue(0);
     }
 
     private static Map<TableBucket, OffsetMetadata> sampleOffsets() {
@@ -1064,6 +1119,16 @@ class ConsumerGroupClientTest {
                                                         new PbGetConsumerOffsetsResponseBucket()
                                                                 .setBucketId(0)
                                                                 .setErrorCode(error.code())))));
+    }
+
+    private static TestTabletServerGateway discoveryGateway(OwnerRequestHandler ownerHandler) {
+        return new TestTabletServerGateway(false, Collections.emptySet()) {
+            @Override
+            public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                    FindConsumerGroupOwnerRequest request) {
+                return ownerHandler.handle(request);
+            }
+        };
     }
 
     private static TestTabletServerGateway gateway(
@@ -1138,17 +1203,13 @@ class ConsumerGroupClientTest {
         CompletableFuture<GetConsumerOffsetsResponse> handle(GetConsumerOffsetsRequest request);
     }
 
-    private static final class ManualClock implements Clock {
-        private long nowNanos;
+    private static final class TestingLogScannerStatus extends LogScannerStatus {
+        private int snapshots;
 
         @Override
-        public long milliseconds() {
-            return TimeUnit.NANOSECONDS.toMillis(nowNanos);
-        }
-
-        @Override
-        public long nanoseconds() {
-            return nowNanos;
+        public Map<TableBucket, OffsetMetadata> allConsumed() {
+            snapshots++;
+            return sampleOffsets();
         }
     }
 

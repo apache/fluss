@@ -27,6 +27,12 @@ import java.util.Map;
 /**
  * A typed scanner is used to scan log data as POJOs of specify table from Fluss.
  *
+ * <p>With automatic commits enabled, both {@link #poll(Duration)} and {@link #close()} submit the
+ * current consumed offsets asynchronously when the configured interval has elapsed. Closing waits
+ * for outstanding commits using {@code client.request-timeout}. To confirm the final positions have
+ * been committed, call {@link #commitSync()} before closing. See {@link OffsetCommitCallback} for
+ * callback delivery.
+ *
  * @param <T> the type of the POJO
  * @since 0.6
  */
@@ -124,8 +130,8 @@ public interface TypedLogScanner<T> extends AutoCloseable {
     void commitSync(Map<TableBucket, OffsetMetadata> offsets, Duration timeout);
 
     /**
-     * Asynchronously commits all offsets consumed so far by this scanner to its consumer group.
-     * Commit failures are logged at error level.
+     * Asynchronously commits all offsets consumed so far by this scanner to its consumer group. The
+     * scanner logs failures at error level when it processes the commit result.
      *
      * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
      *     configured.
@@ -135,8 +141,8 @@ public interface TypedLogScanner<T> extends AutoCloseable {
     /**
      * Asynchronously commits all offsets consumed so far by this scanner to its consumer group.
      *
-     * @param callback invoked after the commit finishes; if {@code null}, failures are logged at
-     *     error level.
+     * @param callback the callback to invoke on a later scanner call, or {@code null} to log
+     *     failures at error level when the scanner processes the result.
      * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
      *     configured.
      */
@@ -145,9 +151,10 @@ public interface TypedLogScanner<T> extends AutoCloseable {
     /**
      * Asynchronously commits the given offsets to this scanner's consumer group.
      *
-     * @param offsets the offsets to commit, keyed by table bucket.
-     * @param callback invoked after the commit finishes; if {@code null}, failures are logged at
-     *     error level.
+     * @param offsets the offsets to commit, keyed by table bucket. The request and callback use
+     *     this map directly. Pass a copy if you plan to modify the original.
+     * @param callback the callback to invoke on a later scanner call, or {@code null} to log
+     *     failures at error level when the scanner processes the result.
      * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
      *     configured.
      */

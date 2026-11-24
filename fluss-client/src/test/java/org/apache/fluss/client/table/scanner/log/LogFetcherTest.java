@@ -40,6 +40,8 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -189,6 +191,70 @@ public class LogFetcherTest {
     }
 
     @Test
+    void testInflightDataFetchIsDiscardedAfterOffsetReset() {
+        IOUtils.closeQuietly(logFetcher);
+        DelayedTabletServerGateway gateway = new DelayedTabletServerGateway();
+        metadataUpdater = initializeMetadataUpdater(gateway);
+        logFetcher = createLogFetcher(new Configuration());
+        logFetcher.sendFetches();
+
+        LogScannerStatus status = logFetcher.getLogScannerStatus();
+        status.assignScanBuckets(Collections.singletonMap(tb1, LogScanner.LATEST_OFFSET));
+        BucketScanStatus reset = status.beginOffsetResets(0L).get(tb1);
+        status.completeOffsetReset(tb1, reset, 10L);
+        gateway.completeResponse();
+
+        assertThat(logFetcher.getCompletedFetchesSize()).isZero();
+        assertThat(metadataUpdater.getBucketLocation(tb1)).isPresent();
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(10L);
+    }
+
+    @Test
+    void testLatestResetRetriesWithFreshMetadata() throws Exception {
+        IOUtils.closeQuietly(logFetcher);
+        AtomicInteger requests = new AtomicInteger();
+        CompletableFuture<ListOffsetsResponse> retriedOffsets = new CompletableFuture<>();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<ListOffsetsResponse> listOffsets(
+                            ListOffsetsRequest request) {
+                        if (requests.incrementAndGet() == 1) {
+                            ListOffsetsResponse response = new ListOffsetsResponse();
+                            response.addBucketsResp()
+                                    .setBucketId(tb1.getBucket())
+                                    .setErrorCode(Errors.NOT_LEADER_OR_FOLLOWER.code());
+                            return CompletableFuture.completedFuture(response);
+                        }
+                        return retriedOffsets;
+                    }
+                };
+        BlockingMetadataUpdater updater = new BlockingMetadataUpdater(gateway);
+        metadataUpdater = updater;
+        logFetcher = createLogFetcher(new Configuration());
+        LogScannerStatus status = logFetcher.getLogScannerStatus();
+        status.assignScanBuckets(Collections.singletonMap(tb1, LogScanner.LATEST_OFFSET));
+        logFetcher.resetPositionsIfNeeded();
+        assertThat(updater.getBucketLocation(tb1)).isNotPresent();
+        assertThat(status.getBucketOffset(tb1)).isNull();
+
+        updater.continueMetadataUpdate();
+        retry(
+                Duration.ofSeconds(10),
+                () -> {
+                    logFetcher.resetPositionsIfNeeded();
+                    assertThat(requests.get()).isEqualTo(2);
+                });
+        assertThat(updater.metadataUpdateStarted).isCompletedWithValue(Thread.currentThread());
+        assertThat(status.getBucketOffset(tb1)).isNull();
+
+        ListOffsetsResponse response = new ListOffsetsResponse();
+        response.addBucketsResp().setBucketId(tb1.getBucket()).setOffset(42L);
+        retriedOffsets.complete(response);
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(42L);
+    }
+
+    @Test
     void testUnregisterTableDiscardsBufferedFetches() {
         Map<Integer, FetchLogRequest> requestMap =
                 logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
@@ -241,7 +307,7 @@ public class LogFetcherTest {
         blockingMetadataUpdater.invalidateTableMetadata();
         CompletableFuture<Void> secondSend = CompletableFuture.runAsync(logFetcher::sendFetches);
         try {
-            assertThat(blockingMetadataUpdater.awaitMetadataUpdateStarted()).isTrue();
+            blockingMetadataUpdater.metadataUpdateStarted.get(30, TimeUnit.SECONDS);
             delayedGateway.completeResponse();
             assertThat(logFetcher.getCompletedFetchesSize()).isOne();
         } finally {
@@ -436,7 +502,7 @@ public class LogFetcherTest {
     }
 
     private static class BlockingMetadataUpdater extends TestingMetadataUpdater {
-        private final CountDownLatch metadataUpdateStarted = new CountDownLatch(1);
+        private final CompletableFuture<Thread> metadataUpdateStarted = new CompletableFuture<>();
         private final CountDownLatch continueMetadataUpdate = new CountDownLatch(1);
         private final Cluster refreshedCluster;
 
@@ -452,7 +518,7 @@ public class LogFetcherTest {
 
         @Override
         public void updateTableOrPartitionMetadata(TablePath tablePath, Long partitionId) {
-            metadataUpdateStarted.countDown();
+            metadataUpdateStarted.complete(Thread.currentThread());
             try {
                 if (!continueMetadataUpdate.await(30, TimeUnit.SECONDS)) {
                     throw new AssertionError("Timed out waiting to continue metadata update");
@@ -469,10 +535,6 @@ public class LogFetcherTest {
                     getCluster()
                             .invalidPhysicalTableBucketMeta(
                                     Collections.singleton(PhysicalTablePath.of(DATA1_TABLE_PATH))));
-        }
-
-        private boolean awaitMetadataUpdateStarted() throws InterruptedException {
-            return metadataUpdateStarted.await(30, TimeUnit.SECONDS);
         }
 
         private void continueMetadataUpdate() {

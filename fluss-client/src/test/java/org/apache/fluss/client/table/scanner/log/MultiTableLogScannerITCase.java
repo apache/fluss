@@ -773,7 +773,8 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
                 admin,
                 logScannerStatus,
                 logFetcher,
-                scannerMetricGroup);
+                scannerMetricGroup,
+                clientConf);
     }
 
     private static void appendRows(Table table, int fromInclusive, int toInclusive)

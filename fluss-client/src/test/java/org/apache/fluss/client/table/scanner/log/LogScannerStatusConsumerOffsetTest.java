@@ -61,8 +61,11 @@ class LogScannerStatusConsumerOffsetTest {
         latest.assignFromCommittedOffset(TABLE_BUCKET);
         latest.resolveCommittedOffsets(Collections.emptyMap(), ConsumerOffsetReset.LATEST);
         // Latest positions are resolved with ListOffsets instead of a fetchable sentinel.
-        assertThat(latest.missingLatestOffsets()).containsExactly(TABLE_BUCKET);
-        latest.resolveLatestOffsets(Collections.singletonMap(TABLE_BUCKET, 7L));
+        BucketScanStatus request = latest.beginOffsetResets(0L).get(TABLE_BUCKET);
+        assertThat(request).isNotNull();
+        assertThat(latest.fetchableBuckets(ignored -> true)).isEmpty();
+        assertThat(latest.allConsumed()).isEmpty();
+        latest.completeOffsetReset(TABLE_BUCKET, request, 7L);
         assertThat(latest.getBucketOffset(TABLE_BUCKET)).isEqualTo(7L);
     }
 
@@ -78,6 +81,57 @@ class LogScannerStatusConsumerOffsetTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("reset policy is none")
                 .hasMessageContaining(String.valueOf(TABLE_BUCKET));
+    }
+
+    @Test
+    void testLateResetAfterResubscriptionAndRetryBackoff() {
+        LogScannerStatus status = new LogScannerStatus();
+        status.assignScanBuckets(Collections.singletonMap(TABLE_BUCKET, LogScanner.LATEST_OFFSET));
+        BucketScanStatus oldRequest = status.beginOffsetResets(0L).get(TABLE_BUCKET);
+        status.unassignScanBuckets(Collections.singletonList(TABLE_BUCKET));
+        status.assignScanBuckets(Collections.singletonMap(TABLE_BUCKET, LogScanner.LATEST_OFFSET));
+        BucketScanStatus current = status.beginOffsetResets(0L).get(TABLE_BUCKET);
+
+        status.completeOffsetReset(TABLE_BUCKET, oldRequest, 100L);
+        assertThat(
+                        status.failOffsetReset(
+                                TABLE_BUCKET, oldRequest, new IllegalStateException(), 0L))
+                .isFalse();
+        assertThat(status.getBucketOffset(TABLE_BUCKET)).isNull();
+        assertThat(status.beginOffsetResets(10L)).isEmpty();
+
+        assertThat(status.failOffsetReset(TABLE_BUCKET, current, null, 20L)).isTrue();
+        assertThat(status.nextResetTimeMs()).isEqualTo(20L);
+        assertThat(status.beginOffsetResets(19L)).isEmpty();
+        assertThat(status.beginOffsetResets(20L)).containsOnlyKeys(TABLE_BUCKET);
+        status.completeOffsetReset(TABLE_BUCKET, current, 50L);
+        assertThat(status.allConsumed()).containsEntry(TABLE_BUCKET, new OffsetMetadata(50L));
+    }
+
+    @Test
+    void testResetErrorIsReportedOnPollWithoutLosingOtherResets() {
+        LogScannerStatus status = new LogScannerStatus();
+        TableBucket other = new TableBucket(2L, 0);
+        status.assignScanBuckets(Collections.singletonMap(TABLE_BUCKET, LogScanner.LATEST_OFFSET));
+        BucketScanStatus request = status.beginOffsetResets(0L).get(TABLE_BUCKET);
+        status.assignScanBuckets(Collections.singletonMap(other, LogScanner.LATEST_OFFSET));
+        IllegalStateException failure = new IllegalStateException("reset failed");
+        status.failOffsetReset(TABLE_BUCKET, request, failure, 0L);
+        assertThatThrownBy(() -> status.beginOffsetResets(0L)).isSameAs(failure);
+        assertThat(status.beginOffsetResets(0L)).containsOnlyKeys(TABLE_BUCKET, other);
+    }
+
+    @Test
+    void testCommittedAssignmentSupersedesLatestReset() {
+        LogScannerStatus status = new LogScannerStatus();
+        status.assignScanBuckets(Collections.singletonMap(TABLE_BUCKET, LogScanner.LATEST_OFFSET));
+        status.assignFromCommittedOffset(TABLE_BUCKET);
+        status.resolveCommittedOffsets(
+                Collections.singletonMap(TABLE_BUCKET, new OffsetMetadata(10L)),
+                ConsumerOffsetReset.LATEST);
+
+        assertThat(status.fetchableBuckets(ignored -> true)).containsExactly(TABLE_BUCKET);
+        assertThat(status.allConsumed()).containsEntry(TABLE_BUCKET, new OffsetMetadata(10L));
     }
 
     @Test

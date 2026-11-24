@@ -22,7 +22,7 @@ import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.TimeoutException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
@@ -43,54 +43,90 @@ import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests scanner cleanup when the final consumer offset commit fails. */
+/** Tests commit callbacks and resource cleanup during scanner close. */
 class AbstractLogScannerCloseTest {
 
     @Test
-    void testCloseReportsFinalCommitTimeoutAndReleasesResources() {
-        CompletableFuture<CommitConsumerOffsetsResponse> pending = new CompletableFuture<>();
-        TestScanner scanner = newScanner(pending, false);
-
-        assertThatThrownBy(scanner::close)
-                .isInstanceOf(TimeoutException.class)
-                .hasMessageContaining("committing offsets");
-        assertThat(scanner.scannerMetricGroup.isClosed()).isTrue();
-        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isEqualTo(1);
-
-        scanner.close();
-        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isEqualTo(1);
+    void testInvalidGroupConfigurationReleasesScannerResources() throws IOException {
+        Configuration conf =
+                new Configuration().set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, true);
+        TestingMetadataUpdater updater =
+                TestingMetadataUpdater.builder(Collections.emptyMap()).build();
+        LogScannerStatus status = new LogScannerStatus();
+        TestingScannerMetricGroup metrics = TestingScannerMetricGroup.newInstance();
+        try (TrackingLogFetcher fetcher =
+                new TrackingLogFetcher(status, conf, updater, metrics, false)) {
+            assertThatThrownBy(() -> new TestScanner(status, fetcher, metrics, conf, updater))
+                    .isInstanceOf(InvalidConfigException.class);
+            assertThat(fetcher.closeCalls).isOne();
+            assertThat(metrics.isClosed()).isTrue();
+        }
     }
 
     @Test
-    void testClosePreservesCommitFailureWhenFetcherCloseAlsoFails() {
+    void testCloseDeliversCommitCallbackBeforeReleasingResources() {
+        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
+        TestScanner scanner = newScanner(response, false, Duration.ofSeconds(10));
+        CompletableFuture<Thread> callbackThread = new CompletableFuture<>();
+        scanner.commitAsync(
+                (offsets, error) -> {
+                    assertThat(error).isNull();
+                    assertThat(scanner.scannerMetricGroup.isClosed()).isFalse();
+                    assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isZero();
+                    callbackThread.complete(Thread.currentThread());
+                });
+        response.complete(new CommitConsumerOffsetsResponse());
+
+        scanner.close();
+
+        assertThat(callbackThread).isCompletedWithValue(Thread.currentThread());
+        assertThat(scanner.scannerMetricGroup.isClosed()).isTrue();
+        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isOne();
+    }
+
+    @Test
+    void testCloseReleasesResourcesWithAnUnansweredCommit() {
+        CompletableFuture<CommitConsumerOffsetsResponse> pending = new CompletableFuture<>();
+        TestScanner scanner = newScanner(pending, false, Duration.ofMillis(50));
+        scanner.commitAsync();
+
+        scanner.close();
+
+        assertThat(pending).isNotDone();
+        assertThat(scanner.scannerMetricGroup.isClosed()).isTrue();
+        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isOne();
+
+        scanner.close();
+        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isOne();
+    }
+
+    @Test
+    void testCloseDeliversCommitFailureAndReleasesResourcesWhenFetcherCloseFails() {
         IllegalStateException commitFailure = new IllegalStateException("commit failed");
         CompletableFuture<CommitConsumerOffsetsResponse> failed = new CompletableFuture<>();
         failed.completeExceptionally(commitFailure);
-        TestScanner scanner = newScanner(failed, true);
-
-        assertThatThrownBy(scanner::close)
-                .isSameAs(commitFailure)
-                .satisfies(
-                        error -> {
-                            assertThat(error.getSuppressed()).hasSize(1);
-                            assertThat(error.getSuppressed()[0])
-                                    .isInstanceOf(IOException.class)
-                                    .hasMessage("fetcher close failed");
-                        });
-        assertThat(scanner.scannerMetricGroup.isClosed()).isTrue();
-        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isEqualTo(1);
+        TestScanner scanner = newScanner(failed, true, Duration.ofSeconds(10));
+        CompletableFuture<Exception> callbackError = new CompletableFuture<>();
+        scanner.commitAsync((offsets, error) -> callbackError.complete(error));
 
         scanner.close();
-        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isEqualTo(1);
+
+        assertThat(callbackError).isCompletedWithValue(commitFailure);
+        assertThat(scanner.scannerMetricGroup.isClosed()).isTrue();
+        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isOne();
+
+        scanner.close();
+        assertThat(((TrackingLogFetcher) scanner.logFetcher).closeCalls).isOne();
     }
 
     private static TestScanner newScanner(
             CompletableFuture<CommitConsumerOffsetsResponse> commitResponse,
-            boolean failFetcherClose) {
+            boolean failFetcherClose,
+            Duration requestTimeout) {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "group");
         conf.setBoolean(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED.key(), true);
-        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofMillis(50));
+        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, requestTimeout);
 
         TestTabletServerGateway gateway =
                 new TestTabletServerGateway(false, Collections.emptySet()) {

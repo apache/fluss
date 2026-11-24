@@ -19,35 +19,81 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 
+import javax.annotation.Nullable;
+
+import static org.apache.fluss.utils.ExceptionUtils.rethrow;
+
 /** Bucket scan status for log fetch. */
 @Internal
 class BucketScanStatus {
-    private long offset; // last consumed position
-    private long highWatermark = -1L; // the high watermark from last fetch, -1 if never fetched
-    // TODO add resetStrategy and nextAllowedRetryTimeMs.
-
-    public BucketScanStatus() {
-        this.offset = 0L;
+    enum FetchState {
+        AWAITING_COMMITTED_OFFSET,
+        AWAITING_RESET,
+        FETCHING
     }
 
-    public BucketScanStatus(Long position) {
-        this.offset = position;
+    private final long assignmentVersion;
+    private FetchState state;
+    private long offset;
+    private long highWatermark = -1L;
+    // Long.MAX_VALUE reserves this reset for the outstanding ListOffsets request.
+    private long nextAllowedResetMs;
+    @Nullable private Throwable resetError;
+
+    BucketScanStatus(long assignmentVersion) {
+        this.assignmentVersion = assignmentVersion;
+        state = FetchState.AWAITING_COMMITTED_OFFSET;
     }
 
-    public long getOffset() {
+    BucketScanStatus(long assignmentVersion, long offset) {
+        this(assignmentVersion);
+        setOffset(offset);
+    }
+
+    long assignmentVersion() {
+        return assignmentVersion;
+    }
+
+    FetchState state() {
+        return state;
+    }
+
+    long getOffset() {
         return offset;
     }
 
-    public long getHighWatermark() {
-        return highWatermark;
-    }
-
-    public void setOffset(Long offset) {
+    void setOffset(long offset) {
         this.offset = offset;
+        // server can handle LogScanner.EARLIEST_OFFSET, so we ignore the case here.
+        state =
+                offset == LogScanner.LATEST_OFFSET
+                        ? FetchState.AWAITING_RESET
+                        : FetchState.FETCHING;
     }
 
-    public void setHighWatermark(Long highWatermark) {
+    void setHighWatermark(long highWatermark) {
         this.highWatermark = highWatermark;
+    }
+
+    long nextAllowedResetMs() {
+        return nextAllowedResetMs;
+    }
+
+    void markResetPending() {
+        nextAllowedResetMs = Long.MAX_VALUE;
+    }
+
+    void resetFailed(@Nullable Throwable error, long nextAllowedResetMs) {
+        this.resetError = error;
+        this.nextAllowedResetMs = nextAllowedResetMs;
+    }
+
+    void maybeThrowResetError() {
+        if (resetError != null) {
+            Throwable error = resetError;
+            resetError = null;
+            rethrow(error);
+        }
     }
 
     /**
@@ -58,7 +104,7 @@ class BucketScanStatus {
      * case the lag is 0 as well.
      */
     long recordsLag() {
-        if (offset < 0 || highWatermark < 0) {
+        if (state != FetchState.FETCHING || offset < 0 || highWatermark < 0) {
             return 0L;
         }
         return Math.max(highWatermark - offset, 0L);
