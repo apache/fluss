@@ -189,13 +189,15 @@ impl ConsumerGroup {
         self: &Arc<Self>,
         offsets: HashMap<TableBucket, OffsetAndMetadata>,
     ) -> Result<OffsetCommitHandle> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| invalid("Consumer offset commits require a Tokio runtime"))?;
         let slot = self.slots.clone().try_acquire_owned().map_err(|_| Error::BufferExhausted {
             message: format!("All {MAX_PENDING_COMMITS} consumer commit slots are occupied; wait for a pending commit before retrying"),
         })?;
         let (done, next) = tokio::sync::oneshot::channel();
         let previous = self.tail.lock().replace(next);
         let group = self.clone();
-        let operation = tokio::spawn(async move {
+        let operation = runtime.spawn(async move {
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
@@ -205,7 +207,7 @@ impl ConsumerGroup {
             result
         });
         // Keep the queue link alive when a caller cancels its waiting handle.
-        Ok(tokio::spawn(async move { operation.await? }))
+        Ok(runtime.spawn(async move { operation.await? }))
     }
 
     async fn commit(
@@ -315,7 +317,11 @@ impl ConsumerGroup {
             }
         })
         .await
-        .unwrap_or_else(|_| Err(timeout_error()));
+        .unwrap_or_else(|_| {
+            // A stale owner may never finish the handshake, even before a commit is sent.
+            self.client.invalidate_owner();
+            Err(timeout_error())
+        });
         result.map_err(|error| {
             if attempt.started || lost_reply {
                 self.client.invalidate_owner();

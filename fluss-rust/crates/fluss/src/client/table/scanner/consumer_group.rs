@@ -210,12 +210,12 @@ macro_rules! group_methods {
 
             /// Commits progress from completed polls, including ranges skipped by the filter.
             /// Process all returned records first; use `commit_offsets_async` for partial batches.
-            /// Subscriptions, seeks and polls must be driven by one consumer task.
+            /// Call from a Tokio runtime. Drive subscriptions, seeks and polls from one consumer task.
             pub fn commit_async(&self) -> Result<OffsetCommitHandle> {
                 self.commit_offsets_async(self.inner.delivered_offsets()?)
             }
 
-            /// Enqueues explicit next offsets. The scanner submits commits in call order.
+            /// Enqueues explicit next offsets from a Tokio runtime, in call order.
             /// Dropping or aborting the handle does not cancel the commit. No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
             /// At most 64 commits may be pending per scanner. A full queue returns

@@ -341,3 +341,33 @@ async fn aborting_waiter_preserves_queue_order_and_capacity() {
     );
     peer.commit(100).await.unwrap();
 }
+
+#[tokio::test]
+async fn handshake_timeout_discards_stale_owner_before_next_commit() {
+    let peer = CommitPeer::start([]).await;
+    // TCP connects, but the old owner never answers ApiVersions.
+    let old = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    *peer.group.client.owner.lock() = Some(ServerNode::new(
+        2,
+        "127.0.0.1".into(),
+        old.local_addr().unwrap().port().into(),
+        ServerType::TabletServer,
+    ));
+    assert!(matches!(
+        peer.commit(10).await,
+        Err(OffsetCommitError::Rejected(_))
+    ));
+    peer.commit(9).await.unwrap();
+    assert_eq!(*peer.received.lock(), [9]);
+}
+
+#[tokio::test]
+async fn enqueue_without_runtime_returns_an_error() {
+    let peer = CommitPeer::start([]).await;
+    let group = peer.group.clone();
+    let result = std::thread::spawn(move || group.enqueue(HashMap::new()))
+        .join()
+        .unwrap();
+    assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+    peer.commit(10).await.unwrap();
+}

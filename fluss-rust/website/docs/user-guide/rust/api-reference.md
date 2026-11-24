@@ -231,7 +231,7 @@ for (bucket, outcome) in outcomes {
 | `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
 | `commit_sync().await` | Commit progress from completed polls, including ranges skipped by the filter even when no rows were returned. Prefetch is excluded. Process all returned records first. |
 | `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
-| `commit_async()` / `commit_offsets_async(offsets)` | Return an `OffsetCommitHandle`, capturing the offsets at invocation. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
+| `commit_async()` / `commit_offsets_async(offsets)` | Call from a Tokio runtime to enqueue and capture the offsets. Outside a runtime, the call returns an error. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
 
 `OffsetsInitializer::committed(group_id)` uses `earliest()` for missing commits. Use
 `committed_with_fallback(group_id, strategy)` to choose `latest()`, `timestamp(ms)`, `offset(n)`
@@ -276,7 +276,8 @@ not atomic with writes to an external sink. No cross-process fencing token is se
 consumer requires stopping the previous writer before the replacement starts committing.
 
 `ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
-after preceding queued commits finish. A scanner admits up to 64 pending commits. If admission returns
+after preceding queued commits finish. If the owner does not answer before this deadline, the next
+commit discovers the owner again. A scanner admits up to 64 pending commits. If admission returns
 `Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A deadline reached before any attempt starts writing rejects only that commit. Background auto-commit is disabled. Existing scanners with
 no group retain their behavior. Offset persistence requires a server implementing discovery,
 commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
