@@ -411,7 +411,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           sccache --show-stats
       - name: Run fluss-cpp Rust unit tests
         run: cargo test -p fluss-cpp --lib
