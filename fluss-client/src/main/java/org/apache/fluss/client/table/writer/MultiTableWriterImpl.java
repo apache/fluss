@@ -213,7 +213,7 @@ class MultiTableWriterImpl implements MultiTableWriter {
             }
         }
         Schema historicalSchema = getTableSchema(tablePath, schemaId);
-        TableInfo historicalTableInfo = withSchema(latestTableInfo, schemaId, historicalSchema);
+        TableInfo historicalTableInfo = latestTableInfo.withSchema(schemaId, historicalSchema);
         TableWriteState state = TableWriteState.forTable(tablePath, historicalTableInfo);
         cacheState(tablePath, schemaId, state);
         return state;
@@ -221,30 +221,6 @@ class MultiTableWriterImpl implements MultiTableWriter {
 
     private void cacheState(TablePath tablePath, int schemaId, TableWriteState state) {
         states.computeIfAbsent(tablePath, k -> new HashMap<>()).put(schemaId, state);
-    }
-
-    /**
-     * Build a {@link TableInfo} for a historical schema by reusing every non-schema attribute of
-     * {@code base}. This assumes schema evolution does not change bucket keys / partition keys /
-     * bucket count (compatible evolution such as adding columns); otherwise encoding would fail
-     * fast downstream.
-     */
-    private static TableInfo withSchema(TableInfo base, int schemaId, Schema schema) {
-        return new TableInfo(
-                base.getTablePath(),
-                base.getTableId(),
-                schemaId,
-                schema,
-                base.getBucketKeys(),
-                base.getPartitionKeys(),
-                base.getNumBuckets(),
-                base.getProperties(),
-                base.getCustomProperties(),
-                base.getRemoteDataDir(),
-                base.getComment().orElse(null),
-                base.getCreatedTime(),
-                base.getModifiedTime(),
-                base.getBucketCountEpoch());
     }
 
     private TableInfo getTableInfo(TablePath tablePath) {

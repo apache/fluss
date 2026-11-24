@@ -27,12 +27,14 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -48,7 +50,6 @@ import org.apache.flink.runtime.metrics.util.InterceptingOperatorMetricGroup;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
-import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -56,6 +57,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -172,33 +174,37 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testRetractPreservesAbsentColumnsAfterSchemaEvolution(boolean newPlan) throws Exception {
+    @CsvSource({"false, false", "false, true", "true, false"})
+    void testRetractPreservesAbsentColumnsAfterSchemaEvolution(
+            boolean newPlan, boolean partialWrite) throws Exception {
         admin.createDatabase(DEFAULT_SINK_DB, DatabaseDescriptor.EMPTY, true).get();
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
-                        .column(
-                                "last",
-                                DataTypes.INT(),
-                                newPlan ? AggFunctions.LAST_VALUE() : AggFunctions.MAX())
-                        .primaryKey("id")
-                        .build();
         createTable(
                 DEFAULT_SINK_TABLE_PATH,
                 TableDescriptor.builder()
-                        .schema(schema)
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                                        .column("other", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
                         .property("table.merge-engine", "aggregation")
                         .build());
-        RowType planType =
-                newPlan
-                        ? RowType.of(
-                                new LogicalType[] {new IntType(), new BigIntType(), new IntType()},
-                                new String[] {"id", "total", "last"})
-                        : RowType.of(
-                                new LogicalType[] {new IntType(), new BigIntType()},
-                                new String[] {"id", "total"});
+        TableInfo oldTable = admin.getTableInfo(DEFAULT_SINK_TABLE_PATH).get();
+        admin.alterTable(
+                        DEFAULT_SINK_TABLE_PATH,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "last",
+                                        DataTypes.INT(),
+                                        null,
+                                        TableChange.ColumnPosition.last(),
+                                        AggFunctions.LAST_VALUE())),
+                        false)
+                .get();
+        TableInfo planTable =
+                newPlan ? admin.getTableInfo(DEFAULT_SINK_TABLE_PATH).get() : oldTable;
+        RowType planType = FlinkConversions.toFlinkRowType(planTable.getRowType());
         MockWriterInitContext context =
                 new MockWriterInitContext(new InterceptingOperatorMetricGroup());
         try (Table table = conn.getTable(DEFAULT_SINK_TABLE_PATH);
@@ -207,32 +213,44 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                                 DEFAULT_SINK_TABLE_PATH,
                                 FLUSS_CLUSTER_EXTENSION.getClientConfig(),
                                 planType,
-                                null,
+                                partialWrite ? new int[] {0, 1} : null,
                                 context.getMailboxExecutor(),
                                 new RowDataSerializationSchema(
                                         SinkOperationMode.aggregation(false, true)),
                                 null,
-                                true)) {
+                                true,
+                                new UpsertSinkWriter.SchemaBinding(
+                                        planTable.getTableId(), planTable.getSchemaId()))) {
             UpsertWriter seed = table.newUpsert().createWriter();
-            seed.upsert(row(1, 100L, 9)).get();
+            seed.upsert(row(1, 100L, 21, 9)).get();
             writer.initialize(context.metricGroup());
             writer.write(
-                    GenericRowData.ofKind(RowKind.UPDATE_BEFORE, 1, 30L),
+                    newPlan
+                            ? GenericRowData.ofKind(RowKind.UPDATE_BEFORE, 1, 30L, null, null)
+                            : GenericRowData.ofKind(RowKind.UPDATE_BEFORE, 1, 30L, null),
                     new MockSinkWriterContext());
             writer.flush(false);
             InternalRow actual =
                     table.newLookup().createLookuper().lookup(row(1)).get().getSingletonRow();
             assertThat(actual.getLong(1)).isEqualTo(70L);
-            assertThat(actual.isNullAt(2)).isFalse();
-            assertThat(actual.getInt(2)).isEqualTo(9);
+            assertThat(actual.getInt(2)).isEqualTo(21);
             if (newPlan) {
+                assertThat(actual.isNullAt(3)).isTrue();
+            } else {
+                assertThat(actual.getInt(3)).isEqualTo(9);
+                // The old SQL plan's forward path still pads the missing field with null.
                 writer.write(
-                        GenericRowData.ofKind(RowKind.UPDATE_BEFORE, 1, 10L, null),
+                        GenericRowData.ofKind(RowKind.UPDATE_AFTER, 1, 15L, null),
                         new MockSinkWriterContext());
                 writer.flush(false);
                 actual = table.newLookup().createLookuper().lookup(row(1)).get().getSingletonRow();
-                assertThat(actual.getLong(1)).isEqualTo(60L);
-                assertThat(actual.isNullAt(2)).isTrue();
+                assertThat(actual.getLong(1)).isEqualTo(85L);
+                assertThat(actual.getInt(2)).isEqualTo(21);
+                if (partialWrite) {
+                    assertThat(actual.getInt(3)).isEqualTo(9);
+                } else {
+                    assertThat(actual.isNullAt(3)).isTrue();
+                }
             }
         }
     }

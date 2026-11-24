@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.lookup.Lookup;
@@ -89,6 +90,14 @@ public class FlussTable implements Table {
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
         return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
+    }
+
+    /** Creates a writer builder for a known historical schema of this table. */
+    @Internal
+    public Upsert newUpsertForSchema(int schemaId) {
+        checkState(hasPrimaryKey, "Table %s is not a Primary Key Table.", tablePath);
+        TableInfo historical = tableInfo.withSchema(schemaId, schemaGetter.getSchema(schemaId));
+        return new TableUpsert(tablePath, historical, conn.getOrCreateWriterClient());
     }
 
     @Override

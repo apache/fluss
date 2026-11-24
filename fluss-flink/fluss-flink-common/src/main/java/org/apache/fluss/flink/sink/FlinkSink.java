@@ -31,6 +31,7 @@ import org.apache.fluss.flink.sink.undo.UndoRecoveryOperatorFactory;
 import org.apache.fluss.flink.sink.writer.AppendSinkWriter;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.flink.sink.writer.UpsertSinkWriter;
+import org.apache.fluss.flink.sink.writer.UpsertSinkWriter.SchemaBinding;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 
@@ -274,6 +275,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final boolean enableUndoRecovery;
         @Nullable private final String producerId;
         private final boolean schemaSupportsRetract;
+        @Nullable private final SchemaBinding retractSchema;
 
         /**
          * Optional factory for reporting offsets to the upstream UndoRecoveryOperator.
@@ -300,7 +302,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 FlussSerializationSchema<InputT> flussSerializationSchema,
                 boolean enableUndoRecovery,
                 @Nullable String producerId,
-                boolean schemaSupportsRetract) {
+                boolean schemaSupportsRetract,
+                @Nullable SchemaBinding retractSchema) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
@@ -314,6 +317,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.enableUndoRecovery = enableUndoRecovery;
             this.producerId = producerId;
             this.schemaSupportsRetract = schemaSupportsRetract;
+            this.retractSchema = retractSchema;
         }
 
         @Override
@@ -335,7 +339,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     mailboxExecutor,
                     flussSerializationSchema,
                     offsetReporter,
-                    schemaSupportsRetract);
+                    schemaSupportsRetract,
+                    retractSchema);
         }
 
         @Override

@@ -17,7 +17,9 @@
 
 package org.apache.fluss.flink.sink.writer;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.table.FlussTable;
 import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.RetractResult;
 import org.apache.fluss.client.table.writer.TableWriter;
@@ -28,8 +30,10 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.undo.ProducerOffsetReporter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 
@@ -40,6 +44,7 @@ import org.apache.flink.table.types.logical.RowType;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 
@@ -49,6 +54,8 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
     @VisibleForTesting transient UpsertWriter upsertWriter;
     @Nullable private transient UpsertWriter retractWriter;
     @Nullable private transient int[] retractInputColumns;
+    @Nullable private final SchemaBinding retractSchema;
+    @Nullable private transient UpsertWriter historicalRetractWriter;
 
     /**
      * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
@@ -83,7 +90,8 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 mailboxExecutor,
                 flussSerializationSchema,
                 offsetReporter,
-                false);
+                false,
+                null);
     }
 
     /** Creates a writer with the supplied retract capability. */
@@ -95,7 +103,8 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> flussSerializationSchema,
             @Nullable ProducerOffsetReporter offsetReporter,
-            boolean schemaSupportsRetract) {
+            boolean schemaSupportsRetract,
+            @Nullable SchemaBinding retractSchema) {
         super(
                 tablePath,
                 flussConfig,
@@ -105,6 +114,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 flussSerializationSchema);
         this.offsetReporter = offsetReporter;
         this.schemaSupportsRetract = schemaSupportsRetract;
+        this.retractSchema = retractSchema;
     }
 
     @Override
@@ -115,6 +125,18 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             upsert = upsert.partialUpdate(targetColumnIndexes);
         }
         upsertWriter = upsert.createWriter();
+        TableInfo current = table.getTableInfo();
+        if (schemaSupportsRetract
+                && retractSchema != null
+                && retractSchema.tableId == current.getTableId()
+                && retractSchema.schemaId <= current.getSchemaId()) {
+            if (retractSchema.schemaId < current.getSchemaId()) {
+                Upsert historical = ((FlussTable) table).newUpsertForSchema(retractSchema.schemaId);
+                historicalRetractWriter =
+                        historical.partialUpdate(targetColumnIndexes).createWriter();
+            }
+            ((RowDataSerializationSchema) serializationSchema).useBoundRetractSchema();
+        }
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
 
@@ -125,7 +147,13 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     @Override
     CompletableFuture<?> writeRow(RowWithOp row) {
-        if (row.getOperationType() != OperationType.RETRACT || row.getTargetColumns() == null) {
+        if (row.getOperationType() != OperationType.RETRACT) {
+            return super.writeRow(row);
+        }
+        if (historicalRetractWriter != null) {
+            return writeRow(OperationType.RETRACT, row.getRow(), historicalRetractWriter);
+        }
+        if (row.getTargetColumns() == null) {
             return super.writeRow(row);
         }
         int[] columns = row.getTargetColumns();
@@ -203,5 +231,20 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
     @Override
     TableWriter getTableWriter() {
         return upsertWriter;
+    }
+
+    /** Identifies the Fluss schema used by the SQL sink plan. */
+    @Internal
+    public static final class SchemaBinding implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final long tableId;
+        private final int schemaId;
+
+        /** Creates a binding to the supplied table and schema IDs. */
+        public SchemaBinding(long tableId, int schemaId) {
+            this.tableId = tableId;
+            this.schemaId = schemaId;
+        }
     }
 }

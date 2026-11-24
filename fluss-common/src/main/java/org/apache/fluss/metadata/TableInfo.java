@@ -17,6 +17,7 @@
 
 package org.apache.fluss.metadata;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.StatisticsColumnsConfig;
@@ -189,6 +190,26 @@ public final class TableInfo {
     /** Returns the schema of the table. The schema defines the columns and types of the table. */
     public Schema getSchema() {
         return schema;
+    }
+
+    /** Returns a copy using the supplied schema and preserving the table identity and routing. */
+    @Internal
+    public TableInfo withSchema(int schemaId, Schema schema) {
+        return new TableInfo(
+                getTablePath(),
+                getTableId(),
+                schemaId,
+                schema,
+                getBucketKeys(),
+                getPartitionKeys(),
+                getNumBuckets(),
+                getProperties(),
+                getCustomProperties(),
+                getRemoteDataDir(),
+                getComment().orElse(null),
+                getCreatedTime(),
+                getModifiedTime(),
+                getBucketCountEpoch());
     }
 
     /** Returns the schema info of the table, including schema and schema id. */

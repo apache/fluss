@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.sink.serializer;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.row.RowWithOp;
@@ -121,6 +122,7 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
 
     private transient int[] inputIndexes;
     private transient int lastInputArity = -1;
+    private transient boolean useBoundRetractSchema;
     @Nullable private transient int[] retractTargetColumns;
 
     /**
@@ -191,6 +193,14 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                     "Converter not initialized. The open() method must be called before serializing records.");
         }
         InternalRow row = converter.replace(value);
+        OperationType opType = toOperationType(value.getRowKind());
+        Long estimatedSizeInBytes = null;
+        if (sizeEstimator != null) {
+            estimatedSizeInBytes = sizeEstimator.estimateSize(value);
+        }
+        if (opType == OperationType.RETRACT && useBoundRetractSchema) {
+            return new RowWithOp(row, opType, estimatedSizeInBytes);
+        }
         // handling schema evolution for changes before job compilation
         if (row.getFieldCount() < outputPadding.getFieldCount()) {
             row = outputPadding.replaceRow(row);
@@ -198,11 +208,6 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         // handling schema evolution for changes after job compilation
         if (outputProjection != null) {
             row = outputProjection.replaceRow(row);
-        }
-        OperationType opType = toOperationType(value.getRowKind());
-        Long estimatedSizeInBytes = null;
-        if (sizeEstimator != null) {
-            estimatedSizeInBytes = sizeEstimator.estimateSize(value);
         }
         if (opType == OperationType.RETRACT) {
             // Padding supplies storage nulls, not retract contributions for absent input fields.
@@ -222,6 +227,12 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
             return new RowWithOp(row, opType, estimatedSizeInBytes, retractTargetColumns);
         }
         return new RowWithOp(row, opType, estimatedSizeInBytes);
+    }
+
+    /** Keeps retract rows in the exact input schema bound by the SQL plan. */
+    @Internal
+    public void useBoundRetractSchema() {
+        useBoundRetractSchema = true;
     }
 
     /**

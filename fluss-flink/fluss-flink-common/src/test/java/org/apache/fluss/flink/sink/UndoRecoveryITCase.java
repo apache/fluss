@@ -23,11 +23,14 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.sink.testutils.CountingSource;
 import org.apache.fluss.flink.sink.testutils.FailingCountingSource;
+import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -51,6 +54,7 @@ import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.functions.ScalarFunction;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,7 +67,11 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
@@ -290,6 +298,92 @@ abstract class UndoRecoveryITCase {
                 .as(
                         "Final sum should equal (recordsBeforeFailure + recordsAfterFailure) * VALUE_PER_RECORD")
                 .isEqualTo(expectedFinalSum);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testRetractAfterSchemaEvolutionAndFailover() throws Exception {
+        String source = "schema_recovery_source";
+        String target = "schema_recovery_target";
+        TablePath sourcePath = TablePath.of(DEFAULT_DB, source);
+        TablePath targetPath = TablePath.of(DEFAULT_DB, target);
+        File failMarker = new File(failureMarkerDir, "schema-recovery");
+        StreamTableEnvironment tEnv = initTableEnvironment(null, true);
+        tEnv.getConfig().set("table.exec.sink.upsert-materialize", "NONE");
+        tEnv.createTemporarySystemFunction("fail_on_key_once", new FailOnKeyOnce(failMarker));
+        String schema = " (id BIGINT NOT NULL, total BIGINT, PRIMARY KEY (id) NOT ENFORCED)";
+        tEnv.executeSql("CREATE TABLE " + source + schema);
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + target
+                        + schema
+                        + " WITH ('table.merge-engine' = 'aggregation', "
+                        + "'sink.enable-retract' = 'true', 'fields.total.agg' = 'sum')");
+        JobClient job =
+                tEnv.executeSql(
+                                "INSERT INTO "
+                                        + target
+                                        + " SELECT id, total FROM "
+                                        + source
+                                        + " WHERE fail_on_key_once(id)")
+                        .getJobClient()
+                        .get();
+        try (Table sourceTable = conn.getTable(sourcePath)) {
+            UpsertWriter writer = sourceTable.newUpsert().createWriter();
+            writer.upsert(row(1L, 30L)).get();
+            retry(DEFAULT_TIMEOUT, () -> assertThat(lookupSum(targetPath, 1L)).isEqualTo(30L));
+            waitForCheckpoint(job.getJobID());
+            int oldSchemaId = admin.getTableInfo(targetPath).get().getSchemaId();
+            admin.alterTable(
+                            targetPath,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "maximum",
+                                            org.apache.fluss.types.DataTypes.BIGINT(),
+                                            null,
+                                            TableChange.ColumnPosition.last(),
+                                            AggFunctions.MAX())),
+                            false)
+                    .get();
+            assertThat(admin.getTableInfo(targetPath).get().getSchemaId())
+                    .isGreaterThan(oldSchemaId);
+
+            writer.upsert(row(99L, 1L)).get();
+            retry(DEFAULT_TIMEOUT, () -> assertThat(lookupSum(targetPath, 99L)).isEqualTo(1L));
+            assertThat(failMarker).exists();
+
+            // The restarted task still uses the two-column SQL input. Matching an explicit null
+            // against the added MAX column would reject the DELETE-derived retract.
+            writer.delete(row(1L, null)).get();
+            writer.upsert(row(2L, 15L)).get();
+            retry(
+                    DEFAULT_TIMEOUT,
+                    () -> {
+                        assertThat(lookupSum(targetPath, 1L)).isEqualTo(0L);
+                        assertThat(lookupSum(targetPath, 2L)).isEqualTo(15L);
+                    });
+        } finally {
+            job.cancel().get();
+            waitForJobTermination(job, DEFAULT_TIMEOUT);
+        }
+    }
+
+    /** Injects a single task failure after the test submits the marker key. */
+    public static class FailOnKeyOnce extends ScalarFunction {
+        private final String markerPath;
+
+        public FailOnKeyOnce(File marker) {
+            this.markerPath = marker.getAbsolutePath();
+        }
+
+        public boolean eval(long key) throws IOException {
+            if (key == 99L && !Files.exists(Paths.get(markerPath))) {
+                Files.createFile(Paths.get(markerPath));
+                throw new IllegalStateException(
+                        "Injected failure after adding an aggregation column");
+            }
+            return true;
+        }
     }
 
     /**

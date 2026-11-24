@@ -1462,7 +1462,7 @@ KV batches retain magic 0. Attributes bit 0 indicates that each record carries a
 
 Retract requires PUT_KV API version 4 or later. The RPC connection queues writes until version negotiation completes, without consuming the write retry budget. If the negotiated version is below 4, a PUT_KV request containing any batch carrying mutation types fails with `UnsupportedVersionException` before transmission. This rejects the entire request, including any batches without mutation types grouped with it. Ordinary upsert and delete writes start batches without mutation types and remain compatible when sent in requests without mutation types.
 
-After schema evolution, fields absent from the input row do not participate in retract. This also applies when Flink pads an older input schema to the latest table schema. An explicitly supplied NULL still participates according to the field's aggregation function; for example, LAST_VALUE retract clears that field. Integer SUM uses the same fixed-width arithmetic as forward aggregation, including wraparound at the type boundary.
+After schema evolution, fields absent from the input row do not participate in retract. When Flink recreates the sink writer during task failover, a SQL job writing through its Fluss Catalog to the same table uses its original plan schema for retract. Upserts continue to use the current schema. An explicitly supplied NULL still participates according to the field's aggregation function; for example, LAST_VALUE retract clears that field. Integer SUM uses the same fixed-width arithmetic as forward aggregation, including wraparound at the type boundary.
 
 ## Delete Behavior
 

@@ -22,6 +22,7 @@ import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
+import org.apache.fluss.flink.sink.writer.UpsertSinkWriter.SchemaBinding;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.flink.utils.PushdownUtils.ValueConversion;
@@ -96,6 +97,7 @@ public class FlinkTableSink
     private final Set<String> nonRetractableColumns;
 
     private final boolean enableRetract;
+    @Nullable private final SchemaBinding retractSchema;
     private boolean requiresRetract;
 
     private boolean appliedUpdates = false;
@@ -133,7 +135,8 @@ public class FlinkTableSink
                 distributionMode,
                 producerId,
                 Collections.emptySet(),
-                false);
+                false,
+                null);
     }
 
     /** Creates a sink with the supplied retract capabilities. */
@@ -153,7 +156,8 @@ public class FlinkTableSink
             DistributionMode distributionMode,
             @Nullable String producerId,
             Set<String> nonRetractableColumns,
-            boolean enableRetract) {
+            boolean enableRetract,
+            @Nullable SchemaBinding retractSchema) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -171,6 +175,7 @@ public class FlinkTableSink
         this.isAggregationTable = mergeEngineType == MergeEngineType.AGGREGATION;
         this.nonRetractableColumns = new HashSet<>(nonRetractableColumns);
         this.enableRetract = enableRetract;
+        this.retractSchema = retractSchema;
         if (enableRetract && !isAggregationTable) {
             throw new ValidationException("sink.enable-retract requires an aggregation table.");
         }
@@ -301,7 +306,8 @@ public class FlinkTableSink
                                                 : SinkOperationMode.upsert(sinkIgnoreDelete)),
                                 enableUndoRecovery,
                                 producerId,
-                                writerSupportsRetract)
+                                writerSupportsRetract,
+                                retractSchema)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -361,7 +367,8 @@ public class FlinkTableSink
                         distributionMode,
                         producerId,
                         nonRetractableColumns,
-                        enableRetract);
+                        enableRetract,
+                        retractSchema);
         sink.appliedUpdates = appliedUpdates;
         sink.requiresRetract = requiresRetract;
         sink.deleteRow = deleteRow;

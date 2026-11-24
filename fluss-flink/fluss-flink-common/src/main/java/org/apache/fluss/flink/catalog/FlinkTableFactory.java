@@ -25,6 +25,7 @@ import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.flink.sink.writer.UpsertSinkWriter.SchemaBinding;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.BucketsFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
@@ -217,6 +218,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         MergeEngineType mergeEngineType =
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
         Set<String> nonRetractableColumns = Collections.emptySet();
+        SchemaBinding retractSchema = null;
         if (enableRetract) {
             TableInfo tableInfo = sinkTableInfoLoader.apply(tablePath, clientConfig);
             if (tableInfo == null) {
@@ -226,6 +228,14 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 org.apache.flink.configuration.Configuration.fromMap(
                                         resolvedCatalogTable.getOptions()));
             } else {
+                // The enclosing Flink ROW can be NOT NULL independently of its fields.
+                if (rowType.getFields()
+                        .equals(
+                                FlinkConversions.toFlinkRowType(tableInfo.getRowType())
+                                        .getFields())) {
+                    retractSchema =
+                            new SchemaBinding(tableInfo.getTableId(), tableInfo.getSchemaId());
+                }
                 TableConfig persisted = tableInfo.getTableConfig();
                 mergeEngineType = persisted.getMergeEngineType().orElse(null);
                 for (String column : tableInfo.getSchema().getColumnNames()) {
@@ -270,7 +280,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 distributionMode,
                 tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null),
                 nonRetractableColumns,
-                enableRetract);
+                enableRetract,
+                retractSchema);
     }
 
     private static void validateRetractOption(

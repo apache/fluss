@@ -62,7 +62,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
     protected final RowType tableRowType;
     protected final @Nullable int[] targetColumnIndexes;
     private final MailboxExecutor mailboxExecutor;
-    private final FlussSerializationSchema<InputT> serializationSchema;
+    final FlussSerializationSchema<InputT> serializationSchema;
 
     private transient Connection connection;
     protected transient Table table;

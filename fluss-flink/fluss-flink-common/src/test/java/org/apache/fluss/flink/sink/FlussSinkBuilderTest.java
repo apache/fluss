@@ -214,7 +214,8 @@ class FlussSinkBuilderTest {
                         new OrderSerializationSchema(),
                         true,
                         null,
-                        false);
+                        false,
+                        null);
 
         writerBuilder.addPreWriteTopology(input);
 
@@ -247,7 +248,8 @@ class FlussSinkBuilderTest {
                             new OrderSerializationSchema(),
                             true,
                             null,
-                            false);
+                            false,
+                            null);
 
             assertThatThrownBy(() -> writerBuilder.addPreWriteTopology(input))
                     .isInstanceOf(IllegalArgumentException.class)

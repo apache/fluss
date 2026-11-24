@@ -133,7 +133,8 @@ class FlinkTableSinkTest {
                 DistributionMode.BUCKET,
                 null, // producerId
                 schemaSupportsRetract ? Collections.emptySet() : Collections.singleton("other"),
-                enableRetract);
+                enableRetract,
+                null);
     }
 
     private static class TargetContext implements DynamicTableSink.Context {
