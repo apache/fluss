@@ -99,25 +99,29 @@ final class BulkLoadSnapshotValidator {
                     metadataPath);
         }
         KvSnapshotHandle files = snapshot.getKvSnapshotHandle();
-        if (!files.getSharedKvFileHandles().isEmpty()) {
+        Set<String> localPaths = new HashSet<>();
+        long size =
+                validateFiles(
+                        files.getSharedKvFileHandles(),
+                        FlussPaths.remoteKvSharedDir(tabletDir),
+                        localPaths,
+                        0L);
+        size = validateFiles(files.getPrivateFileHandles(), directory, localPaths, size);
+        if (files.getIncrementalSize() != size) {
             throw invalid(
-                    "%s lists shared files. Upload all files into '%s' and list them in private_file_handles.",
-                    metadataPath, directory);
-        }
-        long privateSize = validateFiles(files.getPrivateFileHandles(), directory);
-        if (files.getIncrementalSize() != privateSize) {
-            throw invalid(
-                    "%s declares snapshot_incremental_size of %d bytes, but the private files total %d bytes.",
-                    metadataPath, files.getIncrementalSize(), privateSize);
+                    "%s declares snapshot_incremental_size of %d bytes, but the uploaded files total %d bytes.",
+                    metadataPath, files.getIncrementalSize(), size);
         }
         return snapshot;
     }
 
-    private static long validateFiles(List<KvFileHandleAndLocalPath> files, FsPath ownerDirectory) {
+    private static long validateFiles(
+            List<KvFileHandleAndLocalPath> files,
+            FsPath ownerDirectory,
+            Set<String> local,
+            long size) {
         String prefix = ownerDirectory + "/";
-        Set<String> local = new HashSet<>();
         Set<String> remote = new HashSet<>();
-        long size = 0;
         FsPath path = ownerDirectory;
         try {
             FileSystem fileSystem = ownerDirectory.getFileSystem();
@@ -163,7 +167,7 @@ final class BulkLoadSnapshotValidator {
                 }
                 if (!remotePath.startsWith(prefix)) {
                     throw invalid(
-                            "File '%s' is outside the allocated snapshot directory '%s'.",
+                            "File '%s' is outside the expected directory '%s'.",
                             remotePath, ownerDirectory);
                 }
                 FileStatus status = fileSystem.getFileStatus(path);

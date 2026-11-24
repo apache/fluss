@@ -216,6 +216,7 @@ import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -384,10 +385,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     request.getBucketId());
                     BulkLoadBucket allocation =
                             manager.allocateBucketSnapshot(handle.getBulkLoadId(), bucket);
-                    return new AllocateBulkLoadBucketSnapshotResponse()
-                            .setSnapshotId(allocation.snapshotId)
-                            .setLogOffset(allocation.logOffset)
-                            .setState(allocation.state);
+                    return CompletableFuture.completedFuture(
+                            new AllocateBulkLoadBucketSnapshotResponse()
+                                    .setSnapshotId(allocation.snapshotId)
+                                    .setLogOffset(allocation.logOffset)
+                                    .setState(allocation.state));
                 });
     }
 
@@ -397,20 +399,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         PbBulkLoadHandle handle = request.getHandle();
         authorizeBulkLoad(handle.getTableId());
         return submitBulkLoadOperation(
-                manager -> {
-                    TableBucket bucket =
-                            new TableBucket(
-                                    handle.getTableId(),
-                                    request.hasPartitionId() ? request.getPartitionId() : null,
-                                    request.getBucketId());
-                    CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
-                    manager.commitBucketSnapshot(
-                            handle.getBulkLoadId(),
-                            bucket,
-                            processor.completedSnapshotStoreManager(),
-                            processor::publishBulkLoadBucket);
-                    return new CommitBulkLoadBucketSnapshotResponse();
-                });
+                        manager -> {
+                            TableBucket bucket =
+                                    new TableBucket(
+                                            handle.getTableId(),
+                                            request.hasPartitionId()
+                                                    ? request.getPartitionId()
+                                                    : null,
+                                            request.getBucketId());
+                            CoordinatorEventProcessor processor =
+                                    coordinatorEventProcessorSupplier.get();
+                            return manager.commitBucketSnapshot(
+                                    handle.getBulkLoadId(),
+                                    bucket,
+                                    processor.completedSnapshotStoreManager(),
+                                    processor.getCoordinatorEventManager());
+                        })
+                .thenApply(ignored -> new CommitBulkLoadBucketSnapshotResponse());
     }
 
     private void authorizeBulkLoad(long tableId) {
@@ -422,26 +427,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private <T> CompletableFuture<T> submitBulkLoadOperation(
-            FunctionWithException<BulkLoadManager, T, Exception> action) {
+            FunctionWithException<BulkLoadManager, CompletableFuture<T>, Exception> action) {
         final int epochVersion = coordinatorZkVersionSupplier.get();
         return CompletableFuture.supplyAsync(
-                () -> {
-                    if (!isLeader() || epochVersion < 0) {
-                        throw new NotCoordinatorLeaderException(
-                                "BulkLoad requires the current Coordinator leader.");
-                    }
-                    try {
-                        return action.apply(new BulkLoadManager(zkClient, epochVersion));
-                    } catch (KeeperException.ConnectionLossException e) {
-                        throw new NetworkException(
-                                "Connection to BulkLoad metadata store was lost.", e);
-                    } catch (KeeperException.OperationTimeoutException e) {
-                        throw new TimeoutException("BulkLoad metadata operation timed out.", e);
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
-                    }
-                },
-                ioExecutor);
+                        () -> {
+                            if (!isLeader() || epochVersion < 0) {
+                                throw new NotCoordinatorLeaderException(
+                                        "BulkLoad requires the current Coordinator leader.");
+                            }
+                            try {
+                                return action.apply(new BulkLoadManager(zkClient, epochVersion));
+                            } catch (Exception e) {
+                                throw new CompletionException(e);
+                            }
+                        },
+                        ioExecutor)
+                .thenCompose(result -> result)
+                .exceptionally(
+                        failure -> {
+                            Throwable cause = ExceptionUtils.stripCompletionException(failure);
+                            if (cause instanceof KeeperException.ConnectionLossException) {
+                                throw new NetworkException(
+                                        "Connection to BulkLoad metadata store was lost.", cause);
+                            }
+                            if (cause instanceof KeeperException.OperationTimeoutException) {
+                                throw new TimeoutException(
+                                        "BulkLoad metadata operation timed out.", cause);
+                            }
+                            throw new CompletionException(cause);
+                        });
     }
 
     @Override

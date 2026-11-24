@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
@@ -227,7 +228,7 @@ public final class CoordinatorEventManager implements EventManager {
                 () -> {
                     if (thread.isShutdownInitiated()
                             && event instanceof CommitBulkLoadBucketEvent) {
-                        ((CommitBulkLoadBucketEvent) event).cancel(false);
+                        rejectPendingPublication(event);
                         return;
                     }
                     try {
@@ -243,9 +244,7 @@ public final class CoordinatorEventManager implements EventManager {
                                 event,
                                 event.getClass());
                     } catch (InterruptedException e) {
-                        if (event instanceof CommitBulkLoadBucketEvent) {
-                            ((CommitBulkLoadBucketEvent) event).cancel(false);
-                        }
+                        rejectPendingPublication(event);
                         LOG.error("Fail to put coordinator event {}.", event, e);
                     }
                 });
@@ -257,12 +256,20 @@ public final class CoordinatorEventManager implements EventManager {
                 () -> {
                     QueuedEvent pending;
                     while ((pending = queue.poll()) != null) {
-                        if (pending.event instanceof CommitBulkLoadBucketEvent) {
-                            ((CommitBulkLoadBucketEvent) pending.event).cancel(false);
-                        }
+                        rejectPendingPublication(pending.event);
                     }
                     put(event);
                 });
+    }
+
+    private static void rejectPendingPublication(CoordinatorEvent event) {
+        if (event instanceof CommitBulkLoadBucketEvent) {
+            CommitBulkLoadBucketEvent commit = (CommitBulkLoadBucketEvent) event;
+            commit.result.completeExceptionally(
+                    new NotCoordinatorLeaderException(
+                            "Coordinator stopped before publishing "
+                                    + commit.snapshot.getTableBucket()));
+        }
     }
 
     private class CoordinatorEventThread extends ShutdownableThread {

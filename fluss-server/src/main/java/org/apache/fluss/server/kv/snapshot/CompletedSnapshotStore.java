@@ -22,7 +22,6 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.utils.function.CheckedSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +43,7 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -131,20 +131,29 @@ public class CompletedSnapshotStore {
                 () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
-    /** Keeps the durable publication and local retention ordered with ordinary snapshot commits. */
-    public void publishImportedSnapshot(
-            CompletedSnapshot snapshot, CheckedSupplier<Boolean> publish) throws Exception {
+    /** Adopts the durable import without replacing a recovery point selected since publication. */
+    public void registerImportedSnapshot(CompletedSnapshot snapshot) throws Exception {
         inLock(
                 lock,
                 () -> {
-                    if (recoverySnapshotId != null
-                            && recoverySnapshotId == snapshot.getSnapshotID()) {
-                        return;
+                    long id = snapshot.getSnapshotID();
+                    TableBucket bucket = snapshot.getTableBucket();
+                    if (!holdsSnapshot(id)) {
+                        // A repeated callback may arrive after retention removed the durable
+                        // handle.
+                        if (!completedSnapshotHandleStore.get(bucket, id).isPresent()) {
+                            return;
+                        }
+                        trackSnapshot(snapshot);
                     }
-                    if (publish.get()) {
-                        completedSnapshots.addLast(snapshot);
-                        recoverySnapshotId = snapshot.getSnapshotID();
-                        retainSnapshots(snapshot, null);
+                    Optional<CompletedSnapshotHandle> selected =
+                            completedSnapshotHandleStore.getRecoverySnapshot(bucket);
+                    if (selected.isPresent()) {
+                        long selectedId = selected.get().getSnapshotId();
+                        recoverySnapshotId = selectedId;
+                        // An import allocated earlier can retire ordinary snapshots with higher
+                        // IDs.
+                        retainSnapshots(Long.MAX_VALUE, null);
                     }
                 });
     }
@@ -183,11 +192,22 @@ public class CompletedSnapshotStore {
             @Nullable Long previousRecoverySnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
+        // The leader can checkpoint a published import before its local registration runs.
+        // Adopt that predecessor before retention can release any of its shared SSTs.
+        if (previousRecoverySnapshotId != null
+                && previousRecoverySnapshotId != NO_SNAPSHOT_ID
+                && !holdsSnapshot(previousRecoverySnapshotId)) {
+            Optional<CompletedSnapshotHandle> selected =
+                    completedSnapshotHandleStore.getRecoverySnapshot(snapshot.getTableBucket());
+            if (selected.isPresent()
+                    && selected.get().getSnapshotId() == previousRecoverySnapshotId) {
+                trackSnapshot(selected.get().retrieveCompleteSnapshot());
+            }
+        }
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
-        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
-        completedSnapshots.addLast(snapshot);
+        trackSnapshot(snapshot);
         Exception selectionFailure = null;
         try {
             completedSnapshotHandleStore.updateRecoverySnapshot(
@@ -219,15 +239,26 @@ public class CompletedSnapshotStore {
             LOG.warn(
                     "Recovery selection update failed after snapshot registration.", updateFailure);
         }
-        retainSnapshots(snapshot, selectionFailure);
+        retainSnapshots(snapshot.getSnapshotID() + 1, selectionFailure);
         if (selectionFailure != null) {
             throw selectionFailure;
         }
     }
 
-    private void retainSnapshots(CompletedSnapshot snapshot, @Nullable Exception selectionFailure) {
+    private boolean holdsSnapshot(long id) {
+        return stillInUseSnapshots.containsKey(id)
+                || completedSnapshots.stream().anyMatch(snapshot -> snapshot.getSnapshotID() == id);
+    }
+
+    private void trackSnapshot(CompletedSnapshot snapshot) {
+        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        completedSnapshots.addLast(snapshot);
+    }
+
+    private void retainSnapshots(
+            long cleanupBeforeSnapshotId, @Nullable Exception selectionFailure) {
         try {
-            subsumeOldSnapshots(snapshot);
+            subsumeOldSnapshots(cleanupBeforeSnapshotId);
         } catch (Exception cleanupFailure) {
             if (selectionFailure != null) {
                 selectionFailure.addSuppressed(cleanupFailure);
@@ -237,7 +268,7 @@ public class CompletedSnapshotStore {
         }
     }
 
-    private void subsumeOldSnapshots(CompletedSnapshot snapshot) throws Exception {
+    private void subsumeOldSnapshots(long cleanupBeforeSnapshotId) throws Exception {
 
         CompletedSnapshot latest = completedSnapshots.peekLast();
         Iterator<CompletedSnapshot> iterator = completedSnapshots.iterator();
@@ -268,13 +299,11 @@ public class CompletedSnapshotStore {
         findLowest(completedSnapshots)
                 .ifPresent(id -> sharedKvFileRegistry.unregisterUnusedKvFile(id, stillInUseIds));
 
-        // Snapshot metadata/private files cleanup: use the latest snapshot
-        // ID + 1 so subsumed snapshots can be cleaned even when a lower
-        // snapshot has a lease. This is safe because
+        // Clean retired private files independently of lower, leased snapshots.
         // KvSnapshotHandle.discard() only deletes private files and
         // metadata, not shared SST files registered in SharedKvFileRegistry.
         snapshotsCleaner.cleanSubsumedSnapshots(
-                snapshot.getSnapshotID() + 1, stillInUseIds, () -> {}, ioExecutor);
+                cleanupBeforeSnapshotId, stillInUseIds, () -> {}, ioExecutor);
     }
 
     private void removeUnusedSnapshots() throws Exception {

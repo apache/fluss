@@ -33,7 +33,6 @@ import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.NetworkException;
-import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
@@ -127,6 +126,7 @@ import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -140,11 +140,9 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
-import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.Uninterruptibles;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
-import org.apache.fluss.utils.function.CheckedSupplier;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -163,10 +161,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
@@ -325,40 +322,60 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         return coordinatorContext;
     }
 
-    boolean publishBulkLoadBucket(
-            TableBucket bucket, CheckedSupplier<Optional<LeaderAndIsr>> publication)
-            throws Exception {
-        CommitBulkLoadBucketEvent event =
-                new CommitBulkLoadBucketEvent(
-                        () -> {
-                            Optional<LeaderAndIsr> published;
-                            try {
-                                published = publication.get();
-                            } catch (NetworkException unconfirmed) {
-                                // Without a verified role, ISR writers must not reuse the cached
-                                // epoch.
-                                coordinatorContext.bucketLeaderAndIsr().remove(bucket);
-                                throw unconfirmed;
-                            }
-                            published.ifPresent(
-                                    role -> {
-                                        coordinatorContext.putBucketLeaderAndIsr(bucket, role);
-                                        notifyOnlineReplicas(bucket);
-                                    });
-                            return published.isPresent();
-                        });
-        coordinatorEventManager.put(event);
+    private void processCommitBulkLoadBucket(CommitBulkLoadBucketEvent event) {
+        CompletedSnapshot snapshot = event.snapshot;
+        TableBucket bucket = snapshot.getTableBucket();
         try {
-            // The I/O caller owns the snapshot lock until publication has finished.
-            return Uninterruptibles.getUninterruptibly(event);
-        } catch (CancellationException e) {
-            throw new NotCoordinatorLeaderException(
-                    "Coordinator stopped before publishing " + bucket);
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof Exception) {
-                throw (Exception) e.getCause();
+            Optional<LeaderAndIsr> published;
+            try {
+                published =
+                        zooKeeperClient.commitBulkLoadBucket(
+                                event.transaction,
+                                event.target,
+                                bucket,
+                                new BucketSnapshot(
+                                        snapshot.getSnapshotID(),
+                                        snapshot.getLogOffset(),
+                                        snapshot.getMetadataFilePath().toString()),
+                                event.tableVersion,
+                                event.partitionVersion,
+                                event.coordinatorEpochVersion);
+            } catch (NetworkException unconfirmed) {
+                // ISR updates must not reuse an epoch we could not confirm.
+                coordinatorContext.bucketLeaderAndIsr().remove(bucket);
+                throw unconfirmed;
             }
-            throw (Error) e.getCause();
+            if (!published.isPresent()) {
+                event.result.complete(null);
+                return;
+            }
+            coordinatorContext.putBucketLeaderAndIsr(bucket, published.get());
+            notifyOnlineReplicas(bucket);
+        } catch (Throwable failure) {
+            event.result.completeExceptionally(failure);
+            return;
+        }
+
+        final String registrationFailure =
+                "BulkLoad snapshot "
+                        + snapshot.getSnapshotID()
+                        + " for "
+                        + bucket
+                        + " was committed, but local registration failed.";
+        try {
+            ioExecutor.execute(
+                    () -> {
+                        try {
+                            event.snapshotStore.registerImportedSnapshot(snapshot);
+                            event.result.complete(null);
+                        } catch (Throwable failure) {
+                            event.result.completeExceptionally(
+                                    new UnknownServerException(registrationFailure, failure));
+                        }
+                    });
+        } catch (RejectedExecutionException rejected) {
+            event.result.completeExceptionally(
+                    new UnknownServerException(registrationFailure, rejected));
         }
     }
 
@@ -770,7 +787,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     @Override
     public void process(CoordinatorEvent event) {
         if (event instanceof CommitBulkLoadBucketEvent) {
-            ((CommitBulkLoadBucketEvent) event).run();
+            processCommitBulkLoadBucket((CommitBulkLoadBucketEvent) event);
         } else if (event instanceof CreateTableEvent) {
             processCreateTable((CreateTableEvent) event);
         } else if (event instanceof CreatePartitionEvent) {
