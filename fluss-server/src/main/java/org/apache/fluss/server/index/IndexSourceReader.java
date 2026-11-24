@@ -31,15 +31,12 @@ import org.apache.fluss.shaded.guava32.com.google.common.collect.AbstractIterato
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
-import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -68,12 +65,12 @@ final class IndexSourceReader implements AutoCloseable {
 
     private final SourceLog sourceLog;
     /** Opens a fresh, independently owned remote WAL session. */
-    @Nullable private final Supplier<RemoteFetcher> remoteFetcherFactory;
+    private final Supplier<RemoteFetcher> remoteFetcherFactory;
 
     private final Executor remoteExecutor;
-    private final AtomicBoolean closed = new AtomicBoolean();
+    private volatile boolean closed;
     /** Removing the session transfers responsibility for closing it. */
-    private final AtomicReference<RemoteFetcher> remoteFetcherSession = new AtomicReference<>();
+    private final AtomicReference<RemoteFetcher> idleRemoteFetcher = new AtomicReference<>();
 
     IndexSourceReader(
             LogTablet logTablet, RemoteLogManager remoteLogManager, Executor remoteExecutor) {
@@ -92,7 +89,7 @@ final class IndexSourceReader implements AutoCloseable {
 
     IndexSourceReader(
             SourceLog sourceLog,
-            @Nullable Supplier<RemoteFetcher> remoteFetcherFactory,
+            Supplier<RemoteFetcher> remoteFetcherFactory,
             Executor remoteExecutor) {
         this.sourceLog = sourceLog;
         this.remoteFetcherFactory = remoteFetcherFactory;
@@ -101,11 +98,10 @@ final class IndexSourceReader implements AutoCloseable {
 
     /**
      * Returns a bounded continuous source range, fetching remote raw WAL asynchronously if needed.
-     * The owning replicator serializes reads and cancels or closes the delivered result. An async
-     * task remains responsible for a result that its future does not accept.
+     * The owning replicator serializes reads.
      */
     CompletableFuture<ReadResult> read(long nextOffset, long endOffsetLimit, int maxBytes) {
-        if (closed.get()) {
+        if (closed) {
             throw new IllegalStateException("Index source reader is closed");
         }
         if (nextOffset < 0 || endOffsetLimit < nextOffset || maxBytes <= 0) {
@@ -125,22 +121,12 @@ final class IndexSourceReader implements AutoCloseable {
         if (nextOffset >= localLogStartOffset) {
             try {
                 return CompletableFuture.completedFuture(
-                        new BatchCollector(nextOffset, endOffsetLimit, maxBytes)
-                                .readLocal()
-                                .finish(null));
+                        new BatchCollector(nextOffset, maxBytes)
+                                .readLocal(endOffsetLimit)
+                                .finish());
             } catch (Throwable failure) {
                 return FutureUtils.completedExceptionally(failure);
             }
-        }
-
-        if (remoteFetcherFactory == null) {
-            return FutureUtils.completedExceptionally(
-                    corruption(
-                            "offset "
-                                    + nextOffset
-                                    + " is below local log start "
-                                    + localLogStartOffset
-                                    + " but no raw remote WAL reader is available"));
         }
 
         CompletableFuture<ReadResult> future = new CompletableFuture<>();
@@ -175,15 +161,17 @@ final class IndexSourceReader implements AutoCloseable {
             int maxBytes) {
         RemoteFetcher remoteFetcher = null;
         try {
-            remoteFetcher = getOrOpenRemoteFetcher();
-            if (closed.get()) {
-                discardRemoteFetcher(remoteFetcher);
+            remoteFetcher = idleRemoteFetcher.getAndSet(null);
+            if (closed) {
                 future.cancel(true);
                 return;
             }
 
+            if (remoteFetcher == null) {
+                remoteFetcher = remoteFetcherFactory.get();
+            }
             long remoteEnd = Math.min(localLogStartOffset, endOffsetLimit);
-            BatchCollector collector = new BatchCollector(nextOffset, endOffsetLimit, maxBytes);
+            BatchCollector collector = new BatchCollector(nextOffset, maxBytes);
             collector.collect(remoteFetcher.fetch(nextOffset, localLogStartOffset), remoteEnd);
             if (!collector.byteLimitReached && collector.nextOffset < remoteEnd) {
                 throw corruption(
@@ -197,95 +185,66 @@ final class IndexSourceReader implements AutoCloseable {
             if (reachedHandoff
                     && !collector.byteLimitReached
                     && collector.nextOffset < endOffsetLimit) {
-                collector.readLocal();
+                collector.readLocal(endOffsetLimit);
             }
-            // Remote batch views remain valid until their consumer closes the result.
-            RemoteFetcher session = remoteFetcher;
-            ReadResult result =
-                    collector.finish(
-                            collector.nextOffset >= remoteEnd
-                                    ? () -> discardRemoteFetcher(session)
-                                    : null);
-            if (closed.get() || future.isCancelled()) {
-                result.close();
-                future.cancel(true);
-            } else if (!future.complete(result)) {
-                result.close();
+            // CRC validation materializes each file-backed batch before the iterator advances.
+            // The consumer can decode those batches after the remote files have been closed.
+            ReadResult result = collector.finish();
+            if (collector.nextOffset < remoteEnd
+                    && idleRemoteFetcher.compareAndSet(null, remoteFetcher)) {
+                remoteFetcher = null;
+                if (closed) {
+                    closeIdleRemoteFetcher();
+                }
             }
+            future.complete(result);
         } catch (Throwable failure) {
+            future.completeExceptionally(failure);
+        } finally {
             if (remoteFetcher != null) {
-                discardRemoteFetcher(remoteFetcher);
+                remoteFetcher.close();
             }
-            if (!future.isCancelled()) {
-                future.completeExceptionally(failure);
-            }
-        }
-    }
-
-    private RemoteFetcher getOrOpenRemoteFetcher() {
-        RemoteFetcher existing = remoteFetcherSession.get();
-        if (existing != null) {
-            return existing;
-        }
-        RemoteFetcher opened = remoteFetcherFactory.get();
-        if (remoteFetcherSession.compareAndSet(null, opened)) {
-            return opened;
-        }
-        opened.close();
-        return remoteFetcherSession.get();
-    }
-
-    private void discardRemoteFetcher(RemoteFetcher fetcher) {
-        if (remoteFetcherSession.compareAndSet(fetcher, null)) {
-            fetcher.close();
         }
     }
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
-        }
-        RemoteFetcher fetcher = remoteFetcherSession.getAndSet(null);
+        closed = true;
+        closeIdleRemoteFetcher();
+    }
+
+    private void closeIdleRemoteFetcher() {
+        RemoteFetcher fetcher = idleRemoteFetcher.getAndSet(null);
         if (fetcher != null) {
             fetcher.close();
         }
     }
 
     private IndexSourceWalCorruptionException corruption(String message) {
-        return new IndexSourceWalCorruptionException(
-                "Corrupt source WAL for " + sourceLog.tableBucket() + ": " + message);
+        return new IndexSourceWalCorruptionException(sourceLog.tableBucket(), message);
     }
 
     private IndexSourceWalCorruptionException corruption(String message, Throwable cause) {
-        return new IndexSourceWalCorruptionException(
-                "Corrupt source WAL for " + sourceLog.tableBucket() + ": " + message, cause);
+        return new IndexSourceWalCorruptionException(sourceLog.tableBucket(), message, cause);
     }
 
-    /** Owns the batches and any downloaded files backing them until {@link #close()}. */
-    static final class ReadResult implements AutoCloseable {
+    static final class ReadResult {
         private final List<LogRecordBatch> batches;
         private final long nextOffset;
         private final boolean byteLimited;
         private final long bytes;
-        @Nullable private final Runnable releaseRemoteSession;
 
         private ReadResult(
-                List<LogRecordBatch> batches,
-                long nextOffset,
-                boolean byteLimited,
-                long bytes,
-                @Nullable Runnable releaseRemoteSession) {
+                List<LogRecordBatch> batches, long nextOffset, boolean byteLimited, long bytes) {
             // The collector no longer appends after handing this list to the result.
             this.batches = Collections.unmodifiableList(batches);
             this.bytes = bytes;
             this.nextOffset = nextOffset;
             this.byteLimited = byteLimited;
-            this.releaseRemoteSession = releaseRemoteSession;
         }
 
         private static ReadResult empty(long nextOffset) {
-            return new ReadResult(Collections.emptyList(), nextOffset, false, 0L, null);
+            return new ReadResult(Collections.emptyList(), nextOffset, false, 0L);
         }
 
         List<LogRecordBatch> batches() {
@@ -315,26 +274,17 @@ final class IndexSourceReader implements AutoCloseable {
         boolean isByteLimited() {
             return byteLimited;
         }
-
-        @Override
-        public void close() {
-            if (releaseRemoteSession != null) {
-                releaseRemoteSession.run();
-            }
-        }
     }
 
     private final class BatchCollector {
         private final List<LogRecordBatch> batches = new ArrayList<>();
-        private final long endOffsetLimit;
         private final int maxBytes;
         private long bytes;
         private long nextOffset;
         private boolean byteLimitReached;
 
-        private BatchCollector(long nextOffset, long endOffsetLimit, int maxBytes) {
+        private BatchCollector(long nextOffset, int maxBytes) {
             this.nextOffset = nextOffset;
-            this.endOffsetLimit = endOffsetLimit;
             this.maxBytes = maxBytes;
         }
 
@@ -356,32 +306,26 @@ final class IndexSourceReader implements AutoCloseable {
                     continue;
                 }
 
-                long start = nextOffset;
-                long end = Math.min(Math.min(batch.nextLogOffset(), upperBound), endOffsetLimit);
-                if (start < end) {
-                    if (start != batch.baseLogOffset() || end != batch.nextLogOffset()) {
-                        throw corruption(
-                                "source read range ["
-                                        + start
-                                        + ", "
-                                        + end
-                                        + ") splits record batch ["
-                                        + batch.baseLogOffset()
-                                        + ", "
-                                        + batch.nextLogOffset()
-                                        + ")");
-                    }
-                    batches.add(batch);
-                    bytes += batch.sizeInBytes();
-                    nextOffset = end;
-                    if (bytes >= maxBytes
-                            && nextOffset < upperBound
-                            && nextOffset < endOffsetLimit) {
-                        byteLimitReached = true;
-                        return;
-                    }
+                if (batch.baseLogOffset() != nextOffset || batch.nextLogOffset() > upperBound) {
+                    throw corruption(
+                            "source read range ["
+                                    + nextOffset
+                                    + ", "
+                                    + Math.min(batch.nextLogOffset(), upperBound)
+                                    + ") splits record batch ["
+                                    + batch.baseLogOffset()
+                                    + ", "
+                                    + batch.nextLogOffset()
+                                    + ")");
                 }
-                if (nextOffset >= upperBound || nextOffset >= endOffsetLimit) {
+                batches.add(batch);
+                bytes += batch.sizeInBytes();
+                nextOffset = batch.nextLogOffset();
+                if (nextOffset == upperBound) {
+                    return;
+                }
+                if (bytes >= maxBytes) {
+                    byteLimitReached = true;
                     return;
                 }
             }
@@ -408,7 +352,7 @@ final class IndexSourceReader implements AutoCloseable {
             }
         }
 
-        private BatchCollector readLocal() throws IOException {
+        private BatchCollector readLocal(long endOffsetLimit) throws IOException {
             long start = nextOffset;
             FetchDataInfo fetch =
                     sourceLog.read(
@@ -423,9 +367,8 @@ final class IndexSourceReader implements AutoCloseable {
             return this;
         }
 
-        private ReadResult finish(@Nullable Runnable releaseRemoteSession) {
-            return new ReadResult(
-                    batches, nextOffset, byteLimitReached, bytes, releaseRemoteSession);
+        private ReadResult finish() {
+            return new ReadResult(batches, nextOffset, byteLimitReached, bytes);
         }
     }
 

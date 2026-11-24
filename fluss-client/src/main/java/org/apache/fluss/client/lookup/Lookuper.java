@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.concurrent.ThreadSafe;
@@ -25,8 +26,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * A lookuper performs key-based lookups against a primary key table, using either the full primary
- * key or a prefix of the primary key (when configured via {@code Lookup#lookupBy}).
+ * Looks up rows by primary key, primary-key prefix, or a declared secondary index.
  *
  * <p>Usage examples:
  *
@@ -43,11 +43,9 @@ import java.util.concurrent.CompletableFuture;
 public interface Lookuper {
 
     /**
-     * Lookups certain row from the given lookup key.
-     *
-     * <p>The lookup key must be a primary key if the lookuper is a Primary Key Lookuper (created by
-     * {@code table.newLookup().createLookuper()}), or be the prefix key if the lookuper is a Prefix
-     * Key Lookuper (created by {@code table.newLookup().lookupBy(prefixKeys).createLookuper()}).
+     * Looks up rows matching the given key. Supply the full primary key for a point lookup, the
+     * configured prefix for a prefix lookup, or the index columns in declaration order for a
+     * lookuper created by {@link Table#getSecondaryIndexLookuper(String)}.
      *
      * @param lookupKey the lookup key
      * @return the result of lookup.

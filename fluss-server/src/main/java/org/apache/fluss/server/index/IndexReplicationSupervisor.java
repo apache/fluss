@@ -37,7 +37,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -64,9 +67,10 @@ public final class IndexReplicationSupervisor {
     @Nullable private final MetadataProvider metadataProvider;
     private final IndexReplicationManager manager;
     private final Counter retries;
-    private volatile boolean awaitingMetadata;
-    private final Object lifecycleLock = new Object();
+    // ReplicaManager serializes leadership changes, metadata refresh and shutdown.
+    private boolean awaitingMetadata;
 
+    // HW notifications also run outside the replica state-change lock.
     @Nullable private volatile IndexReplicator indexReplicator;
 
     IndexReplicationSupervisor(
@@ -84,49 +88,8 @@ public final class IndexReplicationSupervisor {
         this.retries = retries;
     }
 
-    /**
-     * Called when the replica becomes leader. If the table has secondary indexes and the metadata
-     * is available, starts the {@link IndexReplicator} immediately; otherwise waits for a metadata
-     * update.
-     *
-     * @param logTablet the log tablet of the leader replica
-     * @param schemaGetter the schema getter for the table
-     * @param onProgress callback fired after each window completes with sync/all index progress;
-     *     typically wired to {@code Replica::advanceIndexProgress}
-     * @param replayStartOffset the non-negative exclusive next source WAL offset restored by the
-     *     owning replica when the table has secondary indexes; ignored when it has none
-     */
-    public void onBecomeLeader(
-            LogTablet logTablet,
-            SchemaGetter schemaGetter,
-            IndexProgressListener onProgress,
-            long replayStartOffset) {
-        stop();
-        List<Schema.Index> indexes = tableInfo.getSchema().getIndexes();
-        if (indexes.isEmpty()) {
-            return;
-        }
-
-        maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, replayStartOffset);
-    }
-
-    /**
-     * Retries starting the index replicator if it was previously deferred due to missing metadata.
-     * Called by {@code ReplicaManager} after a metadata update.
-     */
-    public void retryDeferredStart(
-            LogTablet logTablet,
-            SchemaGetter schemaGetter,
-            IndexProgressListener onProgress,
-            long replayStartOffset) {
-        if (!awaitingMetadata) {
-            return;
-        }
-        List<Schema.Index> indexes = tableInfo.getSchema().getIndexes();
-        if (indexes.isEmpty()) {
-            return;
-        }
-        maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, replayStartOffset);
+    public boolean isAwaitingMetadata() {
+        return awaitingMetadata;
     }
 
     /**
@@ -140,36 +103,32 @@ public final class IndexReplicationSupervisor {
         }
     }
 
-    private void maybeStartIndexReplicator(
+    /** Shares resolved index tables across deferred sources for one metadata update. */
+    public static final class MetadataRetry {
+        private final Map<Long, Optional<List<TableInfo>>> tablesBySource = new HashMap<>();
+
+        private Optional<List<TableInfo>> resolve(IndexReplicationSupervisor source) {
+            return tablesBySource.computeIfAbsent(
+                    source.tableInfo.getTableId(), ignored -> source.resolveIndexTables());
+        }
+    }
+
+    /** Starts the source at its replay floor. Leader transitions resolve metadata independently. */
+    public void start(
             LogTablet logTablet,
             SchemaGetter schemaGetter,
-            List<Schema.Index> indexes,
             IndexProgressListener onProgress,
-            long replayStartOffset) {
-        List<IndexReplicationEncoder> indexEncoders;
-        try {
-            indexEncoders =
-                    IndexReplicationEncoder.createAll(tableInfo, tableBucket, metadataCache);
-        } catch (IllegalStateException initialFailure) {
-            if (metadataProvider == null) {
-                deferIndexReplication(initialFailure);
-                return;
-            }
-            try {
-                List<TablePath> indexTablePaths = new ArrayList<>(indexes.size());
-                for (Schema.Index index : indexes) {
-                    indexTablePaths.add(
-                            IndexTableUtils.indexTablePath(
-                                    tableInfo.getTablePath(), index.getIndexName()));
-                }
-                metadataProvider.getTablesMetadataFromZK(indexTablePaths);
-                indexEncoders =
-                        IndexReplicationEncoder.createAll(tableInfo, tableBucket, metadataCache);
-            } catch (RuntimeException refreshFailure) {
-                deferIndexReplication(refreshFailure);
-                return;
-            }
+            long replayStartOffset,
+            @Nullable MetadataRetry retry) {
+        Optional<List<TableInfo>> tables =
+                retry == null ? resolveIndexTables() : retry.resolve(this);
+        if (!tables.isPresent()) {
+            awaitingMetadata = true;
+            retries.inc();
+            return;
         }
+        List<IndexReplicationEncoder> indexEncoders =
+                IndexReplicationEncoder.createAll(tableInfo, tableBucket, tables.get());
         LogRecordReadContext readContext =
                 LogRecordReadContext.createReadContext(
                         tableInfo, false, SchemaResolution.DYNAMIC, null, schemaGetter, null);
@@ -178,49 +137,53 @@ public final class IndexReplicationSupervisor {
                         logTablet, indexEncoders, readContext, replayStartOffset, onProgress);
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
-        installIndexReplicator(replicator);
-        LOG.info("IndexReplicator (WAL-driven) registered for {}", tableBucket);
-    }
-
-    private void deferIndexReplication(RuntimeException metadataFailure) {
-        awaitingMetadata = true;
-        retries.inc();
-        LOG.info(
-                "Index table metadata is unavailable or inconsistent for {}; deferring "
-                        + "IndexReplicator until the next metadata update.",
-                tableBucket,
-                metadataFailure);
-    }
-
-    private void installIndexReplicator(IndexReplicator replicator) {
+        indexReplicator = replicator;
         try {
-            synchronized (lifecycleLock) {
-                IndexReplicator previous = indexReplicator;
-                boolean wasAwaitingMetadata = awaitingMetadata;
-                indexReplicator = replicator;
-                awaitingMetadata = false;
-                try {
-                    manager.register(replicator);
-                } catch (RuntimeException | Error failure) {
-                    indexReplicator = previous;
-                    awaitingMetadata = wasAwaitingMetadata;
-                    throw failure;
-                }
-            }
+            manager.register(replicator);
         } catch (RuntimeException | Error failure) {
+            indexReplicator = null;
             closeReplicator(replicator);
             throw failure;
         }
+        awaitingMetadata = false;
+        LOG.info("IndexReplicator (WAL-driven) registered for {}", tableBucket);
+    }
+
+    private Optional<List<TableInfo>> resolveIndexTables() {
+        RuntimeException failure;
+        try {
+            return Optional.of(
+                    IndexReplicationEncoder.resolveIndexTables(tableInfo, metadataCache));
+        } catch (IllegalStateException missingOrInvalid) {
+            failure = missingOrInvalid;
+        }
+        if (metadataProvider != null) {
+            try {
+                List<TablePath> paths = new ArrayList<>();
+                for (Schema.Index index : tableInfo.getSchema().getIndexes()) {
+                    paths.add(
+                            IndexTableUtils.indexTablePath(
+                                    tableInfo.getTablePath(), index.getIndexName()));
+                }
+                metadataProvider.getTablesMetadataFromZK(paths);
+                return Optional.of(
+                        IndexReplicationEncoder.resolveIndexTables(tableInfo, metadataCache));
+            } catch (RuntimeException refreshFailure) {
+                failure = refreshFailure;
+            }
+        }
+        LOG.info(
+                "Deferring index replication for table {} until the next metadata update.",
+                tableInfo.getTablePath(),
+                failure);
+        return Optional.empty();
     }
 
     /** Detaches the source before changing its role, rebuilding its KV state or shutting down. */
     public void stop() {
-        IndexReplicator r;
-        synchronized (lifecycleLock) {
-            r = indexReplicator;
-            indexReplicator = null;
-            awaitingMetadata = false;
-        }
+        IndexReplicator r = indexReplicator;
+        indexReplicator = null;
+        awaitingMetadata = false;
         if (r == null) {
             return;
         }

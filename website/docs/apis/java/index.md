@@ -408,7 +408,7 @@ LookupResult prefixLookup = table.newLookup()
 
 #### Secondary Index Lookup
 
-For a table with a declared secondary index, use `table.getSecondaryIndexLookuper(indexName)` and supply the lookup key in the index column order. The result contains all matching current main-table rows. See [Secondary Indexes](../../table-design/secondary-indexes.md#java-api) for schema creation, lookup examples, and visibility guarantees.
+For a table with a declared secondary index, use `table.getSecondaryIndexLookuper(indexName)` and supply the lookup key in the index column order. Fluss fetches the current main-table rows for the index candidates and returns those that still match the lookup key. See [Secondary Indexes](../../table-design/secondary-indexes.md#java-api) for schema creation, lookup examples, and visibility guarantees.
 
 ### Multi-Table Scanner and Writer
 `MultiTable`, obtained from `connection.getMultiTable()`, lets a single scanner or writer work across many tables without creating a `Table` instance for each one.

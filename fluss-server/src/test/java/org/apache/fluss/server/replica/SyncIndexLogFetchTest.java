@@ -115,23 +115,25 @@ class SyncIndexLogFetchTest extends ReplicaTestBase {
 
     @Test
     void testDelayedClientFetchWakesOnlyAfterSyncProgressAdvances() throws Exception {
-        Replica replica = createReplica(IndexVisibility.SYNC);
-        addMultiSegmentsToLogTablet(replica.getLogTablet(), 1);
+        Replica replica = createReplica(IndexVisibility.SYNC, IndexVisibility.ASYNC);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 2);
+        replica.advanceIndexProgress(10L, 0L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> response =
                 new CompletableFuture<>();
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE, 1, Duration.ofMinutes(3).toMillis()),
-                Collections.singletonMap(BUCKET, new FetchReqInfo(TABLE_ID, 0L, Integer.MAX_VALUE)),
+                Collections.singletonMap(
+                        BUCKET, new FetchReqInfo(TABLE_ID, 10L, Integer.MAX_VALUE)),
                 null,
                 response::complete);
         assertThat(response).isNotDone();
-        replica.advanceIndexProgress(0L, 10L);
+        replica.advanceIndexProgress(10L, 10L);
         replicaManager
                 .getDelayedFetchLogManager()
                 .checkAndComplete(new DelayedTableBucketKey(BUCKET));
         assertThat(response).isNotDone();
 
-        replica.advanceIndexProgress(10L, 10L);
+        replica.advanceIndexProgress(20L, 10L);
         assertThat(response.get(10, TimeUnit.SECONDS).get(BUCKET).records().sizeInBytes())
                 .isPositive();
     }
@@ -161,20 +163,22 @@ class SyncIndexLogFetchTest extends ReplicaTestBase {
             // run inline on the index progress publisher, which can hold the replicator lock.
             progress.get(10, TimeUnit.SECONDS);
             assertThat(response).isNotDone();
-            assertThat(
-                            replica.makeFollower(
-                                    new NotifyLeaderAndIsrData(
-                                            PhysicalTablePath.of(TABLE_PATH),
-                                            BUCKET,
-                                            Arrays.asList(TABLET_SERVER_ID, FOLLOWER_ID),
-                                            new LeaderAndIsr(
-                                                    FOLLOWER_ID,
-                                                    1,
-                                                    Collections.singletonList(FOLLOWER_ID),
-                                                    Collections.emptyList(),
-                                                    INITIAL_COORDINATOR_EPOCH,
-                                                    1))))
-                    .isTrue();
+            CompletableFuture<Boolean> demotion =
+                    CompletableFuture.supplyAsync(
+                            () ->
+                                    replica.makeFollower(
+                                            new NotifyLeaderAndIsrData(
+                                                    PhysicalTablePath.of(TABLE_PATH),
+                                                    BUCKET,
+                                                    Arrays.asList(TABLET_SERVER_ID, FOLLOWER_ID),
+                                                    new LeaderAndIsr(
+                                                            FOLLOWER_ID,
+                                                            1,
+                                                            Collections.singletonList(FOLLOWER_ID),
+                                                            Collections.emptyList(),
+                                                            INITIAL_COORDINATOR_EPOCH,
+                                                            1))));
+            assertThat(demotion.get(10, TimeUnit.SECONDS)).isTrue();
         } finally {
             releaseCallback.complete(null);
             progress.get(10, TimeUnit.SECONDS);
@@ -243,11 +247,20 @@ class SyncIndexLogFetchTest extends ReplicaTestBase {
     }
 
     private Replica createReplica(@Nullable IndexVisibility visibility) throws Exception {
+        return createReplica(visibility, null);
+    }
+
+    private Replica createReplica(
+            @Nullable IndexVisibility visibility, @Nullable IndexVisibility second)
+            throws Exception {
         Schema.Builder schema =
                 Schema.newBuilder().fromColumns(DATA1_SCHEMA_PK.getColumns()).primaryKey("a");
         if (visibility != null) {
             schema.index(
                     "idx_b", IndexType.SECONDARY, Collections.singletonList("b"), visibility, 3);
+        }
+        if (second != null) {
+            schema.index("idx_a", IndexType.SECONDARY, Collections.singletonList("a"), second, 3);
         }
         registerTableInZkClient(
                 TABLE_PATH,

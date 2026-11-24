@@ -404,19 +404,11 @@ class TableManagerTest {
                 metadataManager.createTable(
                         DATA1_TABLE_PATH,
                         zookeeperClient.getDefaultRemoteDataDir(),
-                        DATA1_TABLE_DESCRIPTOR,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
                         assignment,
                         false);
 
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR,
-                        DEFAULT_REMOTE_DATA_DIR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(metadataManager.getTable(DATA1_TABLE_PATH));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         PartitionAssignment partitionAssignment =

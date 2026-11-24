@@ -19,13 +19,10 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.bucketing.FlussBucketingFunction;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
-import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -34,6 +31,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -118,30 +116,21 @@ final class IndexReplicationEncoder {
     private final DataEntryEncoder dataEncoder;
     private final ProgressEncoder progressEncoder;
 
-    /**
-     * Builds the list of {@link IndexReplicationEncoder}s for every secondary index declared on the
-     * main table.
-     *
-     * @param mainTableInfo the main (data) table's info
-     * @param mainTableBucket the bucket of the main table replica that will drive the replicators
-     * @param metadataCache server-wide metadata cache for resolving index-table IDs and bucket
-     *     counts
-     * @return an unmodifiable list of encoders; empty if the main table has no indexes
-     */
-    static List<IndexReplicationEncoder> createAll(
-            TableInfo mainTableInfo,
-            TableBucket mainTableBucket,
-            TabletServerMetadataCache metadataCache) {
-
-        Schema schema = mainTableInfo.getSchema();
-        List<Schema.Index> indexes = schema.getIndexes();
-        if (indexes.isEmpty()) {
-            return Collections.emptyList();
+    static List<TableInfo> resolveIndexTables(
+            TableInfo mainTable, TabletServerMetadataCache cache) {
+        List<TableInfo> tables = new ArrayList<>(mainTable.getSchema().getIndexes().size());
+        for (Schema.Index index : mainTable.getSchema().getIndexes()) {
+            tables.add(resolveIndexTable(mainTable, index, cache));
         }
+        return tables;
+    }
 
+    static List<IndexReplicationEncoder> createAll(
+            TableInfo mainTable, TableBucket bucket, List<TableInfo> indexTables) {
+        List<Schema.Index> indexes = mainTable.getSchema().getIndexes();
         List<IndexReplicationEncoder> encoders = new ArrayList<>(indexes.size());
-        for (Schema.Index index : indexes) {
-            encoders.add(createEncoder(index, mainTableInfo, mainTableBucket, metadataCache));
+        for (int i = 0; i < indexes.size(); i++) {
+            encoders.add(createEncoder(indexes.get(i), mainTable, bucket, indexTables.get(i)));
         }
         return Collections.unmodifiableList(encoders);
     }
@@ -205,7 +194,7 @@ final class IndexReplicationEncoder {
             Schema.Index index,
             TableInfo mainTableInfo,
             TableBucket sourceBucket,
-            TabletServerMetadataCache metadataCache) {
+            TableInfo indexTable) {
         Schema schema = mainTableInfo.getSchema();
         RowType mainRowType = mainTableInfo.getRowType();
         boolean partitioned = mainTableInfo.isPartitioned();
@@ -216,7 +205,6 @@ final class IndexReplicationEncoder {
 
         int[] idxColumnIndices = schema.getColumnIndexes(index.getColumnNames());
 
-        TableInfo indexTable = resolveIndexTable(mainTableInfo, index, metadataCache);
         long indexTableId = indexTable.getTableId();
         int indexBucketCount = indexTable.getNumBuckets();
         int indexSchemaId = indexTable.getSchemaId();
@@ -249,10 +237,19 @@ final class IndexReplicationEncoder {
                         storedColumns.subList(idxColumnIndices.length, storedColCount));
         KvFormat indexKvFormat = indexTable.getTableConfig().getKvFormat();
         RowEncoder physicalRowEncoder = RowEncoder.create(indexKvFormat, physicalRowType);
-        CompactedKeyEncoder physicalKeyEncoder =
-                new CompactedKeyEncoder(physicalRowType, physicalSchema.getPrimaryKeyIndexes());
-        CompactedKeyEncoder physicalBucketKeyEncoder =
-                CompactedKeyEncoder.createKeyEncoder(physicalRowType, indexTable.getBucketKeys());
+        KeyEncoder physicalKeyEncoder =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        physicalRowType,
+                        physicalSchema.getPrimaryKeyColumnNames(),
+                        indexTable.getTableConfig(),
+                        indexTable.isDefaultBucketKey());
+        KeyEncoder physicalBucketKeyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        physicalRowType,
+                        indexTable.getBucketKeys(),
+                        indexTable.getTableConfig(),
+                        indexTable.isDefaultBucketKey(),
+                        physicalKeyEncoder);
         DataEntryEncoder dataEncoder =
                 row -> {
                     byte[] routingKey = logicalIndexKeyEncoder.encodeKey(row);
@@ -317,13 +314,6 @@ final class IndexReplicationEncoder {
             TableInfo mainTableInfo, Schema.Index index, TabletServerMetadataCache metadataCache) {
         TablePath path =
                 IndexTableUtils.indexTablePath(mainTableInfo.getTablePath(), index.getIndexName());
-        long cachedTableId =
-                metadataCache
-                        .getTableId(path)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                "Index Table " + path + " not in cache"));
         TableMetadata metadata =
                 metadataCache
                         .getTableMetadata(path)
@@ -332,14 +322,6 @@ final class IndexReplicationEncoder {
                                         new IllegalStateException(
                                                 "Index Table " + path + " metadata not in cache"));
         TableInfo indexTableInfo = metadata.getTableInfo();
-        if (cachedTableId != indexTableInfo.getTableId()) {
-            throw invalidMetadata(
-                    path,
-                    "table id "
-                            + cachedTableId
-                            + " from the path cache, but metadata contains "
-                            + indexTableInfo.getTableId());
-        }
         validateIndexTable(mainTableInfo, index, path, indexTableInfo);
         return indexTableInfo;
     }
@@ -363,65 +345,36 @@ final class IndexReplicationEncoder {
                         mainTableInfo.toTableDescriptor(), mainTableInfo.getTableId(), index);
         // The main-table bucket count supplies only the creation-time default.
         Integer configuredBucketCount = index.getBucketCount().orElse(null);
-        if (configuredBucketCount != null
-                && indexTableInfo.getNumBuckets() != configuredBucketCount) {
-            throw invalidMetadata(
-                    path,
-                    "bucket count "
-                            + configuredBucketCount
-                            + " but found "
-                            + indexTableInfo.getNumBuckets());
+        if (configuredBucketCount != null) {
+            checkMetadata(
+                    path, "bucket count", configuredBucketCount, indexTableInfo.getNumBuckets());
         }
-        if (!indexTableInfo.getBucketKeys().equals(expected.getBucketKeys())) {
-            throw invalidMetadata(
-                    path,
-                    "bucket keys "
-                            + expected.getBucketKeys()
-                            + " but found "
-                            + indexTableInfo.getBucketKeys());
-        }
+        checkMetadata(
+                path, "bucket keys", expected.getBucketKeys(), indexTableInfo.getBucketKeys());
         if (!indexTableInfo.getSchema().equals(expected.getSchema())) {
             throw invalidMetadata(path, "a schema different from the derived Index Table schema");
         }
         TableConfig expectedConfig =
                 new TableConfig(Configuration.fromMap(expected.getProperties()));
-        if (indexTableInfo.getTableConfig().getKvFormat() != expectedConfig.getKvFormat()) {
-            throw invalidMetadata(
-                    path,
-                    "KV format "
-                            + expectedConfig.getKvFormat()
-                            + " but found "
-                            + indexTableInfo.getTableConfig().getKvFormat());
-        }
-        LogFormat actualLogFormat = indexTableInfo.getTableConfig().getLogFormat();
-        if (actualLogFormat != expectedConfig.getLogFormat()) {
-            throw invalidMetadata(
-                    path,
-                    "log format "
-                            + expectedConfig.getLogFormat()
-                            + " but found "
-                            + actualLogFormat);
-        }
-        ChangelogImage actualChangelogImage = indexTableInfo.getTableConfig().getChangelogImage();
-        if (actualChangelogImage != expectedConfig.getChangelogImage()) {
-            throw invalidMetadata(
-                    path,
-                    "changelog image "
-                            + expectedConfig.getChangelogImage()
-                            + " but found "
-                            + actualChangelogImage);
-        }
-        int expectedKvFormatVersion =
-                Integer.parseInt(
-                        expected.getProperties().get(ConfigOptions.TABLE_KV_FORMAT_VERSION.key()));
-        int actualKvFormatVersion = indexTableInfo.getTableConfig().getKvFormatVersion().orElse(0);
-        if (actualKvFormatVersion != expectedKvFormatVersion) {
-            throw invalidMetadata(
-                    path,
-                    "KV format version "
-                            + expectedKvFormatVersion
-                            + " but found "
-                            + actualKvFormatVersion);
+        TableConfig actual = indexTableInfo.getTableConfig();
+        checkMetadata(path, "KV format", expectedConfig.getKvFormat(), actual.getKvFormat());
+        checkMetadata(path, "log format", expectedConfig.getLogFormat(), actual.getLogFormat());
+        checkMetadata(
+                path,
+                "changelog image",
+                expectedConfig.getChangelogImage(),
+                actual.getChangelogImage());
+        checkMetadata(
+                path,
+                "KV format version",
+                expectedConfig.getKvFormatVersion().get(),
+                actual.getKvFormatVersion().orElse(0));
+    }
+
+    private static void checkMetadata(
+            TablePath path, String field, Object expected, Object actual) {
+        if (!expected.equals(actual)) {
+            throw invalidMetadata(path, field + " " + expected + " but found " + actual);
         }
     }
 

@@ -18,6 +18,7 @@
 package org.apache.fluss.server.exception;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.TableBucket;
 
 /** Raised when source WAL cannot prove a contiguous range of complete FULL changelog mutations. */
 @Internal
@@ -25,11 +26,11 @@ public final class IndexSourceWalCorruptionException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
-    public IndexSourceWalCorruptionException(String message) {
-        super(message);
+    public IndexSourceWalCorruptionException(TableBucket bucket, String detail) {
+        this(bucket, detail, null);
     }
 
-    public IndexSourceWalCorruptionException(String message, Throwable cause) {
-        super(message, cause);
+    public IndexSourceWalCorruptionException(TableBucket bucket, String detail, Throwable cause) {
+        super("Corrupt source WAL for " + bucket + ": " + detail, cause);
     }
 }

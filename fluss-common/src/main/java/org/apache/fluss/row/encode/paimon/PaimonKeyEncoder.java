@@ -66,7 +66,6 @@ public class PaimonKeyEncoder implements KeyEncoder {
     @Override
     public byte[] encodeKey(InternalRow row) {
         PaimonBinaryRowWriter paimonBinaryRowWriter = keyWriterRecycler.borrow();
-        paimonBinaryRowWriter.reset();
         try {
             // always be RowKind.INSERT for bucketed row
             paimonBinaryRowWriter.writeChangeType(ChangeType.INSERT);

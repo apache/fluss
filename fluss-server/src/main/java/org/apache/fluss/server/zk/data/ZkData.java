@@ -251,12 +251,12 @@ public final class ZkData {
      * explicit_set + version) that the Index Bucket apply path consults to drop entries whose
      * source partition no longer exists. The znode path is:
      *
-     * <p>/metadata/databases/[databaseName]/tables/[tableName]/partition_tombstone
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/partition_tombstone-[tableId]
      */
     public static final class PartitionTombstoneZNode {
 
-        public static String path(TablePath tablePath) {
-            return TableZNode.path(tablePath) + "/partition_tombstone";
+        public static String path(TablePath tablePath, long tableId) {
+            return TableZNode.path(tablePath) + "/partition_tombstone-" + tableId;
         }
 
         private PartitionTombstoneZNode() {}

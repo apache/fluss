@@ -25,43 +25,34 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.ValueEncoder;
-import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
-import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.utils.types.Tuple2;
 
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import javax.annotation.Nullable;
-
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.server.index.TestingIndexTable.INDEX_NAME;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
-import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.server.index.TestingIndexTable.deleteRequest;
+import static org.apache.fluss.server.index.TestingIndexTable.indexEntry;
+import static org.apache.fluss.server.index.TestingIndexTable.upsertRequest;
+import static org.apache.fluss.server.index.TestingIndexTable.valueForIndexBucket;
+import static org.apache.fluss.server.index.TestingIndexTable.writeSource;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -75,7 +66,6 @@ class IndexSourceRemoteRecoveryITCase {
     private static final int BASELINE_ROW_COUNT = 12;
     private static final int UPDATED_ROW_COUNT = 6;
     private static final int REPLAY_INSERT_COUNT = 12;
-    private static final int NEVER_WRITTEN_KEY = 10_000;
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
     private static final Duration REMOTE_TIMEOUT = Duration.ofMinutes(2);
 
@@ -112,6 +102,7 @@ class IndexSourceRemoteRecoveryITCase {
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("100b"));
         conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofSeconds(1));
         conf.setInt(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, 1);
+        conf.set(ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES, MemorySize.parse("1b"));
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
         conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME, Duration.ofSeconds(5));
@@ -143,18 +134,18 @@ class IndexSourceRemoteRecoveryITCase {
                         .getTableAssignment(indexTableId)
                         .orElseThrow(() -> new AssertionError("Index assignment missing from ZK"));
         for (int sourceBucket = 0; sourceBucket < SOURCE_BUCKET_COUNT; sourceBucket++) {
-            Set<Integer> sourceReplicas =
-                    new LinkedHashSet<>(
-                            mainAssignment.getBucketAssignment(sourceBucket).getReplicas());
+            List<Integer> sourceReplicas =
+                    mainAssignment.getBucketAssignment(sourceBucket).getReplicas();
             for (int indexBucket = 0; indexBucket < INDEX_BUCKET_COUNT; indexBucket++) {
-                Set<Integer> indexReplicas =
-                        new LinkedHashSet<>(
-                                indexAssignment.getBucketAssignment(indexBucket).getReplicas());
+                List<Integer> indexReplicas =
+                        indexAssignment.getBucketAssignment(indexBucket).getReplicas();
                 if (Collections.disjoint(sourceReplicas, indexReplicas)) {
                     return new RemoteRecoveryFixture(
                             table,
                             new TableBucket(mainTableId, sourceBucket),
-                            new TableBucket(indexTableId, indexBucket));
+                            new TableBucket(indexTableId, indexBucket),
+                            sourceReplicas,
+                            indexReplicas);
                 }
             }
         }
@@ -173,7 +164,6 @@ class IndexSourceRemoteRecoveryITCase {
             putSourceRow(recovery, recovery.sourceLeader, key, recovery.firstIndexValue);
             expectedRows.put(key, recovery.firstIndexValue);
         }
-        waitForExactPhysicalRows(recovery, expectedRows);
         waitUntil(
                 () ->
                         recovery.sourceReplica.getAllIndexPushedOffset()
@@ -186,9 +176,10 @@ class IndexSourceRemoteRecoveryITCase {
                 .as("the conservative baseline must cover the complete first source prefix")
                 .isEqualTo(baselinePushedOffset);
 
+        assertExactIndexProjection(recovery, expectedRows);
         CompletedSnapshot snapshot = CLUSTER.triggerAndWaitSnapshot(recovery.sourceTableBucket);
         assertThat(snapshot.getLogOffset()).isEqualTo(baselinePushedOffset);
-        assertThat(snapshot.getIndexPushedOffset())
+        assertThat(snapshot.getAllIndexPushedOffset())
                 .as("the source snapshot must persist the exact conservative index prefix")
                 .isEqualTo(baselinePushedOffset);
         return baselinePushedOffset;
@@ -212,7 +203,10 @@ class IndexSourceRemoteRecoveryITCase {
             putSourceRow(recovery, recovery.sourceLeader, key, recovery.secondIndexValue);
             expectedRows.put(key, recovery.secondIndexValue);
         }
-        writeSourceRow(recovery, recovery.sourceLeader, UPDATED_ROW_COUNT, null);
+        writeSource(
+                CLUSTER.newTabletServerClientForNode(recovery.sourceLeader),
+                deleteRequest(recovery.sourceTableBucket, UPDATED_ROW_COUNT)
+                        .setTimeoutMs((int) TIMEOUT.toMillis()));
         expectedRows.remove(UPDATED_ROW_COUNT);
         waitForSourceCommit(recovery.sourceReplica);
         long committedSourceEnd = recovery.sourceReplica.getLocalLogEndOffset();
@@ -227,7 +221,7 @@ class IndexSourceRemoteRecoveryITCase {
                 .as("the explicit roll must close the complete committed replay range")
                 .isEqualTo(committedSourceEnd);
         waitForRawRemoteReplayCoverage(
-                recovery, recovery.sourceReplica, baselinePushedOffset, committedSourceEnd);
+                recovery.sourceReplica, baselinePushedOffset, committedSourceEnd);
         return committedSourceEnd;
     }
 
@@ -282,12 +276,9 @@ class IndexSourceRemoteRecoveryITCase {
         CLUSTER.startTabletServer(recovery.offlineFollower);
         CLUSTER.assertHasTabletServerNumber(TABLET_SERVER_COUNT);
         assertExactIndexProjection(recovery, expectedRows);
-        assertIndexKeyAbsent(recovery, recovery.firstIndexValue, 0, "known stale pre-update key");
-        assertIndexKeyAbsent(
-                recovery, recovery.secondIndexValue, NEVER_WRITTEN_KEY, "never-written index key");
     }
 
-    private static long verifyLocalContinuation(
+    private static void verifyLocalContinuation(
             RemoteRecoveryFixture recovery,
             Replica recovered,
             long committedSourceEnd,
@@ -306,43 +297,15 @@ class IndexSourceRemoteRecoveryITCase {
                 "wait for exact local continuation progress");
         assertThat(recovered.getAllIndexPushedOffset()).isEqualTo(continuationEnd);
         assertExactIndexProjection(recovery, expectedRows);
-        return continuationEnd;
     }
 
     private static void putSourceRow(
             RemoteRecoveryFixture recovery, int sourceLeader, int key, String indexedValue)
             throws Exception {
-        writeSourceRow(recovery, sourceLeader, key, new Object[] {key, indexedValue});
-    }
-
-    private static void writeSourceRow(
-            RemoteRecoveryFixture recovery, int sourceLeader, int key, @Nullable Object[] value)
-            throws Exception {
-        TabletServerGateway gateway = CLUSTER.newTabletServerClientForNode(sourceLeader);
-        PutKvResponse response =
-                gateway.putKv(
-                                newPutKvRequest(
-                                                recovery.mainTableId,
-                                                recovery.sourceTableBucket.getBucket(),
-                                                1,
-                                                genKvRecordBatch(
-                                                        Collections.singletonList(
-                                                                Tuple2.of(
-                                                                        new Object[] {key},
-                                                                        value))))
-                                        .setTimeoutMs((int) TIMEOUT.toMillis()))
-                        .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        assertThat(response.getBucketsRespsList())
-                .allSatisfy(
-                        bucket ->
-                                assertThat(bucket.hasErrorCode())
-                                        .as(
-                                                "source mutation key=%s error=%s",
-                                                key,
-                                                bucket.hasErrorMessage()
-                                                        ? bucket.getErrorMessage()
-                                                        : "none")
-                                        .isFalse());
+        writeSource(
+                CLUSTER.newTabletServerClientForNode(sourceLeader),
+                upsertRequest(recovery.sourceTableBucket, key, indexedValue)
+                        .setTimeoutMs((int) TIMEOUT.toMillis()));
     }
 
     private static void waitForSourceCommit(Replica sourceReplica) {
@@ -357,10 +320,7 @@ class IndexSourceRemoteRecoveryITCase {
     }
 
     private static void waitForRawRemoteReplayCoverage(
-            RemoteRecoveryFixture recovery,
-            Replica sourceReplica,
-            long baselinePushedOffset,
-            long committedSourceEnd) {
+            Replica sourceReplica, long baselinePushedOffset, long committedSourceEnd) {
         LogTablet sourceLog = sourceReplica.getLogTablet();
         waitUntil(
                 () ->
@@ -374,42 +334,24 @@ class IndexSourceRemoteRecoveryITCase {
                         + ")");
     }
 
-    private static void waitForExactPhysicalRows(
-            RemoteRecoveryFixture recovery, Map<Integer, String> expectedRows) throws Exception {
-        for (Map.Entry<Integer, String> expectedRow : expectedRows.entrySet()) {
-            PhysicalIndexRow physical =
-                    physicalIndexRow(
-                            recovery.indexEncoder, expectedRow.getKey(), expectedRow.getValue());
-            TableBucket target = new TableBucket(recovery.indexTableId, physical.targetBucket);
-            waitUntil(
-                    () -> {
-                        org.apache.fluss.utils.ByteArraySlice value =
-                                CLUSTER.waitAndGetLeaderReplica(target)
-                                        .lookups(Collections.singletonList(physical.key))
-                                        .get(0);
-                        return value != null && Arrays.equals(value.toByteArray(), physical.value);
-                    },
-                    TIMEOUT,
-                    "wait for exact physical Index Table row " + expectedRow);
-        }
-    }
-
     private static void assertExactIndexProjection(
             RemoteRecoveryFixture recovery, Map<Integer, String> expectedRows) throws Exception {
-        Map<TableBucket, Map<String, String>> expected = emptyIndexProjection(recovery);
+        Map<Integer, Map<String, String>> expected = new LinkedHashMap<>();
         for (Map.Entry<Integer, String> sourceRow : expectedRows.entrySet()) {
-            PhysicalIndexRow physical =
-                    physicalIndexRow(
-                            recovery.indexEncoder, sourceRow.getKey(), sourceRow.getValue());
-            TableBucket bucket = new TableBucket(recovery.indexTableId, physical.targetBucket);
+            IndexReplicationEncoder.IndexEntry entry =
+                    indexEntry(recovery.indexEncoder, sourceRow.getKey(), sourceRow.getValue());
+            byte[] value =
+                    ValueEncoder.encodeValue(
+                            (short) recovery.indexEncoder.getIndexSchemaId(), entry.value());
             String previous =
-                    expected.get(bucket).put(encode(physical.key), encode(physical.value));
+                    expected.computeIfAbsent(entry.targetBucket(), ignored -> new LinkedHashMap<>())
+                            .put(encode(entry.key()), encode(value));
             assertThat(previous).as("physical index keys must be unique").isNull();
         }
-
-        Map<TableBucket, Map<String, String>> actual = emptyIndexProjection(recovery);
         for (int bucket = 0; bucket < INDEX_BUCKET_COUNT; bucket++) {
             TableBucket tableBucket = new TableBucket(recovery.indexTableId, bucket);
+            Map<String, String> expectedKeys =
+                    expected.getOrDefault(bucket, Collections.emptyMap());
             byte[] progressKey = recovery.indexEncoder.encodeProgress(bucket, 0L).key();
             Replica replica = CLUSTER.waitAndGetLeaderReplica(tableBucket);
             org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait(
@@ -427,87 +369,26 @@ class IndexSourceRemoteRecoveryITCase {
                 iterator.seekToFirst();
                 while (iterator.isValid()) {
                     if (!Arrays.equals(iterator.key(), progressKey)) {
-                        actual.get(tableBucket)
-                                .put(encode(iterator.key()), encode(iterator.value()));
+                        String key = encode(iterator.key());
+                        assertThat(expectedKeys.remove(key))
+                                .as("physical index key %s in %s", key, tableBucket)
+                                .isEqualTo(encode(iterator.value()));
                     }
                     iterator.next();
                 }
                 iterator.status();
             }
         }
-        assertThat(actual)
-                .as("every physical Index Table key/value byte must exactly project source state")
-                .isEqualTo(expected);
-    }
-
-    private static void assertIndexKeyAbsent(
-            RemoteRecoveryFixture recovery, String indexedValue, int primaryKey, String description)
-            throws Exception {
-        PhysicalIndexRow physical =
-                physicalIndexRow(recovery.indexEncoder, primaryKey, indexedValue);
-        TableBucket target = new TableBucket(recovery.indexTableId, physical.targetBucket);
-        assertThat(
-                        CLUSTER.waitAndGetLeaderReplica(target)
-                                .lookups(Collections.singletonList(physical.key))
-                                .get(0))
-                .as(description)
-                .isNull();
-    }
-
-    private static Map<TableBucket, Map<String, String>> emptyIndexProjection(
-            RemoteRecoveryFixture recovery) {
-        Map<TableBucket, Map<String, String>> projection = new LinkedHashMap<>();
-        for (int bucket = 0; bucket < INDEX_BUCKET_COUNT; bucket++) {
-            projection.put(new TableBucket(recovery.indexTableId, bucket), new LinkedHashMap<>());
-        }
-        return projection;
-    }
-
-    private static PhysicalIndexRow physicalIndexRow(
-            IndexReplicationEncoder indexEncoder, int primaryKey, String indexedValue) {
-        IndexReplicationEncoder.IndexEntry entry =
-                indexEncoder.encodeDataEntry(GenericRow.of(primaryKey, fromString(indexedValue)));
-        return new PhysicalIndexRow(
-                entry.key(),
-                ValueEncoder.encodeValue((short) indexEncoder.getIndexSchemaId(), entry.value()),
-                entry.targetBucket());
-    }
-
-    private static String valueForIndexBucket(
-            IndexReplicationEncoder indexEncoder, String prefix, int targetBucket) {
-        for (int suffix = 0; suffix < 100_000; suffix++) {
-            String candidate = prefix + '-' + suffix;
-            if (physicalIndexRow(indexEncoder, 0, candidate).targetBucket == targetBucket) {
-                return candidate;
-            }
-        }
-        throw new AssertionError("No value found for Index Table bucket " + targetBucket);
+        assertThat(expected.values())
+                .as("missing physical index entries")
+                .allSatisfy(entries -> assertThat(entries).isEmpty());
     }
 
     private static String encode(byte[] bytes) {
         return Base64.getEncoder().encodeToString(bytes);
     }
 
-    private static TabletServer sourceTabletServer(int serverId) {
-        TabletServer tabletServer = CLUSTER.getTabletServerById(serverId);
-        assertThat(tabletServer).as("TabletServer %s must be live", serverId).isNotNull();
-        return tabletServer;
-    }
-
-    private static final class PhysicalIndexRow {
-        private final byte[] key;
-        private final byte[] value;
-        private final int targetBucket;
-
-        private PhysicalIndexRow(byte[] key, byte[] value, int targetBucket) {
-            this.key = key;
-            this.value = value;
-            this.targetBucket = targetBucket;
-        }
-    }
-
     private static final class RemoteRecoveryFixture {
-        private final long mainTableId;
         private final long indexTableId;
         private final IndexReplicationEncoder indexEncoder;
         private final TableBucket sourceTableBucket;
@@ -521,9 +402,12 @@ class IndexSourceRemoteRecoveryITCase {
         private final Replica sourceReplica;
 
         private RemoteRecoveryFixture(
-                TestingIndexTable table, TableBucket sourceBucket, TableBucket targetBucket)
+                TestingIndexTable table,
+                TableBucket sourceBucket,
+                TableBucket targetBucket,
+                List<Integer> sourceReplicas,
+                List<Integer> targetReplicas)
                 throws Exception {
-            this.mainTableId = sourceBucket.getTableId();
             this.indexTableId = targetBucket.getTableId();
             this.sourceTableBucket = sourceBucket;
             this.gatedTargetBucket = targetBucket;
@@ -535,12 +419,6 @@ class IndexSourceRemoteRecoveryITCase {
                     () -> sourceReplica.getIsr().size() == REPLICATION_FACTOR,
                     TIMEOUT,
                     "wait for source RF3 ISR");
-            List<Integer> sourceReplicas =
-                    CLUSTER.getZooKeeperClient()
-                            .getTableAssignment(mainTableId)
-                            .get()
-                            .getBucketAssignment(sourceBucket.getBucket())
-                            .getReplicas();
             List<Integer> followers =
                     sourceReplicas.stream()
                             .filter(server -> server != sourceLeader)
@@ -548,13 +426,7 @@ class IndexSourceRemoteRecoveryITCase {
             assertThat(followers).hasSize(2);
             this.recoveryFollower = followers.get(0);
             this.offlineFollower = followers.get(1);
-            this.targetReplicas =
-                    new ArrayList<>(
-                            CLUSTER.getZooKeeperClient()
-                                    .getTableAssignment(indexTableId)
-                                    .get()
-                                    .getBucketAssignment(targetBucket.getBucket())
-                                    .getReplicas());
+            this.targetReplicas = targetReplicas;
             assertThat(targetReplicas)
                     .hasSize(REPLICATION_FACTOR)
                     .doesNotContainAnyElementsOf(sourceReplicas)

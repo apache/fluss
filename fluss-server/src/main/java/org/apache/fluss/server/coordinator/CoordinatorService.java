@@ -669,26 +669,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             coordinatorContextSupplier.get().checkIndexTableCreationSupported();
         }
 
-        // the distribution and bucket count must be set now
-        //noinspection OptionalGetWithoutIsPresent
-        int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
         long newKvLeaderReplicaCount = getNewKvLeaderReplicaCount(tableDescriptor);
+        TableAssignment tableAssignment =
+                tableDescriptor.isPartitioned() ? null : generateTableAssignment(tableDescriptor);
 
-        // first, generate the assignment
-        TableAssignment tableAssignment = null;
-        // only when it's no partitioned table do we generate the assignment for it
-        if (!tableDescriptor.isPartitioned()) {
-            // the replication factor must be set now
-            int replicaFactor = tableDescriptor.getReplicationFactor();
-            TabletServerInfo[] servers = metadataCache.getLiveServers();
-            tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
-        }
-
-        long tableId = -1L;
         TableMetadataRegistration mainTableRegistration = null;
         List<TableMetadataRegistration> indexTableRegistrations = Collections.emptyList();
         if (hasIndexes) {
-            tableId = metadataManager.allocateTableId();
+            long tableId = metadataManager.allocateTableId();
             String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
             mainTableRegistration =
                     new TableMetadataRegistration(
@@ -696,8 +684,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             TableRegistration.newTable(tableId, remoteDataDir, tableDescriptor),
                             tableDescriptor.getSchema(),
                             tableAssignment);
-            indexTableRegistrations =
-                    deriveIndexTableRegistrations(tablePath, tableId, tableDescriptor);
+            try {
+                indexTableRegistrations =
+                        deriveIndexTableRegistrations(tablePath, tableId, tableDescriptor);
+            } catch (TableAlreadyExistException conflict) {
+                if (ignoreIfExists && metadataManager.tableExists(tablePath)) {
+                    return;
+                }
+                throw conflict;
+            }
             for (TableMetadataRegistration indexTable : indexTableRegistrations) {
                 newKvLeaderReplicaCount += indexTable.tableRegistration.bucketCount;
             }
@@ -726,28 +721,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
-        if (!hasIndexes) {
-            // Remote data dir is used to store table data for non-partitioned table and metadata
-            // (such as lake snapshot offset file) for partitioned table.
-            String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
-            tableId =
-                    metadataManager.createTable(
-                            tablePath,
-                            remoteDataDir,
-                            tableDescriptor,
-                            tableAssignment,
-                            ignoreIfExists);
-        } else {
-            boolean created =
-                    metadataManager.createTableWithIndexes(
-                            checkNotNull(mainTableRegistration),
-                            indexTableRegistrations,
-                            ignoreIfExists,
-                            coordinatorZkVersionSupplier.get());
-            if (!created) {
-                tableId = -1L;
-            }
+        if (hasIndexes) {
+            metadataManager.createTableWithIndexes(
+                    checkNotNull(mainTableRegistration),
+                    indexTableRegistrations,
+                    ignoreIfExists,
+                    coordinatorZkVersionSupplier.get());
+            return;
         }
+        // Remote data dir is used to store table data for non-partitioned table and metadata
+        // (such as lake snapshot offset file) for partitioned table.
+        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, tableDescriptor, tableAssignment, ignoreIfExists);
         if (tableId >= 0 && isHistoricalPartitionEnabled(tableDescriptor)) {
             try {
                 createHistoricalPartition(tablePath, tableId, tableDescriptor);
@@ -889,9 +876,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (tableDescriptor.isPartitioned() && !isHistoricalPartitionEnabled(tableDescriptor)) {
             return 0;
         }
-        // the distribution and bucket count must be set now
-        //noinspection OptionalGetWithoutIsPresent
-        return tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        return getBucketCount(tableDescriptor);
+    }
+
+    private TableAssignment generateTableAssignment(TableDescriptor descriptor) {
+        return generateAssignment(
+                getBucketCount(descriptor),
+                descriptor.getReplicationFactor(),
+                metadataCache.getLiveServers());
     }
 
     private List<TableMetadataRegistration> deriveIndexTableRegistrations(
@@ -916,15 +908,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         List<TableMetadataRegistration> registrations = new ArrayList<>(indexes.size());
         for (int i = 0; i < indexes.size(); i++) {
             TableDescriptor indexDescriptor = indexDescriptors.get(i);
-            TableAssignment indexAssignment = null;
-            if (!indexDescriptor.isPartitioned()) {
-                //noinspection OptionalGetWithoutIsPresent
-                int indexBucketCount =
-                        indexDescriptor.getTableDistribution().get().getBucketCount().get();
-                int indexReplicaFactor = indexDescriptor.getReplicationFactor();
-                TabletServerInfo[] servers = metadataCache.getLiveServers();
-                indexAssignment = generateAssignment(indexBucketCount, indexReplicaFactor, servers);
-            }
+            TableAssignment indexAssignment = generateTableAssignment(indexDescriptor);
             long indexTableId = metadataManager.allocateTableId();
             String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
             registrations.add(
@@ -1019,10 +1003,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = currentTable.getTablePath();
         try {
             metadataManager.dropPartition(
-                    tablePath,
-                    currentTable.getTableId(),
-                    historicalPartitionSpec(updatedTable),
-                    true);
+                    currentTable, historicalPartitionSpec(updatedTable), true);
         } catch (Exception e) {
             throw historicalPartitionDisableException(tablePath, e);
         }
@@ -1041,7 +1022,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         metadataManager.createPartition(
                 tablePath,
-                tableId,
+                tableDescriptor.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 historicalPartitionSpec(tableDescriptor),
@@ -1255,20 +1236,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (tableInfo == null) {
             return CompletableFuture.completedFuture(response);
         }
-        if (!tableInfo.isIndexTable() && tableInfo.getSchema().getIndexes().isEmpty()) {
-            metadataManager.dropTable(tablePath, false);
-            return CompletableFuture.completedFuture(response);
-        }
-        if (tableInfo.isIndexTable()
-                && tableInfo.getMainTableId().isPresent()
-                && isTableActive(tableInfo.getMainTableId().getAsLong())) {
-            throw new InvalidTableException(
-                    String.format(
-                            "internal secondary index table %s cannot be dropped directly while its owning main table exists. Drop the main table instead.",
-                            tablePath));
-        }
-        if (tableInfo.isIndexTable()) {
-            metadataManager.dropTable(tablePath, false);
+        if (tableInfo.isIndexTable() || tableInfo.getSchema().getIndexes().isEmpty()) {
+            metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
             return CompletableFuture.completedFuture(response);
         }
 
@@ -1317,17 +1286,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
         return indexTablePaths;
-    }
-
-    private boolean isTableActive(long tableId) {
-        AccessContextEvent<Boolean> event =
-                new AccessContextEvent<>(context -> context.getTableInfoById(tableId) != null);
-        eventManagerSupplier.get().put(event);
-        try {
-            return event.getResultFuture().get();
-        } catch (Exception e) {
-            throw new UnknownServerException("Failed to resolve table ID " + tableId, e);
-        }
     }
 
     @Nullable
@@ -1395,7 +1353,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         metadataManager.createPartition(
                 tablePath,
-                tableInfo.getTableId(),
+                tableInfo.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 partitionToCreate,

@@ -846,6 +846,16 @@ final class LocalLogTest extends LogTestBase {
                         1L,
                         DEFAULT_SCHEMA_ID);
         localLog.append(1L, -1L, 0L, second);
+        localLog.roll(Optional.of(2L));
+        localLog.append(
+                2L,
+                -1L,
+                0L,
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Collections.singletonList(new Object[] {1, "c"}),
+                        DATA1_ROW_TYPE,
+                        2L,
+                        DEFAULT_SCHEMA_ID));
         try (LogRecordReadContext readContext =
                 LogRecordReadContext.createArrowReadContext(
                         DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {

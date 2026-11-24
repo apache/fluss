@@ -77,7 +77,6 @@ import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
-import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -565,19 +564,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                     entry.getValue()));
                 }
             }
-            GetLatestKvSnapshotsResponse response =
-                    makeGetLatestKvSnapshotsResponse(tableId, partitionId, snapshots, numBuckets);
-            if (hasSyncIndexes) {
-                for (PbKvSnapshot snapshot : response.getLatestSnapshotsList()) {
-                    if (!snapshot.hasSnapshotId()) {
-                        // Full reconstruction starts at zero, never at the current earliest WAL.
-                        // TODO: Improve missing-history recovery. More retained snapshots and
-                        // a longer log TTL can preserve a usable starting point.
-                        snapshot.setLogOffset(0L);
-                    }
-                }
-            }
-            return response;
+            // A SYNC bucket without a readable snapshot requires its full WAL from offset zero.
+            // TODO: Improve recovery when snapshot and WAL retention leave no complete history.
+            return makeGetLatestKvSnapshotsResponse(
+                    tableId, partitionId, snapshots, numBuckets, hasSyncIndexes);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     "Failed to load KV snapshots for " + tableInfo.getTablePath(), e);
@@ -591,14 +581,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
         Long visibleOffset = latest.get().getSyncIndexPushedOffset();
         if (visibleOffset == null) {
-            // Older ZooKeeper summaries have no SYNC evidence. The snapshot metadata contains
-            // either separate SYNC progress or the conservative confirmed all-index prefix.
-            CompletedSnapshot snapshot =
-                    latest.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
-            visibleOffset = snapshot.getSyncIndexPushedOffset();
-            if (visibleOffset == null) {
-                visibleOffset = snapshot.getIndexPushedOffset();
-            }
+            visibleOffset =
+                    latest.get()
+                            .toCompletedSnapshotHandle()
+                            .retrieveCompleteSnapshot()
+                            .getSyncIndexPushedOffsetOrAll();
         }
         if (visibleOffset == null || visibleOffset < 0) {
             throw new FlussRuntimeException(
@@ -607,14 +594,20 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             + " of "
                             + bucket);
         }
-        final long confirmedVisibleOffset = visibleOffset;
-        if (latest.get().getLogOffset() <= confirmedVisibleOffset) {
+        if (latest.get().getLogOffset() <= visibleOffset) {
             return latest;
         }
-        return zkClient.getTableBucketAllSnapshotAndIds(bucket).stream()
-                .map(snapshot -> snapshot.f0)
-                .filter(snapshot -> snapshot.getLogOffset() <= confirmedVisibleOffset)
-                .max(Comparator.comparingLong(BucketSnapshot::getSnapshotId));
+        List<Long> snapshotIds = zkClient.listBucketSnapshotIds(bucket);
+        for (int i = snapshotIds.size() - 1; i >= 0; i--) {
+            long id = snapshotIds.get(i);
+            if (id != latest.get().getSnapshotId()) {
+                Optional<BucketSnapshot> candidate = zkClient.getTableBucketSnapshot(bucket, id);
+                if (candidate.isPresent() && candidate.get().getLogOffset() <= visibleOffset) {
+                    return candidate;
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     private PartitionRegistration getPartition(TablePath tablePath, String partitionName) {

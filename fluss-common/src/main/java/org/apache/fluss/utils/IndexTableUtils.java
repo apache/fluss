@@ -58,7 +58,7 @@ public final class IndexTableUtils {
     public static final byte PROGRESS_RECORD_KIND = 1;
 
     /** Reserved, operationally distinct prefix for internal Index Tables. */
-    public static final String INDEX_TABLE_NAME_PREFIX = "__idx__";
+    private static final String INDEX_TABLE_NAME_PREFIX = "__idx__";
 
     private IndexTableUtils() {}
 
@@ -67,10 +67,5 @@ public final class IndexTableUtils {
         return TablePath.of(
                 mainTable.getDatabaseName(),
                 INDEX_TABLE_NAME_PREFIX + mainTable.getTableName() + "__" + indexName);
-    }
-
-    /** Returns whether a table name is reserved for a system-managed Index Table. */
-    public static boolean isIndexTableName(String tableName) {
-        return tableName.startsWith(INDEX_TABLE_NAME_PREFIX);
     }
 }

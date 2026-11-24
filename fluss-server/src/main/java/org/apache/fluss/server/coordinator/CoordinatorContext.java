@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /** A context for {@link CoordinatorServer}, maintaining necessary objects in memory. */
@@ -77,8 +78,8 @@ public class CoordinatorContext {
     private final Map<String, CoordinatorAddress> liveCoordinatorServers = new HashMap<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
     // Written on the coordinator event thread, published atomically for RPC admission checks.
-    // False includes registrations whose API versions have not been received yet.
-    private volatile Map<Integer, Boolean> tabletServerPutIndexSupport = Collections.emptyMap();
+    // A new registration blocks creation until its API versions confirm PUT_INDEX support.
+    private volatile Set<Integer> indexCreationBlockers = Collections.emptySet();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
     // a map from the table bucket to the state of the bucket.
@@ -198,9 +199,9 @@ public class CoordinatorContext {
 
     @VisibleForTesting
     public void setLiveTabletServers(List<ServerInfo> servers) {
-        Map<Integer, Boolean> support = new HashMap<>();
-        servers.forEach(server -> support.put(server.id(), false));
-        tabletServerPutIndexSupport = Collections.unmodifiableMap(support);
+        Set<Integer> unknown = new TreeSet<>();
+        servers.forEach(server -> unknown.add(server.id()));
+        indexCreationBlockers = unknown;
         liveTabletServers.clear();
         servers.forEach(server -> liveTabletServers.put(server.id(), server));
     }
@@ -230,17 +231,13 @@ public class CoordinatorContext {
     }
 
     public void addLiveTabletServer(ServerInfo serverInfo) {
-        Map<Integer, Boolean> support = new HashMap<>(tabletServerPutIndexSupport);
-        support.put(serverInfo.id(), false);
-        tabletServerPutIndexSupport = Collections.unmodifiableMap(support);
+        setBlocksIndexCreation(serverInfo.id(), true);
         this.liveTabletServers.put(serverInfo.id(), serverInfo);
     }
 
     public void removeLiveTabletServer(int serverId) {
         this.liveTabletServers.remove(serverId);
-        Map<Integer, Boolean> support = new HashMap<>(tabletServerPutIndexSupport);
-        support.remove(serverId);
-        tabletServerPutIndexSupport = Collections.unmodifiableMap(support);
+        setBlocksIndexCreation(serverId, false);
     }
 
     /** Records API support only for the registration that initiated the query. */
@@ -248,19 +245,25 @@ public class CoordinatorContext {
         if (liveTabletServers.get(registration.id()) != registration) {
             return;
         }
-        Map<Integer, Boolean> support = new HashMap<>(tabletServerPutIndexSupport);
-        support.put(registration.id(), supported);
-        tabletServerPutIndexSupport = Collections.unmodifiableMap(support);
+        setBlocksIndexCreation(registration.id(), !supported);
+    }
+
+    private void setBlocksIndexCreation(int serverId, boolean blocked) {
+        if (indexCreationBlockers.contains(serverId) == blocked) {
+            return;
+        }
+        Set<Integer> updated = new TreeSet<>(indexCreationBlockers);
+        if (blocked) {
+            updated.add(serverId);
+        } else {
+            updated.remove(serverId);
+        }
+        indexCreationBlockers = updated;
     }
 
     /** Checks the published live-node snapshot. Safe to call from RPC threads. */
     public void checkIndexTableCreationSupported() {
-        List<Integer> unsupported =
-                tabletServerPutIndexSupport.entrySet().stream()
-                        .filter(entry -> !entry.getValue())
-                        .map(Map.Entry::getKey)
-                        .sorted()
-                        .collect(Collectors.toList());
+        Set<Integer> unsupported = indexCreationBlockers;
         if (!unsupported.isEmpty()) {
             throw new InvalidTableException(
                     "Cannot create a table with secondary indexes: "
@@ -932,7 +935,7 @@ public class CoordinatorContext {
         tablesToBeDeleted.clear();
         clearTablesState();
         liveTabletServers.clear();
-        tabletServerPutIndexSupport = Collections.emptyMap();
+        indexCreationBlockers = Collections.emptySet();
         liveCoordinatorServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();

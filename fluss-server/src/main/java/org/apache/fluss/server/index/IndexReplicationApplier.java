@@ -107,8 +107,7 @@ public final class IndexReplicationApplier {
 
     /**
      * Applies one source window under the target tablet lock. The progress row must be the final
-     * record of the ordinary KV batch, so a partial RocksDB flush can never expose progress ahead
-     * of its data mutations.
+     * record of the KV WAL batch. Recovery replays its data mutations before its progress.
      */
     @Nullable
     public LogAppendInfo apply(KvTablet kvTablet, PutIndexDataForBucket data) throws Exception {
@@ -131,12 +130,12 @@ public final class IndexReplicationApplier {
         // Only progress materialized in RocksDB can confirm a completed duplicate. Progress
         // still in the pre-write buffer must remain retriable until the committed batch is
         // materialized; acknowledging it early could lose the window after recovery.
-        List<byte[]> progressKeys = Collections.singletonList(progressKey);
-        long durableProgress = readProgress(kvTablet.multiGet(progressKeys));
+        long durableProgress =
+                readProgress(kvTablet.multiGet(Collections.singletonList(progressKey)).get(0));
         if (durableProgress >= sourceEndOffset) {
             return null;
         }
-        long visibleProgress = readProgress(kvTablet.multiGetFromBufferOrKv(progressKeys));
+        long visibleProgress = readProgress(kvTablet.getBufferedValue(progressKey));
         if (visibleProgress >= sourceEndOffset) {
             throw new KvStorageException(
                     "Index progress "
@@ -157,7 +156,7 @@ public final class IndexReplicationApplier {
                 tableBucket,
                 sourceBucket.getTableId());
         checkArgument(
-                (partitionIdPosition >= 0) == (sourceBucket.getPartitionId() != null),
+                (partitionIdKeyPosition >= 0) == (sourceBucket.getPartitionId() != null),
                 "Source partition identity does not match Index Table schema");
     }
 
@@ -235,8 +234,7 @@ public final class IndexReplicationApplier {
         }
     }
 
-    private long readProgress(List<ByteArraySlice> values) {
-        ByteArraySlice value = values.get(0);
+    private long readProgress(@Nullable ByteArraySlice value) {
         if (value == null) {
             return -1L;
         }

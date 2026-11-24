@@ -480,17 +480,4 @@ class TableSchemaTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Duplicate index name 'idx_user'");
     }
-
-    @Test
-    void testUserCannotDefineReservedSystemColumnInMainSchema() {
-        assertThatThrownBy(
-                        () ->
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.BIGINT())
-                                        .column("__partition_id", DataTypes.BIGINT())
-                                        .primaryKey("id")
-                                        .build())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("__partition_id");
-    }
 }

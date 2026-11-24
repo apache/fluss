@@ -197,13 +197,6 @@ public class ReplicaTestBase {
     @BeforeEach
     public void setup(TestInfo testInfo) throws Exception {
         conf = getServerConf();
-        tabletServerMetricGroup =
-                new TabletServerMetricGroup(
-                        NOPMetricRegistry.INSTANCE,
-                        "fluss",
-                        "host",
-                        TABLET_SERVER_RACK,
-                        TABLET_SERVER_ID);
         conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);
         // Keep unrelated tests independent of the host machine's actual disk usage.
         conf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
@@ -219,7 +212,7 @@ public class ReplicaTestBase {
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
         conf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 2);
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, getKvSnapshotInterval(testInfo));
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
 
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("10kb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, MemorySize.parse("512b"));
@@ -283,10 +276,6 @@ public class ReplicaTestBase {
     // Kept for subclasses that still define @BeforeEach setup() and call super.setup().
     // The actual initialization already happens in setup(TestInfo).
     protected void setup() throws Exception {}
-
-    protected Duration getKvSnapshotInterval(TestInfo testInfo) {
-        return Duration.ofSeconds(1);
-    }
 
     private void initMetadataCache(TabletServerMetadataCache metadataCache) {
         metadataCache.updateClusterMetadata(
@@ -583,27 +572,6 @@ public class ReplicaTestBase {
     protected Replica makeKvReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
             throws Exception {
         return makeReplica(physicalTablePath, tableBucket, true, null);
-    }
-
-    /**
-     * Test-only overload that lets callers inject a custom {@link TableInfo} (e.g. one carrying
-     * declared {@link Schema.Index}es) so behavior of leader-promotion paths that depend on the
-     * schema can be exercised without the heavyweight {@link
-     * org.apache.fluss.server.testutils.FlussClusterExtension} fixture.
-     */
-    protected Replica makeKvReplica(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket, TableInfo tableInfo)
-            throws Exception {
-        return makeReplica(physicalTablePath, tableBucket, true, null, tableInfo);
-    }
-
-    protected Replica makeKvReplica(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            SnapshotContext snapshotContext,
-            TableInfo tableInfo)
-            throws Exception {
-        return makeReplica(physicalTablePath, tableBucket, true, snapshotContext, tableInfo);
     }
 
     private Replica makeReplica(

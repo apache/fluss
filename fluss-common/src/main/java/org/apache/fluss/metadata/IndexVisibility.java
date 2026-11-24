@@ -30,16 +30,14 @@ import org.apache.fluss.annotation.PublicEvolving;
 public enum IndexVisibility {
 
     /**
-     * Synchronous visibility: PutKv ack waits until all generated index mutations have been applied
-     * at every target index bucket. The strongest read-your-write guarantee Fluss offers for
-     * indexes; this is the default.
+     * Write acknowledgement waits for the committed main-table changes to reach this index. This is
+     * the default.
      */
     SYNC,
 
     /**
-     * Asynchronous visibility: PutKv ack returns as soon as the data WAL is committed; index
-     * mutations land independently afterwards. Lower write latency at the cost of a transient
-     * window during which lookups may not yet see the new entries.
+     * Write acknowledgement does not wait for this index. Its lookups may temporarily omit recently
+     * written rows.
      */
     ASYNC
 }

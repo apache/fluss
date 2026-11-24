@@ -17,7 +17,11 @@
 
 package org.apache.fluss.client.lookup;
 
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
@@ -28,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -35,9 +40,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Covers the two Hop2 safeguards of a secondary index lookup that end-to-end tests cannot isolate:
@@ -69,10 +77,74 @@ class SecondaryIndexLookuperTest {
         mainRowsByPk.put(3, row(3, null, 30));
         mainRowsByPk.put(4, row(4, "Shanghai", 30));
 
+        mainRowsByPk.put(6, row(6, "Shanghai", 30));
+
         // Key 4 has two physical index entries. Key 5 was deleted from the main table.
-        LookupResult result = lookup(indexRowsFor(1, 2, 3, 4, 4, 5), row("Shanghai", 30));
-        assertThat(mainLookupKeys).containsExactly(1, 2, 3, 4, 5);
-        assertThat(result.getRowList()).extracting(r -> r.getInt(0)).containsExactly(4);
+        LookupResult result = lookup(indexRowsFor(1, 2, 3, 4, 4, 5, 6), row("Shanghai", 30));
+        assertThat(mainLookupKeys).containsExactlyInAnyOrder(1, 2, 3, 4, 5, 6);
+        assertThat(result.getRowList())
+                .extracting(r -> r.getInt(0))
+                .containsExactlyInAnyOrder(4, 6);
+    }
+
+    @Test
+    void closingClientFailsQueuedMainTableLookup() throws Exception {
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS, 1);
+        LookupClient client = new LookupClient(conf, mock(MetadataUpdater.class));
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Lookuper lookuper =
+                    new SecondaryIndexLookuper(
+                            MAIN_SCHEMA,
+                            Arrays.asList("city", "age"),
+                            MAIN_SCHEMA.getRowType().project(Collections.singletonList("id")),
+                            ignored ->
+                                    CompletableFuture.completedFuture(
+                                            new LookupResult(indexRowsFor(4))),
+                            ignored -> {
+                                running.countDown();
+                                try {
+                                    release.await();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                }
+                                return CompletableFuture.completedFuture(
+                                        new LookupResult(Collections.emptyList()));
+                            },
+                            client::executeContinuation);
+            lookuper.lookup(row("A", 30));
+            assertThat(running.await(10, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<LookupResult> queued = lookuper.lookup(row("B", 31));
+            client.close(Duration.ZERO);
+            assertThat(queued).isCompletedExceptionally();
+        } finally {
+            release.countDown();
+            client.close(Duration.ZERO);
+        }
+    }
+
+    @Test
+    void retainsLookupKeyUntilCandidatesReturn() throws Exception {
+        byte[] city = new byte[] {'A'};
+        CompletableFuture<LookupResult> candidates = new CompletableFuture<>();
+        SecondaryIndexLookuper lookuper =
+                new SecondaryIndexLookuper(
+                        MAIN_SCHEMA,
+                        Arrays.asList("city", "age"),
+                        MAIN_SCHEMA.getRowType().project(Collections.singletonList("id")),
+                        ignored -> candidates,
+                        ignored ->
+                                CompletableFuture.completedFuture(
+                                        new LookupResult(
+                                                Collections.singletonList(row(4, "A", 30)))),
+                        Runnable::run);
+        CompletableFuture<LookupResult> result =
+                lookuper.lookup(GenericRow.of(BinaryString.fromBytes(city), 30));
+        city[0] = 'B';
+        candidates.complete(new LookupResult(indexRowsFor(4)));
+        assertThat(result.get().getRowList()).extracting(r -> r.getInt(0)).containsExactly(4);
     }
 
     @Test

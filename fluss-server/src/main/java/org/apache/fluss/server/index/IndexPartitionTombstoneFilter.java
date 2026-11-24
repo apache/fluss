@@ -72,10 +72,11 @@ public final class IndexPartitionTombstoneFilter {
             return null;
         }
         Schema schema = tableInfo.getSchema();
-        int pidPos = schema.getColumnNames().indexOf(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN);
-        if (pidPos < 0) {
+        if (!schema.getPrimaryKeyColumnNames()
+                .contains(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN)) {
             return null;
         }
+        int pidPos = schema.getColumnNames().indexOf(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN);
         KvValueLayout valueLayout = KvValueLayout.fromTableConfig(tableInfo.getTableConfig());
         checkArgument(
                 valueLayout == KvValueLayout.TAGGED,

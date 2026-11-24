@@ -1347,7 +1347,7 @@ message PbKvSnapshot {
   required int32 bucket_id = 1;
   // null if there is no snapshot for this bucket
   optional int64 snapshot_id = 2;
-  // null if there is no snapshot for this bucket, then read from EARLIEST
+  // Without a snapshot, absent means EARLIEST; zero requires the full log from offset zero.
   optional int64 log_offset = 3;
 }
 

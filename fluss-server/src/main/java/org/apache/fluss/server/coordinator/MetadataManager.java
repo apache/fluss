@@ -25,6 +25,7 @@ import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -62,8 +63,10 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableMetadataRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData.PartitionTombstoneZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 import org.apache.fluss.utils.types.Tuple2;
@@ -87,10 +90,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
-import static org.apache.fluss.server.utils.TableDescriptorValidation.validateIndexSafeSchemaEvolution;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for metadata. */
@@ -388,16 +391,52 @@ public class MetadataManager {
     }
 
     private void dropTableLocked(TablePath tablePath, boolean ignoreIfNotExists) {
-        if (!tableExists(tablePath)) {
+        Optional<TableRegistration> registration =
+                uncheck(
+                        () -> zookeeperClient.getTable(tablePath),
+                        "Fail to read table: " + tablePath);
+        if (!registration.isPresent()) {
             if (ignoreIfNotExists) {
                 return;
             }
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
 
+        Optional<Long> ownerId =
+                Configuration.fromMap(registration.get().properties)
+                        .getOptional(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID);
+        if (ownerId.isPresent() && indexOwnerExists(tablePath, ownerId.get())) {
+            throw new InvalidTableException(
+                    String.format(
+                            "internal secondary index table %s cannot be dropped directly while its owning main table exists. Drop the main table instead.",
+                            tablePath));
+        }
+
         // in here, we just delete the table node in zookeeper, which will then trigger
         // the physical deletion in tablet servers and assignments in zk
         uncheck(() -> zookeeperClient.deleteTable(tablePath), "Fail to drop table: " + tablePath);
+    }
+
+    private boolean indexOwnerExists(TablePath indexPath, long ownerId) {
+        String database = indexPath.getDatabaseName();
+        // Table and index names may both contain "__". Confirm ownership by registration ID.
+        return uncheck(
+                () -> {
+                    List<TablePath> candidates = new ArrayList<>();
+                    for (String name : zookeeperClient.listTables(database)) {
+                        TablePath candidate = TablePath.of(database, name);
+                        if (indexPath
+                                .getTableName()
+                                .startsWith(
+                                        IndexTableUtils.indexTablePath(candidate, "")
+                                                .getTableName())) {
+                            candidates.add(candidate);
+                        }
+                    }
+                    return zookeeperClient.getRawTableRegistrations(candidates).values().stream()
+                            .anyMatch(table -> table.tableId == ownerId);
+                },
+                "Fail to resolve the owner of " + indexPath);
     }
 
     public void completeDeleteTable(long tableId) {
@@ -482,7 +521,7 @@ public class MetadataManager {
         return uncheck(zookeeperClient::getTableIdAndIncrement, "Fail to allocate table id");
     }
 
-    boolean createTableWithIndexes(
+    void createTableWithIndexes(
             TableMetadataRegistration mainTable,
             List<TableMetadataRegistration> indexTables,
             boolean ignoreIfExists,
@@ -498,20 +537,9 @@ public class MetadataManager {
         }
         if (tableExists(mainTablePath)) {
             if (ignoreIfExists) {
-                return false;
+                return;
             }
             throw new TableAlreadyExistException("Table " + mainTablePath + " already exists.");
-        }
-
-        for (TableMetadataRegistration indexTable : indexTables) {
-            if (!indexTable.tablePath.getDatabaseName().equals(mainTablePath.getDatabaseName())) {
-                throw new IllegalArgumentException(
-                        "Main table and index tables must target one database.");
-            }
-            if (tableExists(indexTable.tablePath)) {
-                throw new TableAlreadyExistException(
-                        "Table " + indexTable.tablePath + " already exists.");
-            }
         }
 
         List<TableMetadataRegistration> registrations = new java.util.ArrayList<>();
@@ -521,14 +549,13 @@ public class MetadataManager {
             zookeeperClient.registerTablesAtomically(registrations, coordinatorZkVersion);
         } catch (KeeperException.NodeExistsException e) {
             if (ignoreIfExists && tableExists(mainTablePath)) {
-                return false;
+                return;
             }
             throw new TableAlreadyExistException(
                     "One of the tables in the atomic creation already exists.", e);
         } catch (Exception e) {
             throw new FlussRuntimeException("Fail to atomically create tables.", e);
         }
-        return true;
     }
 
     public void alterTableSchema(
@@ -553,11 +580,6 @@ public class MetadataManager {
                 }
                 Schema newSchema =
                         SchemaUpdate.applySchemaChanges(table.getSchema(), schemaChanges);
-                // For tables with secondary indexes, only index-safe evolutions are
-                // allowed: index columns and primary key columns must keep identical
-                // name, type and ordinal position, so that index replication keeps
-                // working without an index rebuild.
-                validateIndexSafeSchemaEvolution(table.getSchema(), newSchema);
                 validateAlterTableSchema(table, newSchema);
                 LakeCatalog.Context lakeCatalogContext =
                         new CoordinatorService.DefaultLakeCatalogContext(
@@ -1350,7 +1372,7 @@ public class MetadataManager {
      */
     public void createPartition(
             TablePath tablePath,
-            long tableId,
+            Schema tableSchema,
             String remoteDataDir,
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
@@ -1361,7 +1383,7 @@ public class MetadataManager {
                 () ->
                         createPartitionLocked(
                                 tablePath,
-                                tableId,
+                                tableSchema,
                                 remoteDataDir,
                                 partitionAssignment,
                                 partition,
@@ -1371,12 +1393,13 @@ public class MetadataManager {
 
     private void createPartitionLocked(
             TablePath tablePath,
-            long tableId,
+            Schema tableSchema,
             String remoteDataDir,
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists,
             int bucketCount) {
+        long tableId = partitionAssignment.getTableId();
         // A delayed task must not register partitions under a replacement table, even if
         // ignoreIfExists is true and the new table already has a partition with this name.
         if (getTableRegistration(tablePath).tableId != tableId) {
@@ -1427,7 +1450,7 @@ public class MetadataManager {
         }
 
         try {
-            boolean guardPartitionTombstone = hasSecondaryIndexes(tablePath);
+            boolean guardPartitionTombstone = !tableSchema.getIndexes().isEmpty();
             for (int attempt = 0; ; attempt++) {
                 long partitionId = zookeeperClient.getPartitionIdAndIncrement();
                 try {
@@ -1472,6 +1495,30 @@ public class MetadataManager {
             long expectedTableId,
             ResolvedPartitionSpec partition,
             boolean ignoreIfNotExists) {
+        dropPartition(
+                tablePath,
+                expectedTableId,
+                partition,
+                ignoreIfNotExists,
+                () -> !getLatestSchema(tablePath).getSchema().getIndexes().isEmpty());
+    }
+
+    void dropPartition(
+            TableInfo table, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
+        dropPartition(
+                table.getTablePath(),
+                table.getTableId(),
+                partition,
+                ignoreIfNotExists,
+                () -> !table.getSchema().getIndexes().isEmpty());
+    }
+
+    private void dropPartition(
+            TablePath tablePath,
+            long expectedTableId,
+            ResolvedPartitionSpec partition,
+            boolean ignoreIfNotExists,
+            BooleanSupplier hasSecondaryIndexes) {
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -1487,7 +1534,7 @@ public class MetadataManager {
         }
 
         try {
-            if (hasSecondaryIndexes(tablePath)) {
+            if (hasSecondaryIndexes.getAsBoolean()) {
                 dropPartitionAndPersistTombstone(
                         tablePath,
                         expectedTableId,
@@ -1505,10 +1552,6 @@ public class MetadataManager {
         }
     }
 
-    private boolean hasSecondaryIndexes(TablePath tablePath) {
-        return !getLatestSchema(tablePath).getSchema().getIndexes().isEmpty();
-    }
-
     private void dropPartitionAndPersistTombstone(
             TablePath tablePath,
             long expectedTableId,
@@ -1521,7 +1564,13 @@ public class MetadataManager {
             // Read the CAS version before live partitions. Partition publication touches the
             // same node, invalidating a floor calculated without the newly registered partition.
             Tuple2<PartitionTombstone, Optional<Integer>> current =
-                    zookeeperClient.getPartitionTombstoneWithVersion(tablePath);
+                    zookeeperClient.getPartitionTombstoneWithVersion(tablePath, expectedTableId);
+            int version =
+                    current.f1.orElseThrow(
+                            () ->
+                                    new KeeperException.NoNodeException(
+                                            PartitionTombstoneZNode.path(
+                                                    tablePath, expectedTableId)));
             Set<Long> alivePartitionIdsAfterDrop =
                     loadAlivePartitionIdsAfterDrop(tablePath, partitionId);
             PartitionTombstone updated =
@@ -1529,14 +1578,9 @@ public class MetadataManager {
                             current.f0, partitionId, alivePartitionIdsAfterDrop);
             try {
                 zookeeperClient.deletePartitionAndSetTombstone(
-                        tablePath,
-                        partitionName,
-                        expectedTableId,
-                        partitionId,
-                        updated,
-                        current.f1);
+                        tablePath, partitionName, expectedTableId, partitionId, updated, version);
                 return;
-            } catch (KeeperException.BadVersionException | KeeperException.NodeExistsException e) {
+            } catch (KeeperException.BadVersionException e) {
                 lastConflict = e;
                 LOG.warn(
                         "Retrying atomic partition drop for table {} partition {} after tombstone version conflict.",

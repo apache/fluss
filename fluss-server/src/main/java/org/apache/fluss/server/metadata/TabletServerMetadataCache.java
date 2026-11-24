@@ -399,6 +399,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             updateTableOwnership(
                                     tableInfo, tableIdByPath, mainTableIdByIndexTableId);
                             if (previousId != null && previousId != tableId) {
+                                removePartitionTombstone(previousId);
                                 tableProperties.remove(previousId);
                                 bucketMetadataMapForTables.remove(previousId);
                                 bucketCountEpochByTableId.remove(previousId);
@@ -607,6 +608,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     updateTableOwnership(tableInfo, tableIdByPath, mainTableIdByIndexTableId);
                     boolean tableIdChanged = previousId != null && previousId != tableId;
                     if (tableIdChanged) {
+                        removePartitionTombstone(previousId);
                         tableProperties.remove(previousId);
                         bucketMetadataMapForTables.remove(previousId);
                     }

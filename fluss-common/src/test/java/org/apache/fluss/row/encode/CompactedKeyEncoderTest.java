@@ -80,7 +80,7 @@ class CompactedKeyEncoderTest {
                 new PaddingRow(2) {
                     @Override
                     public int getInt(int position) {
-                        if (position == 0) {
+                        if (position == 1) {
                             firstEncodeBlocked.countDown();
                             try {
                                 assertThat(secondEncodeDone.await(10, TimeUnit.SECONDS)).isTrue();

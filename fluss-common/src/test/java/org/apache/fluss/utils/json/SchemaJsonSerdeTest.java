@@ -135,13 +135,13 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
                     .index(
                             "idx_email",
                             IndexType.SECONDARY,
-                            Collections.singletonList("email"),
+                            Arrays.asList("region", "email"),
                             IndexVisibility.ASYNC,
                             7)
                     .build();
 
     static final String SCHEMA_JSON_WITH_INDEXES =
-            "{\"version\":1,\"columns\":[{\"name\":\"id\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"id\":0},{\"name\":\"email\",\"data_type\":{\"type\":\"STRING\"},\"id\":1},{\"name\":\"region\",\"data_type\":{\"type\":\"INTEGER\"},\"id\":2}],\"primary_key\":[\"id\"],\"indexes\":[{\"name\":\"idx_region\",\"type\":\"SECONDARY\",\"visibility\":\"SYNC\",\"columns\":[\"region\"]},{\"name\":\"idx_email\",\"type\":\"SECONDARY\",\"visibility\":\"ASYNC\",\"bucket_num\":7,\"columns\":[\"email\"]}],\"highest_field_id\":2}";
+            "{\"version\":1,\"columns\":[{\"name\":\"id\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"id\":0},{\"name\":\"email\",\"data_type\":{\"type\":\"STRING\"},\"id\":1},{\"name\":\"region\",\"data_type\":{\"type\":\"INTEGER\"},\"id\":2}],\"primary_key\":[\"id\"],\"indexes\":[{\"name\":\"idx_region\",\"type\":\"SECONDARY\",\"visibility\":\"SYNC\",\"columns\":[\"region\"]},{\"name\":\"idx_email\",\"type\":\"SECONDARY\",\"visibility\":\"ASYNC\",\"bucket_num\":7,\"columns\":[\"region\",\"email\"]}],\"highest_field_id\":2}";
 
     SchemaJsonSerdeTest() {
         super(SchemaJsonSerde.INSTANCE);

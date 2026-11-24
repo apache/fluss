@@ -1355,7 +1355,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         1000L,
                         null,
                         indexPushedOffset,
-                        indexPushedOffset,
+                        indexPushedOffset == null ? null : 800L,
                         null);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();
@@ -1378,7 +1378,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 NotifyKvSnapshotOffsetRequest request =
                         (NotifyKvSnapshotOffsetRequest) gateway.getRequest(0);
                 assertThat(request.getMinRetainOffset())
-                        .isEqualTo(completedSnapshot.getMinRetainLogOffset());
+                        .isEqualTo(indexPushedOffset == null ? 1000L : 600L);
             }
         }
     }
@@ -1860,7 +1860,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         // create one partition so the ALTER bucket.num rescale can commit
         metadataManager.createPartition(
                 t1,
-                tableId,
+                partitionedTable.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(
                         tableId,

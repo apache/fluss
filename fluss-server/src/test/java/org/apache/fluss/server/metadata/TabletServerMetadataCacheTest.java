@@ -24,6 +24,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -168,9 +169,6 @@ public class TabletServerMetadataCacheTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testIndexReadAuthorizationUsesLocalMetadata(boolean singleTableUpdate) {
-        TestingMetadataManager metadataManager =
-                new TestingMetadataManager(Collections.emptyList());
-        serverMetadataCache = new TabletServerMetadataCache(metadataManager);
         TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
         long indexId = 200001L;
         TableMetadata index = indexMetadata(indexPath, indexId);
@@ -210,9 +208,6 @@ public class TabletServerMetadataCacheTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testIndexAuthorizationMetadataDeletionAndRecreation(boolean deleteById) {
-        TestingMetadataManager metadataManager =
-                new TestingMetadataManager(Collections.emptyList());
-        serverMetadataCache = new TabletServerMetadataCache(metadataManager);
         TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
         long indexId = 200001L;
         TableMetadata index = indexMetadata(indexPath, indexId);
@@ -894,6 +889,7 @@ public class TabletServerMetadataCacheTest {
                 Arrays.asList(
                         PhysicalTablePath.of(partitionedTablePath, partitionName1),
                         PhysicalTablePath.of(partitionedTablePath, partitionName2));
+        serverMetadataCache.updatePartitionTombstone(partitionTableId, PartitionTombstone.EMPTY);
         ServerMetadataSnapshot beforeUpdate = serverMetadataCache.getSnapshot();
         long updatedTableId = changeTableId ? partitionTableId + 1 : partitionTableId;
         TableMetadata updatedTable =
@@ -926,6 +922,11 @@ public class TabletServerMetadataCacheTest {
         }
 
         assertThat(serverMetadataCache.getTableId(partitionedTablePath)).hasValue(updatedTableId);
+        assertThat(
+                        serverMetadataCache
+                                .getPartitionTombstoneIfInitialized(partitionTableId)
+                                .isPresent())
+                .isEqualTo(!changeTableId);
         if (changeTableId) {
             assertThat(serverMetadataCache.getTablePath(partitionTableId)).isEmpty();
             assertPartitionsRemoved(partitionId1, partitionId2);

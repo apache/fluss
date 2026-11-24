@@ -22,7 +22,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterables;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
@@ -39,10 +38,8 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * TabletServer-global staging area that accumulates pre-encoded {@link IndexBatch}es per target
@@ -58,8 +55,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <p>Lock order is {@code window} then the per-bucket {@code queue}. Code inside a {@code queue}
  * critical section may only read volatile or atomic state of a window or batch: calling a {@code
- * synchronized} method on a window from there inverts the order and deadlocks against {@link
- * #tryAppendWindow} and {@link #retryClaim}.
+ * synchronized} method on a window from there inverts the order taken by {@link #retryClaim}.
  */
 @Internal
 @ThreadSafe
@@ -114,60 +110,37 @@ final class IndexSendBuffer {
     /**
      * Atomically admits and publishes every target batch of one source window.
      *
-     * <p>Capacity reservation is serialized across producers, while sender-visible queue
-     * publication is staged behind the window's admission flag. A rejected or failed publication
-     * leaves no queue or accounting residue.
+     * <p>The source holds its lifecycle lock through publication. Until the window is admitted,
+     * senders cannot claim its queued batches and the builder still owns its reservation.
      */
-    boolean tryAppendWindow(List<IndexBatch> windowBatches, Reservation reservation) {
-        checkNotNull(windowBatches, "windowBatches");
-        checkArgument(!windowBatches.isEmpty(), "windowBatches must not be empty");
-        IndexBatch first = checkNotNull(windowBatches.get(0), "window batch");
-        IndexReplicationWindow window = first.window();
-
-        synchronized (window) {
-            checkArgument(!window.isAdmitted(), "window is already admitted");
-            Set<TableBucket> targets = new HashSet<>();
-            long retainedBytes = 0L;
-            long payloadBytes = 0L;
+    void appendWindow(List<IndexBatch> windowBatches, Reservation reservation) {
+        IndexReplicationWindow window = windowBatches.get(0).window();
+        checkArgument(!window.isAdmitted(), "window is already admitted");
+        Set<TableBucket> targets = new HashSet<>();
+        long retainedBytes = 0L;
+        long payloadBytes = 0L;
+        for (IndexBatch batch : windowBatches) {
+            checkArgument(batch.window() == window, "all batches must reference the same window");
+            checkArgument(
+                    targets.add(batch.targetBucket()), "window contains a duplicate target bucket");
+            retainedBytes += batch.retainedBytes();
+            payloadBytes += batch.encoded().getBytesLength();
+        }
+        try {
             for (IndexBatch batch : windowBatches) {
-                checkArgument(
-                        batch.window() == window, "all batches must reference the same window");
-                checkArgument(
-                        targets.add(batch.targetBucket()),
-                        "window contains a duplicate target bucket");
-                checkArgument(!batch.isReleased(), "window contains a released batch");
-                retainedBytes = Math.addExact(retainedBytes, batch.retainedBytes());
-                payloadBytes += batch.encoded().getBytesLength();
-            }
-            if (!window.acceptsBatches()) {
-                return false;
+                publishStaged(batch);
             }
             reservation.transferToWindow(retainedBytes);
-
-            try {
-                if (!window.acceptsBatches()) {
-                    rollbackWindow(windowBatches);
-                    return false;
-                }
-
-                for (IndexBatch batch : windowBatches) {
-                    publishStaged(batch);
-                    if (!window.acceptsBatches()) {
-                        rollbackWindow(windowBatches);
-                        return false;
-                    }
-                }
-                window.markAdmitted(payloadBytes, targets);
-            } catch (RuntimeException | Error failure) {
-                rollbackWindow(windowBatches);
-                throw failure;
+        } catch (RuntimeException | Error failure) {
+            for (IndexBatch batch : windowBatches) {
+                remove(batch);
             }
+            throw failure;
         }
-
+        window.markAdmitted(payloadBytes, targets);
         for (IndexBatch batch : windowBatches) {
             notifyReadyBucket(batch.targetBucket());
         }
-        return true;
     }
 
     private void publishStaged(IndexBatch batch) {
@@ -180,15 +153,6 @@ final class IndexSendBuffer {
                     }
                     return queue;
                 });
-    }
-
-    private void rollbackWindow(List<IndexBatch> windowBatches) {
-        for (IndexBatch batch : windowBatches) {
-            remove(batch);
-        }
-        for (IndexBatch batch : windowBatches) {
-            release(batch);
-        }
     }
 
     private void notifyReadyBucket(TableBucket bucket) {
@@ -206,7 +170,7 @@ final class IndexSendBuffer {
         }
         synchronized (queue) {
             for (IndexBatch batch : queue.batches) {
-                if (batch.attempts() > 0) {
+                if (batch.requeueCount() > 0) {
                     return true;
                 }
             }
@@ -225,7 +189,7 @@ final class IndexSendBuffer {
         if (full) {
             waitingForCapacity.set(true);
         }
-        return full;
+        return full && !hasPageCapacity(1);
     }
 
     boolean hasPageCapacity(int pageSize) {
@@ -314,13 +278,12 @@ final class IndexSendBuffer {
                                 return queue;
                             }
                             queue.claimed = null;
-                            if (queue.batches.peekFirst() == batch
-                                    && batch.window().acceptsBatches()
-                                    && !batch.isReleased()) {
+                            if (batch.window().acceptsBatches()) {
                                 batch.reEnqueued();
                                 retried[0] = true;
                             } else {
-                                discarded[0] = removeExact(queue.batches, batch);
+                                queue.batches.removeFirst();
+                                discarded[0] = true;
                             }
                             return queue.batches.isEmpty() ? null : queue;
                         }
@@ -341,7 +304,8 @@ final class IndexSendBuffer {
                     synchronized (queue) {
                         if (queue.claimed == batch) {
                             queue.claimed = null;
-                            removed[0] = removeExact(queue.batches, batch);
+                            queue.batches.removeFirst();
+                            removed[0] = true;
                         }
                         return queue.batches.isEmpty() ? null : queue;
                     }
@@ -367,25 +331,21 @@ final class IndexSendBuffer {
     }
 
     /** Remove the exact batch from its target queue without changing pending-byte accounting. */
-    private boolean remove(IndexBatch batch) {
-        boolean[] removed = new boolean[1];
+    private void remove(IndexBatch batch) {
         queues.computeIfPresent(
                 batch.targetBucket(),
                 (ignored, queue) -> {
                     synchronized (queue) {
-                        removed[0] = removeExact(queue.batches, batch);
+                        queue.batches.removeFirstOccurrence(batch);
                         return queue.batches.isEmpty() ? null : queue;
                     }
                 });
-        return removed[0];
     }
 
     /** Release pending-byte accounting for a batch that reached a terminal state. */
     private void release(IndexBatch batch) {
-        if (batch.markReleased()) {
-            pendingBytes.addAndGet(-batch.retainedBytes());
-            notifyCapacityAvailable();
-        }
+        pendingBytes.addAndGet(-batch.retainedBytes());
+        notifyCapacityAvailable();
     }
 
     private void notifyCapacityAvailable() {
@@ -415,7 +375,10 @@ final class IndexSendBuffer {
                     long current = pendingBytes.get();
                     if (current > maxTotalPendingBytes - pageSize) {
                         waitingForCapacity.set(true);
-                        throw new BufferFullException();
+                        if (!hasPageCapacity(pageSize)) {
+                            throw new BufferFullException();
+                        }
+                        continue;
                     }
                     if (pendingBytes.compareAndSet(current, current + pageSize)) {
                         bytes += pageSize;
@@ -471,62 +434,47 @@ final class IndexSendBuffer {
         @Nullable private volatile IndexBatch claimed;
     }
 
-    private static boolean removeExact(Deque<IndexBatch> deque, IndexBatch batch) {
-        Iterator<IndexBatch> iterator = deque.iterator();
-        while (iterator.hasNext()) {
-            if (iterator.next() == batch) {
-                iterator.remove();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Releases a stopped source's retired windows without scanning unrelated target queues. */
-    int dropWindows(Set<IndexReplicationWindow> windows) {
-        return dropBatches(
-                Iterables.concat(
-                        Iterables.transform(windows, IndexReplicationWindow::targetBuckets)),
-                batch -> windows.contains(batch.window()));
-    }
-
-    /** Releases one retired index window while preserving every other producer's batches. */
-    int dropWindow(IndexReplicationWindow window) {
-        return dropBatches(window.targetBuckets(), batch -> batch.window() == window);
-    }
-
-    private int dropBatches(Iterable<TableBucket> targets, Predicate<IndexBatch> shouldDrop) {
+    /**
+     * Removes retired windows from their target queues before releasing bytes and waking senders.
+     */
+    int dropWindows(List<IndexReplicationWindow> windows) {
         List<IndexBatch> droppedBatches = new ArrayList<>();
-        Set<TableBucket> affectedBuckets = new HashSet<>();
-        for (TableBucket bucket : targets) {
-            queues.computeIfPresent(
-                    bucket,
-                    (ignored, queue) -> {
-                        synchronized (queue) {
-                            Iterator<IndexBatch> it = queue.batches.iterator();
-                            while (it.hasNext()) {
-                                IndexBatch batch = it.next();
-                                if (shouldDrop.test(batch)) {
-                                    it.remove();
-                                    if (queue.claimed == batch) {
-                                        queue.claimed = null;
-                                    }
-                                    droppedBatches.add(batch);
-                                    affectedBuckets.add(bucket);
-                                }
-                            }
-                            return queue.batches.isEmpty() ? null : queue;
-                        }
-                    });
+        for (IndexReplicationWindow window : windows) {
+            for (TableBucket bucket : window.targetBuckets()) {
+                removeWindowBatch(window, bucket, droppedBatches);
+            }
         }
         for (IndexBatch batch : droppedBatches) {
             release(batch);
         }
         // Removing a claimed head can expose another source's batch after its ready notification
         // was consumed. Notify outside the queue locks even if the queue has since changed.
-        for (TableBucket bucket : affectedBuckets) {
-            notifyReadyBucket(bucket);
+        for (IndexBatch batch : droppedBatches) {
+            notifyReadyBucket(batch.targetBucket());
         }
         return droppedBatches.size();
+    }
+
+    private void removeWindowBatch(
+            IndexReplicationWindow window, TableBucket bucket, List<IndexBatch> droppedBatches) {
+        queues.computeIfPresent(
+                bucket,
+                (ignored, queue) -> {
+                    synchronized (queue) {
+                        Iterator<IndexBatch> it = queue.batches.iterator();
+                        while (it.hasNext()) {
+                            IndexBatch batch = it.next();
+                            if (batch.window() == window) {
+                                it.remove();
+                                if (queue.claimed == batch) {
+                                    queue.claimed = null;
+                                }
+                                droppedBatches.add(batch);
+                                break;
+                            }
+                        }
+                        return queue.batches.isEmpty() ? null : queue;
+                    }
+                });
     }
 }

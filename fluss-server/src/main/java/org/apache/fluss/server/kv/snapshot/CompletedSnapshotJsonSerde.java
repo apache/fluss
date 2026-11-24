@@ -82,7 +82,7 @@ public class CompletedSnapshotJsonSerde
                 snapshotHandle.getIncrementalSize(),
                 completedSnapshot.getLogOffset(),
                 completedSnapshot.getRowCount(),
-                completedSnapshot.getIndexPushedOffset(),
+                completedSnapshot.getAllIndexPushedOffset(),
                 completedSnapshot.getSyncIndexPushedOffset(),
                 ranges);
     }
@@ -108,7 +108,7 @@ public class CompletedSnapshotJsonSerde
                         metadata.getIncrementalSize()),
                 metadata.getLogOffset(),
                 metadata.getRowCount(),
-                metadata.getIndexPushedOffset(),
+                metadata.getAllIndexPushedOffset(),
                 metadata.getSyncIndexPushedOffset(),
                 ranges);
     }

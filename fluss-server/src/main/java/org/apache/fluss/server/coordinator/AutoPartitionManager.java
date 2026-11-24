@@ -481,9 +481,7 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             dropPartitions(
-                    tablePath,
-                    tableId,
-                    tableInfo.getPartitionKeys(),
+                    tableInfo,
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
@@ -532,7 +530,7 @@ public class AutoPartitionManager implements AutoCloseable {
             String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
             metadataManager.createPartition(
                     tablePath,
-                    tableId,
+                    tableInfo.getSchema(),
                     remoteDataDir,
                     partitionAssignment,
                     partition,
@@ -608,9 +606,7 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     private void dropPartitions(
-            TablePath tablePath,
-            long tableId,
-            List<String> partitionKeys,
+            TableInfo tableInfo,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             NavigableMap<String, Set<String>> currentPartitions) {
@@ -653,16 +649,15 @@ public class AutoPartitionManager implements AutoCloseable {
             if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
                 continue;
             }
-            dropPartitions(tablePath, tableId, partitionKeys, iterator, entry);
+            dropPartitions(tableInfo, iterator, entry);
         }
     }
 
     private void dropPartitions(
-            TablePath tablePath,
-            long tableId,
-            List<String> partitionKeys,
+            TableInfo tableInfo,
             Iterator<Map.Entry<String, Set<String>>> iterator,
             Map.Entry<String, Set<String>> entry) {
+        TablePath tablePath = tableInfo.getTablePath();
         Iterator<String> dropIterator;
         if (entry.getValue() == null) {
             dropIterator = new HashSet<>(Collections.singleton(entry.getKey())).iterator();
@@ -675,9 +670,9 @@ public class AutoPartitionManager implements AutoCloseable {
             String partitionName = dropIterator.next();
             try {
                 metadataManager.dropPartition(
-                        tablePath,
-                        tableId,
-                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
+                        tableInfo,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                tableInfo.getPartitionKeys(), partitionName),
                         false);
             } catch (PartitionNotExistException e) {
                 LOG.info(

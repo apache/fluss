@@ -953,9 +953,14 @@ public class FlussAuthorizationITCase {
                     .all()
                     .get();
             FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(readMainTableAcl, false);
-            assertThatThrownBy(() -> lookuper.lookup(row("alice")).get(30, TimeUnit.SECONDS))
+            assertThatThrownBy(() -> lookuper.lookup(row("absent")).get(30, TimeUnit.SECONDS))
                     .rootCause()
-                    .isInstanceOf(AuthorizationException.class);
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "table "
+                                    + mainTable.getTableName()
+                                    + " in database "
+                                    + mainTable.getDatabaseName());
             assertThatThrownBy(() -> guestAdmin.getTableInfo(indexTable).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class);

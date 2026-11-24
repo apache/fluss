@@ -357,7 +357,7 @@ class KvTabletSnapshotTargetTest {
     void testShouldSnapshotWhenIndexPushedOffsetAdvancesWithoutLogOffset() {
         assertThat(
                         KvTabletSnapshotTarget.shouldCreateSnapshot(
-                                new TabletState(1L, null, 1L, null), 1L, null))
+                                new TabletState(100L, null, 21L, null), 100L, 20L))
                 .as(
                         "index-pushed-offset is snapshot metadata; advancing it must trigger a new "
                                 + "snapshot even when the flushed log offset is unchanged")

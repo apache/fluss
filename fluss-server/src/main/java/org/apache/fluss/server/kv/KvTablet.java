@@ -41,6 +41,7 @@ import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.index.IndexPartitionTombstoneFilter;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.historical.HistoricalKvTombstone;
@@ -168,6 +169,7 @@ public final class KvTablet {
     // A lock that guards all modifications to the kv.
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
     private final KvValueLayout kvValueLayout;
+    @Nullable private final IndexPartitionTombstoneFilter indexFilter;
     private final KvStateValueEncoder stateValueEncoder;
     private final AtomicLong historicalCleanupOffset;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
@@ -234,7 +236,8 @@ public final class KvTablet {
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
             boolean rowTtlEnabled,
-            boolean skipUnchangedUpsert) {
+            boolean skipUnchangedUpsert,
+            @Nullable IndexPartitionTombstoneFilter indexFilter) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.historicalPartition =
@@ -250,6 +253,7 @@ public final class KvTablet {
         this.kvStateAccessor =
                 new KvStateAccessor(kvPreWriteBuffer, rocksDBKv, historicalPartition);
         this.kvValueLayout = kvValueLayout;
+        this.indexFilter = indexFilter;
         this.stateValueEncoder =
                 historicalPartition
                         ? valueEncoder::encodeValue
@@ -336,7 +340,6 @@ public final class KvTablet {
                 autoIncrementManager,
                 SystemClock.getInstance(),
                 new TableConfig(new Configuration()),
-                null,
                 null);
     }
 
@@ -362,112 +365,8 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
-            throws IOException {
-        return create(
-                tablePath,
-                tableBucket,
-                logTablet,
-                kvTabletDir,
-                serverConf,
-                serverMetricGroup,
-                arrowBufferAllocator,
-                memorySegmentPool,
-                kvFormat,
-                rowMerger,
-                arrowCompressionInfo,
-                schemaGetter,
-                changelogImage,
-                sharedRateLimiter,
-                sharedBlockCache,
-                sharedWriteBufferManager,
-                statisticsRegistry,
-                kvFlushScheduler,
-                false,
-                flushCompleteListener,
-                autoIncrementManager,
-                clock,
-                tableConfig,
-                null,
-                null);
-    }
-
-    public static KvTablet create(
-            PhysicalTablePath tablePath,
-            TableBucket tableBucket,
-            LogTablet logTablet,
-            File kvTabletDir,
-            Configuration serverConf,
-            TabletServerMetricGroup serverMetricGroup,
-            BufferAllocator arrowBufferAllocator,
-            MemorySegmentPool memorySegmentPool,
-            KvFormat kvFormat,
-            RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter,
-            ChangelogImage changelogImage,
-            RateLimiter sharedRateLimiter,
-            @Nullable Cache sharedBlockCache,
-            KvFlushScheduler kvFlushScheduler,
-            @Nullable Runnable flushCompleteListener,
-            AutoIncrementManager autoIncrementManager,
-            Clock clock,
-            TableConfig tableConfig)
-            throws IOException {
-        return create(
-                tablePath,
-                tableBucket,
-                logTablet,
-                kvTabletDir,
-                serverConf,
-                serverMetricGroup,
-                arrowBufferAllocator,
-                memorySegmentPool,
-                kvFormat,
-                rowMerger,
-                arrowCompressionInfo,
-                schemaGetter,
-                changelogImage,
-                sharedRateLimiter,
-                sharedBlockCache,
-                null,
-                null,
-                kvFlushScheduler,
-                flushCompleteListener,
-                autoIncrementManager,
-                clock,
-                tableConfig,
-                null,
-                null);
-    }
-
-    public static KvTablet create(
-            PhysicalTablePath tablePath,
-            TableBucket tableBucket,
-            LogTablet logTablet,
-            File kvTabletDir,
-            Configuration serverConf,
-            TabletServerMetricGroup serverMetricGroup,
-            BufferAllocator arrowBufferAllocator,
-            MemorySegmentPool memorySegmentPool,
-            KvFormat kvFormat,
-            RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter,
-            ChangelogImage changelogImage,
-            RateLimiter sharedRateLimiter,
-            @Nullable Cache sharedBlockCache,
-            @Nullable WriteBufferManager sharedWriteBufferManager,
-            @Nullable RocksDBStatisticsRegistry statisticsRegistry,
-            KvFlushScheduler kvFlushScheduler,
-            @Nullable Runnable flushCompleteListener,
-            AutoIncrementManager autoIncrementManager,
-            Clock clock,
             TableConfig tableConfig,
-            @Nullable
-                    AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory,
-            @Nullable ToLongFunction<BinaryRow> tagExtractor)
+            @Nullable IndexPartitionTombstoneFilter indexFilter)
             throws IOException {
         return create(
                 tablePath,
@@ -493,8 +392,55 @@ public final class KvTablet {
                 autoIncrementManager,
                 clock,
                 tableConfig,
-                compactionFilterFactory,
-                tagExtractor);
+                indexFilter);
+    }
+
+    public static KvTablet create(
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogTablet logTablet,
+            File kvTabletDir,
+            Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
+            BufferAllocator arrowBufferAllocator,
+            MemorySegmentPool memorySegmentPool,
+            KvFormat kvFormat,
+            RowMerger rowMerger,
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter,
+            ChangelogImage changelogImage,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            KvFlushScheduler kvFlushScheduler,
+            @Nullable Runnable flushCompleteListener,
+            AutoIncrementManager autoIncrementManager,
+            Clock clock,
+            TableConfig tableConfig)
+            throws IOException {
+        return create(
+                tablePath,
+                tableBucket,
+                logTablet,
+                kvTabletDir,
+                serverConf,
+                serverMetricGroup,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                kvFormat,
+                rowMerger,
+                arrowCompressionInfo,
+                schemaGetter,
+                changelogImage,
+                sharedRateLimiter,
+                sharedBlockCache,
+                null,
+                null,
+                kvFlushScheduler,
+                flushCompleteListener,
+                autoIncrementManager,
+                clock,
+                tableConfig,
+                null);
     }
 
     private static KvTablet create(
@@ -521,10 +467,7 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager,
             Clock clock,
             TableConfig tableConfig,
-            @Nullable
-                    AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            customCompactionFilterFactory,
-            @Nullable ToLongFunction<BinaryRow> customTagExtractor)
+            @Nullable IndexPartitionTombstoneFilter indexFilter)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
         boolean historicalPartition =
@@ -541,7 +484,7 @@ public final class KvTablet {
                                 tableConfig, schemaGetter, ZoneId.systemDefault())
                         : null;
         ToLongFunction<BinaryRow> tagExtractor =
-                customTagExtractor != null ? customTagExtractor : rowTtlTimestampProvider;
+                indexFilter != null ? indexFilter.createTagExtractor() : rowTtlTimestampProvider;
         checkState(
                 kvValueLayout.hasValueTag() == (historicalPartition || tagExtractor != null),
                 "KV value layout tag configuration is inconsistent for %s.",
@@ -555,8 +498,8 @@ public final class KvTablet {
         @Nullable
         AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                 compactionFilterFactory =
-                        customCompactionFilterFactory != null
-                                ? customCompactionFilterFactory
+                        indexFilter != null
+                                ? indexFilter.createCompactionFilterFactory()
                                 : historicalPartition
                                         ? RowTtlCompactionFilterFactory.create(
                                                 kvValueLayout,
@@ -616,7 +559,8 @@ public final class KvTablet {
                 rowTtlTimestampProvider,
                 clock,
                 rowTtl.isPresent(),
-                tableConfig.isUpsertSkipUnchanged());
+                tableConfig.isUpsertSkipUnchanged(),
+                indexFilter);
     }
 
     public static KvTablet create(
@@ -662,7 +606,6 @@ public final class KvTablet {
                 autoIncrementManager,
                 clock,
                 tableConfig,
-                null,
                 null);
     }
 
@@ -775,20 +718,6 @@ public final class KvTablet {
         if (this.rowCount != ROW_COUNT_DISABLED) {
             this.rowCount = rowCount;
         }
-    }
-
-    /**
-     * Installs a value filter used by Index Table replicas to skip entries whose source partition
-     * has been tombstoned. The filter is evaluated during point-lookup and prefix-scan paths.
-     *
-     * @param filter returns {@code true} when the value should be dropped
-     */
-    private static final java.util.function.Predicate<byte[]> NO_OP_VALUE_FILTER = v -> false;
-
-    private volatile java.util.function.Predicate<byte[]> valueFilter = NO_OP_VALUE_FILTER;
-
-    public void setValueFilter(@Nullable java.util.function.Predicate<byte[]> filter) {
-        this.valueFilter = filter == null ? NO_OP_VALUE_FILTER : filter;
     }
 
     // row_count is volatile, so it's safe to read without lock
@@ -1355,6 +1284,24 @@ public final class KvTablet {
     }
 
     /**
+     * Reads a pending mutation without falling back to RocksDB. The caller holds the tablet write
+     * lock.
+     */
+    @Nullable
+    public ByteArraySlice getBufferedValue(byte[] key) {
+        byte[] value =
+                kvStateAccessor.lookupPreWriteBuffer(kvStateAccessor.encodeKey(key, null)).value();
+        return visibleValueBody(value);
+    }
+
+    @Nullable
+    private ByteArraySlice visibleValueBody(@Nullable byte[] value) {
+        return indexFilter != null && indexFilter.isTombstoned(value)
+                ? null
+                : kvValueLayout.toValueBodySlice(value);
+    }
+
+    /**
      * Multi-get that also sees entries still sitting in the kv pre-write buffer (already appended
      * to the CDC log but not yet flushed to RocksDB by the asynchronous flush).
      *
@@ -1375,10 +1322,7 @@ public final class KvTablet {
                     for (byte[] key : keys) {
                         KvPreWriteBuffer.Key lookupKey = kvStateAccessor.encodeKey(key, null);
                         byte[] rawValue = kvStateAccessor.lookupLocal(lookupKey).value();
-                        if (rawValue != null && valueFilter.test(rawValue)) {
-                            rawValue = null;
-                        }
-                        values.add(kvValueLayout.toValueBodySlice(rawValue));
+                        values.add(visibleValueBody(rawValue));
                     }
                     return values;
                 });
@@ -1436,7 +1380,7 @@ public final class KvTablet {
     private List<ByteArraySlice> toValueBodySlices(List<byte[]> values, boolean preservePositions) {
         List<ByteArraySlice> valueBodySlices = new ArrayList<>(values.size());
         for (byte[] value : values) {
-            if (value != null && valueFilter.test(value)) {
+            if (value != null && indexFilter != null && indexFilter.isTombstoned(value)) {
                 if (preservePositions) {
                     valueBodySlices.add(null);
                 }

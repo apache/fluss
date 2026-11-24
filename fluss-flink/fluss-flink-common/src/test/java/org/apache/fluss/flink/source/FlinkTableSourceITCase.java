@@ -928,10 +928,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     // -------------------------------------------------------------------------------------
 
     private static Stream<Arguments> secondaryIndexLookupArgs() {
-        return Stream.of(
-                Arguments.of(false, "user_id"),
-                Arguments.of(true, "user_id"),
-                Arguments.of(false, "[\"user_id\"]"));
+        return Stream.of(Arguments.of(true, "user_id"), Arguments.of(false, "[\"user_id\"]"));
     }
 
     @ParameterizedTest

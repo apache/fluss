@@ -1314,7 +1314,8 @@ public final class TabletService extends RpcServiceBase
         requestData.forEach(
                 (tableBucket, bucketData) -> {
                     long tableId = tableBucket.getTableId();
-                    Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
+                    Optional<TablePath> tablePathOpt =
+                            getAuthorizationTablePath(operationType, tableId);
                     if (!tablePathOpt.isPresent()) {
                         errorResponseMap.put(
                                 tableBucket,

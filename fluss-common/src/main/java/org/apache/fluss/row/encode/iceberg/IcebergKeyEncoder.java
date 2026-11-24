@@ -38,9 +38,9 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @ThreadSafe
 public class IcebergKeyEncoder implements KeyEncoder {
 
-    private final InternalRow.FieldGetter[] fieldGetters;
+    private final InternalRow.FieldGetter fieldGetter;
 
-    private final IcebergBinaryRowWriter.FieldWriter[] fieldEncoders;
+    private final IcebergBinaryRowWriter.FieldWriter fieldEncoder;
 
     private final KeyEncodingRecycler<IcebergBinaryRowWriter> keyWriterRecycler;
 
@@ -53,17 +53,10 @@ public class IcebergKeyEncoder implements KeyEncoder {
                 "Key fields must have exactly one field for iceberg format, but got: %s",
                 keys);
 
-        // for get fields from fluss internal row
-        fieldGetters = new InternalRow.FieldGetter[keyCount];
-        // for encode fields into iceberg
-        fieldEncoders = new IcebergBinaryRowWriter.FieldWriter[keyCount];
-        for (int i = 0; i < keyCount; i++) {
-            int keyIndex = rowType.getFieldIndex(keys.get(i));
-            DataType keyDataType = rowType.getTypeAt(keyIndex);
-            fieldGetters[i] = InternalRow.createFieldGetter(keyDataType, keyIndex);
-            fieldEncoders[i] = IcebergBinaryRowWriter.createFieldWriter(keyDataType);
-        }
-
+        int keyIndex = rowType.getFieldIndex(keys.get(0));
+        DataType type = rowType.getTypeAt(keyIndex);
+        fieldGetter = InternalRow.createFieldGetter(type, keyIndex);
+        fieldEncoder = IcebergBinaryRowWriter.createFieldWriter(type);
         keyWriterRecycler =
                 new KeyEncodingRecycler<>(
                         () -> new IcebergBinaryRowWriter(keyCount),
@@ -74,13 +67,8 @@ public class IcebergKeyEncoder implements KeyEncoder {
     @Override
     public byte[] encodeKey(InternalRow row) {
         IcebergBinaryRowWriter icebergBinaryRowWriter = keyWriterRecycler.borrow();
-        icebergBinaryRowWriter.reset();
         try {
-            // iterate all the fields of the row, and encode each field
-            for (int i = 0; i < fieldGetters.length; i++) {
-                fieldEncoders[i].writeField(
-                        icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
-            }
+            fieldEncoder.writeField(icebergBinaryRowWriter, fieldGetter.getFieldOrNull(row));
             return icebergBinaryRowWriter.toBytes();
         } finally {
             keyWriterRecycler.recycle(icebergBinaryRowWriter);

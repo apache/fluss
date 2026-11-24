@@ -33,6 +33,8 @@ class PartitionTombstoneTest {
         Set<Long> set = new HashSet<>();
         set.add(10L);
         PartitionTombstone tombstone = new PartitionTombstone(5L, set, 3L);
+        set.clear();
+        assertThat(tombstone.isTombstoned(5L)).isTrue();
         assertThat(tombstone.isTombstoned(3L)).isTrue();
         assertThat(tombstone.isTombstoned(7L)).isFalse();
         assertThat(tombstone.isTombstoned(10L)).isTrue();

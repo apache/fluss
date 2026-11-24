@@ -135,8 +135,8 @@ public class LookupClient {
         return secondaryIndexMaxCandidates;
     }
 
-    public ExecutorService getLookupContinuationExecutor() {
-        return lookupContinuationExecutor;
+    void executeContinuation(SecondaryIndexLookuper.LookupContinuation continuation) {
+        lookupContinuationExecutor.execute(continuation);
     }
 
     /**
@@ -218,10 +218,10 @@ public class LookupClient {
         try {
             if (!lookupContinuationExecutor.awaitTermination(
                     timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                lookupContinuationExecutor.shutdownNow();
+                failQueuedContinuations();
             }
         } catch (InterruptedException e) {
-            lookupContinuationExecutor.shutdownNow();
+            failQueuedContinuations();
             Thread.currentThread().interrupt();
         }
 
@@ -229,5 +229,14 @@ public class LookupClient {
             lookupSender.forceClose();
         }
         LOG.info("Lookup client closed.");
+    }
+
+    private void failQueuedContinuations() {
+        for (Runnable queued : lookupContinuationExecutor.shutdownNow()) {
+            ((SecondaryIndexLookuper.LookupContinuation) queued)
+                    .completeExceptionally(
+                            new IllegalStateException(
+                                    "Lookup client closed before main table lookup."));
+        }
     }
 }

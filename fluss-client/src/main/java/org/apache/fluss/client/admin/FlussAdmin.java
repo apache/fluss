@@ -812,19 +812,14 @@ public class FlussAdmin implements Admin {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
-        return listOffsets(
-                tableInfo.getTableId(), partitionId, buckets, offsetSpec, tableInfo.getTablePath());
-    }
-
-    private ListOffsetsResult listOffsets(
-            long tableId,
-            @Nullable Long partitionId,
-            Collection<Integer> buckets,
-            OffsetSpec offsetSpec,
-            TablePath tablePath) {
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater, tableId, partitionId, buckets, offsetSpec, tablePath);
+                        metadataUpdater,
+                        tableInfo.getTableId(),
+                        partitionId,
+                        buckets,
+                        offsetSpec,
+                        tableInfo.getTablePath());
 
         Map<Integer, CompletableFuture<Long>> resultMap = new ConcurrentHashMap<>();
         for (int bucket : buckets) {

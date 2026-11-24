@@ -164,6 +164,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -209,13 +210,24 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
     private final long offlineLeaderRetryDelayMs;
-    private final long apiVersionsRetryBackoffMs;
+    private final long controlRequestRetryBackoffMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
     // Tracks the exact assignment last confirmed in ZooKeeper for an active rebalance bucket. A
     // write attempt invalidates the entry before it starts.
     private final Map<TableBucket, List<Integer>> assignmentPersistenceByBucket = new HashMap<>();
     private ScheduledFuture<?> offlineLeaderRetryTask;
+
+    // Only the coordinator event thread (or startup before it starts) changes pending recipients.
+    private final Map<Long, Set<Integer>> pendingTombstoneRecipients = new HashMap<>();
+
+    private static final class RetryPartitionTombstone implements CoordinatorEvent {
+        private final long tableId;
+
+        private RetryPartitionTombstone(long tableId) {
+            this.tableId = tableId;
+        }
+    }
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -305,7 +317,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY.key(),
                             offlineLeaderRetryDelayMs));
         }
-        this.apiVersionsRetryBackoffMs =
+        this.controlRequestRetryBackoffMs =
                 conf.get(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF).toMillis();
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
@@ -738,6 +750,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         } else if (event instanceof NotifyLeaderAndIsrResponseReceivedEvent) {
             processNotifyLeaderAndIsrResponseReceivedEvent(
                     (NotifyLeaderAndIsrResponseReceivedEvent) event);
+        } else if (event instanceof RetryPartitionTombstone) {
+            retryPartitionTombstone(((RetryPartitionTombstone) event).tableId);
         } else if (event instanceof RetryOfflineLeaderEvent) {
             processRetryOfflineLeader();
         } else if (event instanceof DeleteReplicaResponseReceivedEvent) {
@@ -748,12 +762,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             processDeadCoordinator((DeadCoordinatorEvent) event);
         } else if (event instanceof TabletServerApiVersionsEvent) {
             TabletServerApiVersionsEvent received = (TabletServerApiVersionsEvent) event;
-            if (coordinatorContext.getLiveTabletServers().get(received.getRegistration().id())
-                    != received.getRegistration()) {
-                return;
-            }
             if (received.getResponse() == null) {
-                queryTabletServerApiVersions(received.getRegistration());
+                if (coordinatorContext.getLiveTabletServers().get(received.getRegistration().id())
+                        == received.getRegistration()) {
+                    queryTabletServerApiVersions(received.getRegistration());
+                }
             } else {
                 boolean supported =
                         received.getResponse().getApiVersionsList().stream()
@@ -975,8 +988,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                     null,
                     null,
-                    tableBuckets,
-                    partitionTombstoneForCreatedTable(tableInfo));
+                    tableBuckets);
 
             // register table metrics.
             coordinatorMetricGroup.addTableBucketMetricGroup(
@@ -991,21 +1003,88 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     tableId,
                     null,
                     Collections.emptySet(),
-                    partitionTombstoneForCreatedTable(tableInfo));
+                    partitionTombstoneFor(
+                            tableInfo, coordinatorContext.getLiveTabletServers().keySet()));
         }
     }
 
-    private Map<Long, PartitionTombstone> partitionTombstoneForCreatedTable(TableInfo tableInfo) {
-        if (!tableInfo.isPartitioned() || tableInfo.getSchema().getIndexes().isEmpty()) {
+    private Map<Long, PartitionTombstone> partitionTombstoneFor(
+            TableInfo table, Set<Integer> recipients) {
+        return readPartitionTombstone(
+                table, (failed, cause) -> deferPartitionTombstone(failed, recipients, cause));
+    }
+
+    private Map<Long, PartitionTombstone> readPartitionTombstone(
+            TableInfo table, BiConsumer<TableInfo, Exception> onReadFailure) {
+        if (!table.isPartitioned() || table.getSchema().getIndexes().isEmpty()) {
             return Collections.emptyMap();
         }
         try {
             return Collections.singletonMap(
-                    tableInfo.getTableId(),
-                    zooKeeperClient.getPartitionTombstone(tableInfo.getTablePath()));
+                    table.getTableId(),
+                    zooKeeperClient.getPartitionTombstone(
+                            table.getTablePath(), table.getTableId()));
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    "Failed to load PartitionTombstone for table " + tableInfo.getTablePath(), e);
+            onReadFailure.accept(table, e);
+            return Collections.emptyMap();
+        }
+    }
+
+    private void deferPartitionTombstone(
+            TableInfo table, Set<Integer> recipients, Exception failure) {
+        if (recipients.isEmpty()) {
+            return;
+        }
+        long tableId = table.getTableId();
+        Set<Integer> pending = pendingTombstoneRecipients.get(tableId);
+        if (pending == null) {
+            pending = new HashSet<>();
+            pendingTombstoneRecipients.put(tableId, pending);
+            LOG.warn(
+                    "Retrying partition tombstone update for table {} (id {}).",
+                    table.getTablePath(),
+                    tableId,
+                    failure);
+            scheduler.scheduleOnce(
+                    "partition-tombstone-" + tableId,
+                    () -> coordinatorEventManager.put(new RetryPartitionTombstone(tableId)),
+                    controlRequestRetryBackoffMs);
+        }
+        pending.addAll(recipients);
+    }
+
+    private void retryPartitionTombstone(long tableId) {
+        Set<Integer> recipients = pendingTombstoneRecipients.remove(tableId);
+        TableInfo table = coordinatorContext.getTableInfoById(tableId);
+        if (table == null
+                || coordinatorContext.isTableQueuedForDeletion(tableId)
+                || coordinatorContext.getTableIdByPath(table.getTablePath()) != tableId) {
+            return;
+        }
+        recipients.retainAll(coordinatorContext.getLiveTabletServers().keySet());
+        if (recipients.isEmpty()) {
+            return;
+        }
+        try {
+            PartitionTombstone tombstone =
+                    zooKeeperClient.getPartitionTombstone(table.getTablePath(), table.getTableId());
+            // The path may have been reused while its DDL event was still queued.
+            if (!zooKeeperClient
+                    .getTable(table.getTablePath())
+                    .filter(t -> t.tableId == tableId)
+                    .isPresent()) {
+                return;
+            }
+            coordinatorRequestBatch.newBatch();
+            coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
+                    recipients,
+                    null,
+                    null,
+                    Collections.emptySet(),
+                    Collections.singletonMap(tableId, tombstone));
+            coordinatorRequestBatch.sendUpdateMetadataRequest();
+        } catch (Exception e) {
+            deferPartitionTombstone(table, recipients, e);
         }
     }
 
@@ -1270,19 +1349,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // Recursive table deletion also emits child partition events. There is no need to publish
         // tombstones while the whole table is being removed.
         boolean tableBeingDeleted = coordinatorContext.isTableQueuedForDeletion(tableId);
-        Map<Long, PartitionTombstone> partitionTombstones = Collections.emptyMap();
-        if (!tableBeingDeleted && !dropTableInfo.getSchema().getIndexes().isEmpty()) {
-            try {
-                PartitionTombstone tombstone =
-                        zooKeeperClient.getPartitionTombstone(dropTableInfo.getTablePath());
-                partitionTombstones = Collections.singletonMap(tableId, tombstone);
-            } catch (Exception e) {
-                throw new FlussRuntimeException(
-                        "Failed to load PartitionTombstone for table "
-                                + dropTableInfo.getTablePath(),
-                        e);
-            }
-        }
+        Map<Long, PartitionTombstone> partitionTombstones =
+                tableBeingDeleted
+                        ? Collections.emptyMap()
+                        : partitionTombstoneFor(
+                                dropTableInfo, coordinatorContext.getLiveTabletServers().keySet());
 
         // Remove partition metrics before dropping their backing snapshot stores.
         coordinatorMetricGroup.removeTablePartitionMetricsGroup(
@@ -1482,7 +1553,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                         coordinatorEventManager.put(
                                                 new TabletServerApiVersionsEvent(
                                                         registration, null)),
-                                apiVersionsRetryBackoffMs);
+                                controlRequestRetryBackoffMs);
                     } else {
                         coordinatorEventManager.put(
                                 new TabletServerApiVersionsEvent(registration, response));
@@ -1544,7 +1615,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 null,
                 null,
                 coordinatorContext.bucketLeaderAndIsr().keySet(),
-                collectPartitionTombstonesForIndexedTables());
+                collectPartitionTombstonesForIndexedTables(
+                        (table, failure) ->
+                                deferPartitionTombstone(
+                                        table, Collections.singleton(tabletServerId), failure)));
 
         tableManager.resumeReplicaDeletion(tabletServerId);
 
@@ -3017,34 +3091,27 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                 tableBuckets.add(tableBucket);
                             }
                         });
+        Map<Long, PartitionTombstone> tombstones =
+                collectPartitionTombstonesForIndexedTables(
+                        (table, failure) -> {
+                            throw new FlussRuntimeException(
+                                    "Failed to load PartitionTombstone for table "
+                                            + table.getTablePath(),
+                                    failure);
+                        });
         coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                serverIds, null, null, tableBuckets, collectPartitionTombstonesForIndexedTables());
+                serverIds, null, null, tableBuckets, tombstones);
 
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
 
-    private Map<Long, PartitionTombstone> collectPartitionTombstonesForIndexedTables() {
+    private Map<Long, PartitionTombstone> collectPartitionTombstonesForIndexedTables(
+            BiConsumer<TableInfo, Exception> onReadFailure) {
         Map<Long, PartitionTombstone> tombstones = new HashMap<>();
         for (long tableId : coordinatorContext.allTables().keySet()) {
-            if (coordinatorContext.isTableQueuedForDeletion(tableId)) {
-                continue;
-            }
-            TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-            if (tableInfo == null
-                    || !tableInfo.isPartitioned()
-                    || tableInfo.getSchema().getIndexes().isEmpty()) {
-                continue;
-            }
-            try {
-                PartitionTombstone tombstone =
-                        zooKeeperClient.getPartitionTombstone(tableInfo.getTablePath());
-                tombstones.put(tableId, tombstone);
-            } catch (Exception e) {
-                throw new FlussRuntimeException(
-                        "Failed to load PartitionTombstone for table "
-                                + tableInfo.getTablePath()
-                                + " while building metadata update",
-                        e);
+            TableInfo table = coordinatorContext.getTableInfoById(tableId);
+            if (table != null && !coordinatorContext.isTableQueuedForDeletion(tableId)) {
+                tombstones.putAll(readPartitionTombstone(table, onReadFailure));
             }
         }
         return tombstones;

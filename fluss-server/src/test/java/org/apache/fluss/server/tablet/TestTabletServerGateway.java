@@ -215,9 +215,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
-        CompletableFuture<PutIndexResponse> response = new CompletableFuture<>();
-        requests.add(Tuple2.of(request, response));
-        return response;
+        throw new UnsupportedOperationException();
     }
 
     @Override

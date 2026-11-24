@@ -237,7 +237,7 @@ class MetadataManagerTest {
             MetadataManager manager, long targetTableId, String name, boolean ignoreIfExists) {
         manager.createPartition(
                 TABLE_PATH,
-                targetTableId,
+                TABLE_DESCRIPTOR.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(
                         targetTableId, Collections.singletonMap(0, BucketAssignment.of(0))),

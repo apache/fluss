@@ -287,7 +287,6 @@ public class TieringSplitGenerator {
         if (lastCommittedBucketOffset == null) {
             int bucket = tableBucket.getBucket();
             if (!latestKvSnapshots.getSnapshotId(bucket).isPresent()) {
-                // bucket with non snapshot, scan log from earliest to latest offset
                 return Optional.of(
                         new TieringLogSplit(
                                 tablePath,

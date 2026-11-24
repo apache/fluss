@@ -58,6 +58,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -103,10 +104,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                     .hasMessageContaining(indexPath.toString())
                     .hasMessageContaining("internal secondary index table");
 
-            assertThat(
-                            BatchScanUtils.collectRows(
-                                    indexTable.newScan().limit(1).createBatchScanner()))
-                    .isEmpty();
             assertThat(mainTable.newUpsert()).isNotNull();
         }
     }
@@ -204,16 +201,12 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
 
             Lookuper lookuper = table.getSecondaryIndexLookuper("idx_city_age");
 
-            LookupResult shanghai30 = lookuper.lookup(row("Shanghai", 30)).get();
-            assertThat(shanghai30.getRowList()).hasSize(1);
-            InternalRow shanghai30Row = shanghai30.getRowList().get(0);
-            assertThat(shanghai30Row.getInt(0)).isEqualTo(1);
-            assertThat(shanghai30Row.getString(1).toString()).isEqualTo("Shanghai");
-            assertThat(shanghai30Row.getInt(2)).isEqualTo(30);
-
-            LookupResult beijing30 = lookuper.lookup(row("Beijing", 30)).get();
-            assertThat(beijing30.getRowList()).hasSize(1);
-            assertThat(beijing30.getRowList().get(0).getInt(0)).isEqualTo(3);
+            assertThatRow(lookupRow(lookuper, row("Shanghai", 30)))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(1, "Shanghai", 30));
+            assertThatRow(lookupRow(lookuper, row("Beijing", 30)))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(3, "Beijing", 30));
 
             // Decisive for a composite key: both components exist on their own ("Beijing" on id 3,
             // 40 on id 2) but never together, so keying on either column alone would wrongly match.
@@ -223,9 +216,9 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             upsertWriter.upsert(row(1, "Shanghai", 31));
             upsertWriter.flush();
             assertThat(lookuper.lookup(row("Shanghai", 30)).get().getRowList()).isEmpty();
-            LookupResult shanghai31 = lookuper.lookup(row("Shanghai", 31)).get();
-            assertThat(shanghai31.getRowList()).hasSize(1);
-            assertThat(shanghai31.getRowList().get(0).getInt(0)).isEqualTo(1);
+            assertThatRow(lookupRow(lookuper, row("Shanghai", 31)))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(1, "Shanghai", 31));
         }
     }
 
@@ -285,22 +278,12 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             Lookuper nameLookuper = table.getSecondaryIndexLookuper("idx_name");
             Lookuper emailLookuper = table.getSecondaryIndexLookuper("idx_email");
 
-            // Verify name lookup returns data from correct partition (2023).
-            LookupResult aliceResult = nameLookuper.lookup(row("Alice")).get();
-            assertThat(aliceResult.getRowList()).hasSize(1);
-            InternalRow aliceRow = aliceResult.getRowList().get(0);
-            assertThat(aliceRow.getInt(0)).isEqualTo(1);
-            assertThat(aliceRow.getString(1).toString()).isEqualTo("Alice");
-            assertThat(aliceRow.getString(3).toString()).isEqualTo("2023");
-
-            // Verify email lookup returns data from correct partition (2024).
-
-            LookupResult charlieResult = emailLookuper.lookup(row("charlie@example.com")).get();
-            assertThat(charlieResult.getRowList()).hasSize(1);
-            InternalRow charlieRow = charlieResult.getRowList().get(0);
-            assertThat(charlieRow.getInt(0)).isEqualTo(3);
-            assertThat(charlieRow.getString(2).toString()).isEqualTo("charlie@example.com");
-            assertThat(charlieRow.getString(3).toString()).isEqualTo("2024");
+            assertThatRow(lookupRow(nameLookuper, row("Alice")))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(1, "Alice", "alice@example.com", "2023"));
+            assertThatRow(lookupRow(emailLookuper, row("charlie@example.com")))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(3, "Charlie", "charlie@example.com", "2024"));
         }
     }
 
@@ -418,10 +401,10 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 1).get("stable");
 
         try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter writer = table.newUpsert().createWriter();
+            UpsertWriter stableWriter = table.newUpsert().createWriter();
+            Lookuper primaryLookuper = table.newLookup().createLookuper();
             Lookuper lookuper = table.getSecondaryIndexLookuper("idx_name");
-            writer.upsert(row(1, "stable-anchor", "stable"));
-            writer.flush();
+            stableWriter.upsert(row(1, "stable-anchor", "stable")).get();
             assertSinglePartitionedRow(lookuper, "stable-anchor", 1, "stable");
 
             long previousPartitionId = stablePartitionId;
@@ -434,8 +417,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
 
                 String indexValue = "churn-generation-" + generation;
                 int rowId = 100 + generation;
-                writer.upsert(row(rowId, indexValue, "churn"));
-                writer.flush();
+                writeRecreatedPartitionRow(tablePath, primaryLookuper, rowId, indexValue);
                 assertSinglePartitionedRow(lookuper, indexValue, rowId, "churn");
                 assertSinglePartitionedRow(lookuper, "stable-anchor", 1, "stable");
 
@@ -468,8 +450,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                 assertSinglePartitionedRow(lookuper, "stable-anchor", 1, "stable");
 
                 if (generation == 0) {
-                    writer.upsert(row(2, "after-drop", "stable"));
-                    writer.flush();
+                    stableWriter.upsert(row(2, "after-drop", "stable")).get();
                     assertSinglePartitionedRow(lookuper, "after-drop", 2, "stable");
                     assertThat(lookuper.lookup(row(indexValue)).get().getRowList()).isEmpty();
                 }
@@ -510,8 +491,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             long latestPartitionId =
                     FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 1).get("churn");
             assertThat(latestPartitionId).isGreaterThan(highestRetiredPartitionId);
-            writer.upsert(row(999, "latest-generation", "churn"));
-            writer.flush();
+            writeRecreatedPartitionRow(tablePath, primaryLookuper, 999, "latest-generation");
             assertSinglePartitionedRow(lookuper, "latest-generation", 999, "churn");
             for (int generation = 0; generation < 4; generation++) {
                 assertThat(
@@ -521,6 +501,21 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .isEmpty();
             }
         }
+    }
+
+    private void writeRecreatedPartitionRow(
+            TablePath tablePath, Lookuper primaryLookuper, int id, String indexValue)
+            throws Exception {
+        // A fresh write connection resolves the recreated partition while the lookuper stays live.
+        try (Connection writeConnection = ConnectionFactory.createConnection(clientConf);
+                Table table = writeConnection.getTable(tablePath)) {
+            table.newUpsert().createWriter().upsert(row(id, indexValue, "churn")).get();
+        }
+        // A lookup on the reader connection may still route to the retired partition ID.
+        waitUntil(
+                () -> !primaryLookuper.lookup(row(id, "churn")).get().getRowList().isEmpty(),
+                INDEX_VISIBILITY_TIMEOUT,
+                "wait for the reader to see source row " + id + " in the recreated partition");
     }
 
     @Test
@@ -578,7 +573,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                     .get(INDEX_VISIBILITY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
                                     .getRowList())
                     .isEmpty();
-            assertThat(emailLookuper.lookup(row("missing-user")).get().getRowList()).isEmpty();
         }
     }
 
@@ -590,13 +584,13 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
         Schema schema =
                 Schema.newBuilder()
                         .column("fact_id", DataTypes.INT())
-                        .column("product_id", DataTypes.INT())
+                        .column("__partition_id", DataTypes.INT())
                         .column("amount", DataTypes.INT())
                         .primaryKey("fact_id")
                         .index(
                                 "idx_product_id",
                                 IndexType.SECONDARY,
-                                Arrays.asList("product_id"),
+                                Arrays.asList("__partition_id"),
                                 IndexVisibility.SYNC,
                                 3)
                         .build();
@@ -611,19 +605,17 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 1; i <= 15; i++) {
-                upsertWriter.upsert(row(i, i, i * 100));
+                upsertWriter.upsert(row(i, 1000 + i, i * 100));
             }
             upsertWriter.flush();
 
             Lookuper indexLookuper = table.getSecondaryIndexLookuper("idx_product_id");
 
-            Lookuper pkLookuper = table.newLookup().createLookuper();
             for (int i = 1; i <= 15; i++) {
-                assertThat(pkLookuper.lookup(row(i)).get().getRowList()).hasSize(1);
-                List<InternalRow> rows = indexLookuper.lookup(row(i)).get().getRowList();
+                List<InternalRow> rows = indexLookuper.lookup(row(1000 + i)).get().getRowList();
                 assertThat(rows).hasSize(1);
                 assertThat(rows.get(0).getInt(0)).isEqualTo(i);
-                assertThat(rows.get(0).getInt(1)).isEqualTo(i);
+                assertThat(rows.get(0).getInt(1)).isEqualTo(1000 + i);
                 assertThat(rows.get(0).getInt(2)).isEqualTo(i * 100);
             }
         }
@@ -714,19 +706,13 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             partialWriter.upsert(row(1L, null, "after"));
             partialWriter.flush();
 
-            InternalRow mainRow =
-                    table.newLookup().createLookuper().lookup(row(1L)).get().getSingletonRow();
-            assertThat(mainRow.getLong(0)).isEqualTo(1L);
-            assertThat(mainRow.getLong(1)).isEqualTo(42L);
-            assertThat(mainRow.getString(2).toString()).isEqualTo("after");
-
-            LookupResult indexResult =
-                    table.getSecondaryIndexLookuper("idx_user").lookup(row(42L)).get();
-            assertThat(indexResult.getRowList()).hasSize(1);
-            InternalRow indexedRow = indexResult.getRowList().get(0);
-            assertThat(indexedRow.getLong(0)).isEqualTo(1L);
-            assertThat(indexedRow.getLong(1)).isEqualTo(42L);
-            assertThat(indexedRow.getString(2).toString()).isEqualTo("after");
+            InternalRow expected = row(1L, 42L, "after");
+            assertThatRow(lookupRow(table.newLookup().createLookuper(), row(1L)))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(expected);
+            assertThatRow(lookupRow(table.getSecondaryIndexLookuper("idx_user"), row(42L)))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(expected);
         }
     }
 

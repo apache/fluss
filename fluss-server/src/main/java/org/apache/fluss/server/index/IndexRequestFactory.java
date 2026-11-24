@@ -90,12 +90,6 @@ final class IndexRequestFactory {
             this.codecRepresentable = bodyBytes >= 0;
         }
 
-        private SizeAccumulator(SizeAccumulator source) {
-            this.bucketSizer = source.bucketSizer;
-            this.bodyBytes = source.bodyBytes;
-            this.codecRepresentable = source.codecRepresentable;
-        }
-
         void addBucket(IndexBatch batch) {
             if (!codecRepresentable) {
                 return;
@@ -134,17 +128,16 @@ final class IndexRequestFactory {
                             + batch.targetBucket()
                             + " at source end offset "
                             + batch.sourceEndOffset();
-            long limit = codecRepresentable() ? maxTransportRequestBytes : MAX_CODEC_FRAMED_BYTES;
-            String option =
-                    codecRepresentable()
-                            ? "netty.server.max-request-size="
-                            : "codec maximum framed size=";
+            if (!codecRepresentable()) {
+                return new RecordTooLargeException(
+                        prefix + " exceeds codec maximum framed size=" + MAX_CODEC_FRAMED_BYTES);
+            }
             return new RecordTooLargeException(
-                    prefix + " is " + framedBytes() + " bytes, exceeding " + option + limit);
-        }
-
-        SizeAccumulator copy() {
-            return new SizeAccumulator(this);
+                    prefix
+                            + " is "
+                            + framedBytes()
+                            + " bytes, exceeding netty.server.max-request-size="
+                            + maxTransportRequestBytes);
         }
     }
 }

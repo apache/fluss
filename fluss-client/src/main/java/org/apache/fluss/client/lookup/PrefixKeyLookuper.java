@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
@@ -225,11 +224,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         if (clientFilterKeyGetters.length == 0) {
             return result;
         }
-        // copied: the caller may reuse the row's buffers before the lookup completes
-        Object[] expected = new Object[clientFilterKeyGetters.length];
-        for (int i = 0; i < expected.length; i++) {
-            expected[i] = copyIfMutable(clientFilterKeyGetters[i].getFieldOrNull(prefixKey));
-        }
+        Object[] expected = snapshotLookupKey(prefixKey, clientFilterKeyGetters);
         return result.thenApply(
                 lookupResult -> {
                     List<InternalRow> rows = new ArrayList<>();
@@ -302,16 +297,6 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                             }
                         });
         return lookupFuture;
-    }
-
-    /** Copies the key values that can be backed by mutable memory: strings and binaries. */
-    private static Object copyIfMutable(@Nullable Object value) {
-        if (value instanceof BinaryString) {
-            return ((BinaryString) value).copy();
-        } else if (value instanceof byte[]) {
-            return ((byte[]) value).clone();
-        }
-        return value;
     }
 
     private static InternalRow.FieldGetter[] createFieldGetters(

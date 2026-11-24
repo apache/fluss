@@ -272,6 +272,9 @@ class FlussConfigUtilsTest {
         FlussConfigUtils.validateClientConfigs(validConf);
         assertThat(validConf.get(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS)).isEqualTo(4);
 
+        validConf.set(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS, 1);
+        FlussConfigUtils.validateClientConfigs(validConf);
+
         Configuration zeroContinuationThreadsConf = new Configuration();
         zeroContinuationThreadsConf.set(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS, 0);
         assertThatThrownBy(

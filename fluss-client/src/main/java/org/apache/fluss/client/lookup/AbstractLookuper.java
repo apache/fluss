@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.FixedSchemaDecoder;
 import org.apache.fluss.row.encode.KvValueLayout;
@@ -208,5 +209,20 @@ abstract class AbstractLookuper implements Lookuper {
         int getBucketCount() {
             return bucketCount;
         }
+    }
+
+    /** Captures values used to recheck a result after the caller may have reused its key row. */
+    static Object[] snapshotLookupKey(InternalRow key, InternalRow.FieldGetter[] getters) {
+        Object[] values = new Object[getters.length];
+        for (int i = 0; i < getters.length; i++) {
+            Object value = getters[i].getFieldOrNull(key);
+            if (value instanceof BinaryString) {
+                value = ((BinaryString) value).copy();
+            } else if (value instanceof byte[]) {
+                value = ((byte[]) value).clone();
+            }
+            values[i] = value;
+        }
+        return values;
     }
 }

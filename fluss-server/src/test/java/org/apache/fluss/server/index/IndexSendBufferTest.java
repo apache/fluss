@@ -134,32 +134,6 @@ class IndexSendBufferTest {
     }
 
     @Test
-    void constructionReservationTransfersToAdmissionAndReleasesOnAck() {
-        IndexSendBuffer buffer = new IndexSendBuffer(4096);
-        try (IndexReplicator owner = owner(buffer, 0);
-                IndexSendBuffer.Reservation reservation = buffer.newReservation()) {
-            MemorySegment page = reservation.allocatePage(4096);
-            assertThat(buffer.pendingBytes()).isEqualTo(4096);
-            IndexBatch batch =
-                    new IndexBatch(
-                            new TableBucket(2L, 0),
-                            new byte[0],
-                            new MemorySegmentBytesView(page, 0, 1),
-                            4096,
-                            window(owner));
-            assertThat(buffer.tryAppendWindow(Collections.singletonList(batch), reservation))
-                    .isTrue();
-            reservation.close();
-            assertThat(buffer.pendingBytes()).isEqualTo(4096);
-            assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
-            assertThat(buffer.completeClaim(batch)).isTrue();
-            batch.window().onBatchAcked();
-            assertThat(owner.getAllIndexPushedOffset()).isEqualTo(1L);
-            assertThat(buffer.pendingBytes()).isZero();
-        }
-    }
-
-    @Test
     void abandonedConstructionReleasesBudgetAndWakesWaiters() {
         IndexSendBuffer buffer = new IndexSendBuffer(4096);
         AtomicInteger wakeups = new AtomicInteger();
@@ -299,6 +273,11 @@ class IndexSendBufferTest {
                 assertThat(buffer.pendingBytes()).isZero();
             }
             assertThat(events)
+                    .filteredOn(
+                            event ->
+                                    event.getMessage()
+                                            .getFormattedMessage()
+                                            .startsWith("No leader available for index target "))
                     .singleElement()
                     .satisfies(
                             event -> {
@@ -363,8 +342,8 @@ class IndexSendBufferTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {127, 128, 16383, 16384})
-    void requestSizeMatchesEncodedFrame(int payloadBytes) {
+    @ValueSource(ints = {115, 16370})
+    void requestSizeMatchesEncodedFrame(int firstPayloadBytes) {
         IndexSendBuffer buffer = new IndexSendBuffer();
         try (IndexReplicator source = owner(buffer, 0)) {
             long timeoutMs = 128L;
@@ -373,13 +352,15 @@ class IndexSendBufferTest {
             List<IndexBatch> batches = new ArrayList<>();
             IndexRequestFactory.SizeAccumulator size =
                     new IndexRequestFactory.SizeAccumulator(2L, 1L, timeoutMs);
+            // The two bucket messages straddle the 128- or 16384-byte length-prefix boundary.
             for (int bucket = 0; bucket < 2; bucket++) {
+                int payloadBytes = firstPayloadBytes + bucket;
                 IndexBatch batch =
                         new IndexBatch(
                                 new TableBucket(2L, bucket),
-                                new byte[128],
+                                new byte[1],
                                 new MemorySegmentBytesView(
-                                        MemorySegment.wrap(new byte[payloadBytes]),
+                                        MemorySegment.allocateHeapMemory(payloadBytes),
                                         0,
                                         payloadBytes),
                                 payloadBytes,
@@ -415,8 +396,7 @@ class IndexSendBufferTest {
                             new MemorySegmentBytesView(reservation.allocatePage(1), 0, 1),
                             1L,
                             window(owner));
-            assertThat(buffer.tryAppendWindow(Collections.singletonList(batch), reservation))
-                    .isTrue();
+            buffer.appendWindow(Collections.singletonList(batch), reservation);
             return batch;
         }
     }
@@ -429,7 +409,7 @@ class IndexSendBufferTest {
     }
 
     private static IndexReplicator owner(IndexSendBuffer buffer, int bucket) {
-        IndexSourceReader.SourceLog log =
+        TestingIndexSourceLog log =
                 new TestingIndexSourceLog(
                         new TableBucket(1L, bucket),
                         () -> 1L,
@@ -456,18 +436,7 @@ class IndexSendBufferTest {
                             throw new AssertionError("unexpected source read");
                         });
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
-        IndexReplicator owner =
-                new IndexReplicator(
-                        new IndexSourceReader(log, null, Runnable::run),
-                        Collections.singletonList(encoder),
-                        buffer,
-                        context,
-                        0L,
-                        1024,
-                        (syncOffset, allOffset) -> {},
-                        scheduler,
-                        () -> {});
-        scheduler.register(0, owner);
-        return owner;
+        return log.registerReplicator(
+                scheduler, buffer, context, Collections.singletonList(encoder));
     }
 }

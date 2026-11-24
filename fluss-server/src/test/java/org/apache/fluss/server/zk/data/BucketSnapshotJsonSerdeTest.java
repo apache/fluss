@@ -30,6 +30,7 @@ class BucketSnapshotJsonSerdeTest extends JsonSerdeTestBase<BucketSnapshot> {
     protected BucketSnapshot[] createObjects() {
         return new BucketSnapshot[] {
             new BucketSnapshot(-1, -1, "oss://test/a1"),
+            new BucketSnapshot(1L, 1002L, "oss://test/a2", 0L),
             new BucketSnapshot(1L, 1002L, "oss://test/a2", 900L),
         };
     }
@@ -38,6 +39,7 @@ class BucketSnapshotJsonSerdeTest extends JsonSerdeTestBase<BucketSnapshot> {
     protected String[] expectedJsons() {
         return new String[] {
             "{\"version\":1,\"snapshot_id\":-1,\"log_offset\":-1,\"metadata_path\":\"oss://test/a1\"}",
+            "{\"version\":1,\"snapshot_id\":1,\"log_offset\":1002,\"metadata_path\":\"oss://test/a2\",\"sync_index_pushed_offset\":0}",
             "{\"version\":1,\"snapshot_id\":1,\"log_offset\":1002,\"metadata_path\":\"oss://test/a2\",\"sync_index_pushed_offset\":900}"
         };
     }

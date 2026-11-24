@@ -734,14 +734,14 @@ public class ServerRpcMessageUtils {
         } else {
             partitionTombstones = new HashMap<>(request.getPartitionTombstonesCount());
             for (PbPartitionTombstone pb : request.getPartitionTombstonesList()) {
-                long[] explicitArr = pb.getExplicitSets();
+                int count = pb.getExplicitSetsCount();
                 Set<Long> explicitSet;
-                if (explicitArr.length == 0) {
+                if (count == 0) {
                     explicitSet = Collections.emptySet();
                 } else {
-                    explicitSet = new HashSet<>(explicitArr.length);
-                    for (long v : explicitArr) {
-                        explicitSet.add(v);
+                    explicitSet = new HashSet<>(count);
+                    for (int i = 0; i < count; i++) {
+                        explicitSet.add(pb.getExplicitSetAt(i));
                     }
                 }
                 partitionTombstones.put(
@@ -2120,8 +2120,10 @@ public class ServerRpcMessageUtils {
             long tableId,
             @Nullable Long partitionId,
             Map<Integer, Optional<BucketSnapshot>> latestSnapshots,
-            int numBuckets) {
-        List<PbKvSnapshot> pbSnapshots = makePbKvSnapshots(latestSnapshots, numBuckets);
+            int numBuckets,
+            boolean requireFullLog) {
+        List<PbKvSnapshot> pbSnapshots =
+                makePbKvSnapshots(latestSnapshots, numBuckets, requireFullLog);
         GetLatestKvSnapshotsResponse response =
                 new GetLatestKvSnapshotsResponse()
                         .setTableId(tableId)
@@ -2133,7 +2135,9 @@ public class ServerRpcMessageUtils {
     }
 
     private static List<PbKvSnapshot> makePbKvSnapshots(
-            Map<Integer, Optional<BucketSnapshot>> snapshots, int numBuckets) {
+            Map<Integer, Optional<BucketSnapshot>> snapshots,
+            int numBuckets,
+            boolean requireFullLog) {
         List<PbKvSnapshot> result = new ArrayList<>();
         for (int bucket = 0; bucket < numBuckets; bucket++) {
             Optional<BucketSnapshot> snapshot = snapshots.get(bucket);
@@ -2142,6 +2146,8 @@ public class ServerRpcMessageUtils {
                 pbKvSnapshot
                         .setSnapshotId(snapshot.get().getSnapshotId())
                         .setLogOffset(snapshot.get().getLogOffset());
+            } else if (requireFullLog) {
+                pbKvSnapshot.setLogOffset(0L);
             }
             result.add(pbKvSnapshot);
         }

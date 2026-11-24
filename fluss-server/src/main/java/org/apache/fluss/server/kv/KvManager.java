@@ -34,8 +34,8 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.index.IndexPartitionTombstoneFilter;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -56,8 +56,6 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.function.SupplierWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
-import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
-import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
 import io.github.fluss_contrib.rocksdb.HyperClockCache;
 import io.github.fluss_contrib.rocksdb.LRUCache;
@@ -89,7 +87,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
-import java.util.function.ToLongFunction;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -564,7 +561,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                 tableConfig,
                 arrowCompressionInfo,
                 flushCompleteListener,
-                null,
                 null);
     }
 
@@ -577,10 +573,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             TableConfig tableConfig,
             ArrowCompressionInfo arrowCompressionInfo,
             @Nullable Runnable flushCompleteListener,
-            @Nullable
-                    AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory,
-            @Nullable ToLongFunction<BinaryRow> tagExtractor)
+            @Nullable IndexPartitionTombstoneFilter indexFilter)
             throws Exception {
         return inKvLock(
                 tableBucket,
@@ -623,8 +616,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     autoIncrementManager,
                                     clock,
                                     tableConfig,
-                                    compactionFilterFactory,
-                                    tagExtractor);
+                                    indexFilter);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -714,17 +706,14 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     public KvTablet loadKv(
             File tabletDir, SchemaGetter schemaGetter, @Nullable Runnable flushCompleteListener)
             throws Exception {
-        return loadKv(tabletDir, schemaGetter, flushCompleteListener, null, null);
+        return loadKv(tabletDir, schemaGetter, flushCompleteListener, null);
     }
 
     public KvTablet loadKv(
             File tabletDir,
             SchemaGetter schemaGetter,
             @Nullable Runnable flushCompleteListener,
-            @Nullable
-                    AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory,
-            @Nullable ToLongFunction<BinaryRow> tagExtractor)
+            @Nullable IndexPartitionTombstoneFilter indexFilter)
             throws Exception {
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
@@ -738,8 +727,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                 tableBucket,
                                 schemaGetter,
                                 flushCompleteListener,
-                                compactionFilterFactory,
-                                tagExtractor));
+                                indexFilter));
     }
 
     private KvTablet doLoadKv(
@@ -748,10 +736,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             TableBucket tableBucket,
             SchemaGetter schemaGetter,
             @Nullable Runnable flushCompleteListener,
-            @Nullable
-                    AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory,
-            @Nullable ToLongFunction<BinaryRow> tagExtractor)
+            @Nullable IndexPartitionTombstoneFilter indexFilter)
             throws Exception {
         KvTablet currentKv = currentKvs.get(tableBucket);
         if (currentKv != null) {
@@ -817,8 +802,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         autoIncrementManager,
                         clock,
                         tableConfig,
-                        compactionFilterFactory,
-                        tagExtractor);
+                        indexFilter);
         currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;

@@ -815,9 +815,7 @@ public class CoordinatorRequestBatch {
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
                 partitionMetadataList,
-                updateMetadataRequestPartitionTombstones.isEmpty()
-                        ? Collections.emptyMap()
-                        : new HashMap<>(updateMetadataRequestPartitionTombstones));
+                updateMetadataRequestPartitionTombstones);
     }
 
     @Nullable

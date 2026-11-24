@@ -58,7 +58,7 @@ class IndexReplicationEncoderTest {
         TabletServerMetadataCache cache = indexCache(index);
         TableInfo mainInfo = tableInfo(MAIN_PATH, 1L, main);
         IndexReplicationEncoder encoder =
-                IndexReplicationEncoder.createAll(mainInfo, new TableBucket(1L, 10L, 0), cache)
+                TestingIndexTable.createEncoders(mainInfo, new TableBucket(1L, 10L, 0), cache)
                         .get(0);
         GenericRow row = GenericRow.of(1, fromString("name"), fromString("p"));
         byte[] key = encoder.encodeDataEntry(row).key();
@@ -76,14 +76,14 @@ class IndexReplicationEncoderTest {
                 .isNotEqualTo(key);
 
         IndexReplicationEncoder recreatedPartition =
-                IndexReplicationEncoder.createAll(mainInfo, new TableBucket(1L, 11L, 0), cache)
+                TestingIndexTable.createEncoders(mainInfo, new TableBucket(1L, 11L, 0), cache)
                         .get(0);
         assertThat(recreatedPartition.encodeDataEntry(row).key()).isNotEqualTo(key);
         assertThat(recreatedPartition.encodeProgress(0, 1L).key())
                 .isNotEqualTo(encoder.encodeProgress(0, 1L).key());
 
         IndexReplicationEncoder anotherBucket =
-                IndexReplicationEncoder.createAll(mainInfo, new TableBucket(1L, 10L, 1), cache)
+                TestingIndexTable.createEncoders(mainInfo, new TableBucket(1L, 10L, 1), cache)
                         .get(0);
         assertThat(anotherBucket.encodeProgress(0, 1L).key())
                 .isNotEqualTo(encoder.encodeProgress(0, 1L).key());
@@ -100,11 +100,11 @@ class IndexReplicationEncoderTest {
         TabletServerMetadataCache cache = indexCache(index);
         TableBucket source = new TableBucket(1L, 10L, 0);
         IndexReplicationEncoder before =
-                IndexReplicationEncoder.createAll(tableInfo(MAIN_PATH, 1L, original), source, cache)
+                TestingIndexTable.createEncoders(tableInfo(MAIN_PATH, 1L, original), source, cache)
                         .get(0);
         TableDescriptor rescaled = TableDescriptor.builder(original).distributedBy(5, "id").build();
         IndexReplicationEncoder after =
-                IndexReplicationEncoder.createAll(tableInfo(MAIN_PATH, 1L, rescaled), source, cache)
+                TestingIndexTable.createEncoders(tableInfo(MAIN_PATH, 1L, rescaled), source, cache)
                         .get(0);
 
         for (int id = 0; id < 20; id++) {
@@ -129,7 +129,7 @@ class IndexReplicationEncoderTest {
 
         assertThatThrownBy(
                         () ->
-                                IndexReplicationEncoder.createAll(
+                                TestingIndexTable.createEncoders(
                                         tableInfo(MAIN_PATH, 1L, main),
                                         new TableBucket(1L, 10L, 0),
                                         cache))
@@ -167,17 +167,12 @@ class IndexReplicationEncoderTest {
     private static TabletServerMetadataCache indexCache(TableDescriptor descriptor) {
         TableMetadata metadata =
                 new TableMetadata(tableInfo(INDEX_PATH, 2L, descriptor), Collections.emptyList());
-        TabletServerMetadataCache cache =
-                new TabletServerMetadataCache(null) {
-                    @Override
-                    public Optional<TableMetadata> getTableMetadata(TablePath tablePath) {
-                        return INDEX_PATH.equals(tablePath)
-                                ? Optional.of(metadata)
-                                : Optional.empty();
-                    }
-                };
-        cache.updateTableMetadata(metadata);
-        return cache;
+        return new TabletServerMetadataCache(null) {
+            @Override
+            public Optional<TableMetadata> getTableMetadata(TablePath tablePath) {
+                return INDEX_PATH.equals(tablePath) ? Optional.of(metadata) : Optional.empty();
+            }
+        };
     }
 
     private static TableInfo tableInfo(TablePath path, long id, TableDescriptor descriptor) {

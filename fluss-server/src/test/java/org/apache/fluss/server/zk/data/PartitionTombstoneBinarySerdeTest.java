@@ -34,12 +34,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PartitionTombstoneBinarySerdeTest {
 
     @Test
-    void testBinarySerdeRoundTrip() {
+    void testVersionOneFormat() {
         Set<Long> explicit = new HashSet<>(Arrays.asList(5L, 8L, 12L));
         PartitionTombstone tombstone = new PartitionTombstone(3L, explicit, 7L);
 
-        byte[] bytes = PartitionTombstoneBinarySerde.serialize(tombstone);
-        PartitionTombstone deserialized = PartitionTombstoneBinarySerde.deserialize(bytes);
+        byte[] versionOne =
+                ByteBuffer.allocate(48)
+                        .order(ByteOrder.BIG_ENDIAN)
+                        .putInt(0x01000000)
+                        .putLong(7L)
+                        .putLong(3L)
+                        .putInt(3)
+                        .putLong(5L)
+                        .putLong(8L)
+                        .putLong(12L)
+                        .array();
+        assertThat(PartitionTombstoneBinarySerde.serialize(tombstone)).isEqualTo(versionOne);
+        PartitionTombstone deserialized = PartitionTombstoneBinarySerde.deserialize(versionOne);
 
         assertThat(deserialized.getFloor()).isEqualTo(3L);
         assertThat(deserialized.getExplicitSet()).containsExactlyInAnyOrder(5L, 8L, 12L);
@@ -55,6 +66,11 @@ class PartitionTombstoneBinarySerdeTest {
         buffer.putLong(24, 8L);
         buffer.putLong(32, 5L);
 
+        assertThatThrownBy(() -> PartitionTombstoneBinarySerde.deserialize(bytes))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("strictly increasing");
+
+        buffer.putLong(24, 5L);
         assertThatThrownBy(() -> PartitionTombstoneBinarySerde.deserialize(bytes))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("strictly increasing");

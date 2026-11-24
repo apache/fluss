@@ -1218,6 +1218,7 @@ class TableManagerITCase {
             limitedCluster.start();
 
             AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            checkIndexBucketsIncludedInCapacity(gateway);
             TablePath firstTablePath = TablePath.of("fluss", "kv_capacity_first");
             TablePath secondTablePath = TablePath.of("fluss", "kv_capacity_second");
             gateway.createTable(newCreateTableRequest(firstTablePath, newPkTable(), false)).get();
@@ -1293,51 +1294,32 @@ class TableManagerITCase {
         }
     }
 
-    @Test
-    void testIndexBucketsIncludedInKvLeaderReplicaCapacity() throws Exception {
-        Configuration conf = initConf();
-        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
-        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
-        FlussClusterExtension limitedCluster =
-                FlussClusterExtension.builder()
-                        .setNumOfTabletServers(1)
-                        .setClusterConf(conf)
+    private void checkIndexBucketsIncludedInCapacity(AdminGateway gateway) throws Exception {
+        TablePath mainPath = TablePath.of("fluss", "index_capacity");
+        TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_b");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .index("idx_b", "b")
                         .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
 
-        try {
-            limitedCluster.start();
+        assertThatThrownBy(
+                        () ->
+                                gateway.createTable(
+                                                newCreateTableRequest(mainPath, descriptor, false))
+                                        .get())
+                .cause()
+                .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                .hasMessageContaining("requestedKvLeaderReplicaCount=6")
+                .hasMessageContaining("kvLeaderReplicaCapacity=3");
 
-            AdminGateway gateway = limitedCluster.newCoordinatorClient();
-            TablePath mainPath = TablePath.of("fluss", "index_capacity");
-            TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_b");
-            Schema schema =
-                    Schema.newBuilder()
-                            .column("a", DataTypes.INT())
-                            .column("b", DataTypes.STRING())
-                            .primaryKey("a")
-                            .index("idx_b", "b")
-                            .build();
-            TableDescriptor descriptor =
-                    TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
-
-            assertThatThrownBy(
-                            () ->
-                                    gateway.createTable(
-                                                    newCreateTableRequest(
-                                                            mainPath, descriptor, false))
-                                            .get())
-                    .cause()
-                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
-                    .hasMessageContaining("requestedKvLeaderReplicaCount=6")
-                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
-
-            assertThat(gateway.tableExists(newTableExistsRequest(mainPath)).get().isExists())
-                    .isFalse();
-            assertThat(gateway.tableExists(newTableExistsRequest(indexPath)).get().isExists())
-                    .isFalse();
-        } finally {
-            limitedCluster.close();
-        }
+        assertThat(gateway.tableExists(newTableExistsRequest(mainPath)).get().isExists()).isFalse();
+        assertThat(gateway.tableExists(newTableExistsRequest(indexPath)).get().isExists())
+                .isFalse();
     }
 
     @Test

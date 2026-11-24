@@ -188,7 +188,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                             + "which do not advance beyond the latest snapshot offsets ({}, {}), "
                             + "so skip one snapshot for it.",
                     logOffset,
-                    tabletState.getIndexPushedOffset(),
+                    tabletState.getAllIndexPushedOffset(),
                     logOffsetOfLatestSnapshot,
                     indexPushedOffsetOfLatestSnapshot);
             return Optional.empty();
@@ -258,7 +258,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 syncIndexPushedOffsetSupplier == null
                         ? null
                         : Math.max(
-                                tabletState.getIndexPushedOffset(),
+                                tabletState.getAllIndexPushedOffset(),
                                 syncIndexPushedOffsetSupplier.getAsLong());
         CompletedSnapshot completedSnapshot =
                 new CompletedSnapshot(
@@ -268,7 +268,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         snapshotResult.getKvSnapshotHandle(),
                         tabletState.getFlushedLogOffset(),
                         tabletState.getRowCount(),
-                        tabletState.getIndexPushedOffset(),
+                        tabletState.getAllIndexPushedOffset(),
                         syncIndexPushedOffset,
                         tabletState.getAutoIncIDRanges());
         try {
@@ -343,10 +343,12 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         if (logOffset < logOffsetOfLatestSnapshot) {
             return false;
         }
-        Long indexPushedOffset = tabletState.getIndexPushedOffset();
+        Long indexPushedOffset = tabletState.getAllIndexPushedOffset();
         return indexPushedOffset != null
-                && (indexPushedOffsetOfLatestSnapshot == null
-                        || indexPushedOffset > indexPushedOffsetOfLatestSnapshot);
+                && indexPushedOffset
+                        > (indexPushedOffsetOfLatestSnapshot == null
+                                ? 0L
+                                : indexPushedOffsetOfLatestSnapshot);
     }
 
     @VisibleForTesting
@@ -368,7 +370,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private void updateStateOnCommitSuccess(CompletedSnapshot snapshot, long size) {
         try {
             logOffsetOfLatestSnapshot = snapshot.getLogOffset();
-            indexPushedOffsetOfLatestSnapshot = snapshot.getIndexPushedOffset();
+            indexPushedOffsetOfLatestSnapshot = snapshot.getAllIndexPushedOffset();
             syncIndexPushedOffsetOfLatestSnapshot = snapshot.getSyncIndexPushedOffset();
             snapshotSize = size;
             updateMinRetainOffset.accept(snapshot.getMinRetainLogOffset());
@@ -380,7 +382,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private Optional<BucketSnapshot> getRecoverySnapshot(CompletedSnapshot snapshot)
             throws Exception {
         // The unselected legacy reference fallback cannot certify an indexed commit.
-        return snapshot.getIndexPushedOffset() == null
+        return snapshot.getAllIndexPushedOffset() == null
                 ? zooKeeperClient.getTableBucketLatestSnapshot(tableBucket)
                 : zooKeeperClient.getRecoveryBucketSnapshot(tableBucket);
     }

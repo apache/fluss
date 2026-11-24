@@ -247,13 +247,9 @@ public final class Replica {
     private final ScannerManager scannerManager;
 
     // ------- index management
-    private final IndexReplicationSupervisor indexReplicationSupervisor;
+    @Nullable private final IndexReplicationSupervisor indexReplicationSupervisor;
     @Nullable private volatile IndexReplicationLag indexReplicationLag;
     @Nullable private final IndexReplicationApplier indexReplicationApplier;
-    @Nullable private IndexPartitionTombstoneFilter indexPartitionTombstoneFilter;
-
-    /** Whether this main-table schema declares at least one secondary index. */
-    private final boolean hasSecondaryIndexes;
 
     private final boolean hasSyncIndexes;
 
@@ -331,20 +327,21 @@ public final class Replica {
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
-        this.indexReplicationSupervisor =
-                indexReplicationManager.createSupervisor(tableInfo, tableBucket);
         this.indexReplicationApplier =
                 tableInfo.isIndexTable()
                         ? new IndexReplicationApplier(
                                 tableInfo, tableBucket, metadataCache, schemaGetter)
                         : null;
         List<Schema.Index> secondaryIndexes = tableInfo.getSchema().getIndexes();
-        this.hasSecondaryIndexes = !secondaryIndexes.isEmpty();
+        this.indexReplicationSupervisor =
+                secondaryIndexes.isEmpty()
+                        ? null
+                        : indexReplicationManager.createSupervisor(tableInfo, tableBucket);
         this.hasSyncIndexes =
                 secondaryIndexes.stream()
                         .anyMatch(index -> index.getVisibility() == IndexVisibility.SYNC);
         this.syncIndexPushedOffset = hasSyncIndexes ? 0L : -1L;
-        this.allIndexPushedOffset = hasSecondaryIndexes ? 0L : -1L;
+        this.allIndexPushedOffset = secondaryIndexes.isEmpty() ? -1L : 0L;
         registerMetrics();
     }
 
@@ -675,8 +672,7 @@ public final class Replica {
     /** Delete the replica including drop the kv and log. */
     public void delete() {
         indexReplicationLag = null;
-        indexReplicationSupervisor.stop();
-        indexPartitionTombstoneFilter = null;
+        stopIndexReplication();
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
         // to log/kv being deleted
         inWriteLock(
@@ -726,18 +722,18 @@ public final class Replica {
         if (isKvTable()) {
             // Prepare index-table tombstone state before opening RocksDB. Compaction filters are
             // attached during KvTablet creation and cannot be installed afterward.
-            indexReplicationSupervisor.stop();
-            indexPartitionTombstoneFilter =
+            stopIndexReplication();
+            IndexPartitionTombstoneFilter indexPartitionTombstoneFilter =
                     IndexPartitionTombstoneFilter.forIndexTable(tableInfo, metadataCache);
             indexReplicationLag = null;
-            if (hasSecondaryIndexes) {
+            if (indexReplicationSupervisor != null) {
                 syncIndexPushedOffset = hasSyncIndexes ? 0L : -1L;
                 allIndexPushedOffset = 0L;
             }
             // Rebuild leader storage rather than reusing KV state from the previous role.
             dropKv();
-            createKv(checkNotNull(recovery));
-            if (hasSecondaryIndexes) {
+            createKv(checkNotNull(recovery), indexPartitionTombstoneFilter);
+            if (indexReplicationSupervisor != null) {
                 indexReplicationLag =
                         new IndexReplicationLag(
                                 tableBucket,
@@ -746,12 +742,7 @@ public final class Replica {
                                 getLogHighWatermark(),
                                 syncIndexPushedOffset,
                                 allIndexPushedOffset);
-            }
-            indexReplicationSupervisor.onBecomeLeader(
-                    logTablet, schemaGetter, this::advanceIndexProgress, allIndexPushedOffset);
-            if (indexPartitionTombstoneFilter != null) {
-                kvTablet.setValueFilter(indexPartitionTombstoneFilter::isTombstoned);
-                LOG.info("Index Table partition-tombstone filter installed for {}.", tableBucket);
+                startIndexReplication(null);
             }
         }
 
@@ -784,8 +775,7 @@ public final class Replica {
 
     private void onBecomeNewFollower(int standbyReplica) {
         indexReplicationLag = null;
-        indexReplicationSupervisor.stop();
-        indexPartitionTombstoneFilter = null;
+        stopIndexReplication();
 
         if (isKvTable()) {
             boolean isNowStandby = (standbyReplica == localTabletServerId);
@@ -865,26 +855,26 @@ public final class Replica {
      * replay floor, so it is captured in the snapshot alongside flushed log offset and row count.
      */
     private TabletState augmentTabletState(TabletState base) {
-        Long indexPushedOffset = null;
-        if (hasSecondaryIndexes) {
-            long currentOffset = allIndexPushedOffset;
-            if (currentOffset < 0) {
-                throw new IllegalStateException(
-                        "Indexed main table "
-                                + tableBucket
-                                + " has invalid allIndexPushedOffset "
-                                + currentOffset);
-            }
-            indexPushedOffset = currentOffset;
+        if (indexReplicationSupervisor == null) {
+            return base;
+        }
+        long currentOffset = allIndexPushedOffset;
+        if (currentOffset < 0) {
+            throw new IllegalStateException(
+                    "Indexed main table "
+                            + tableBucket
+                            + " has invalid allIndexPushedOffset "
+                            + currentOffset);
         }
         return new TabletState(
                 base.getFlushedLogOffset(),
                 base.getRowCount(),
-                indexPushedOffset,
+                currentOffset,
                 base.getAutoIncIDRanges());
     }
 
-    private void createKv(KvRecovery recovery) {
+    private void createKv(
+            KvRecovery recovery, @Nullable IndexPartitionTombstoneFilter indexFilter) {
         try {
             closeableRegistryForKv = new CloseableRegistry();
             closeableRegistry.registerCloseable(closeableRegistryForKv);
@@ -902,7 +892,7 @@ public final class Replica {
                 if (i > 1) {
                     recovery = prepareKvRecovery();
                 }
-                snapshotUsed = initKvTablet(recovery);
+                snapshotUsed = initKvTablet(recovery, indexFilter);
                 lastError = null;
                 break;
             } catch (Exception e) {
@@ -997,11 +987,25 @@ public final class Replica {
         }
     }
 
-    IndexReplicationSupervisor getIndexReplicationSupervisor() {
-        return indexReplicationSupervisor;
+    void retryDeferredIndexReplication(IndexReplicationSupervisor.MetadataRetry retry) {
+        if (indexReplicationSupervisor != null && indexReplicationSupervisor.isAwaitingMetadata()) {
+            startIndexReplication(retry);
+        }
     }
 
-    public void advanceIndexProgress(long syncIndexOffset, long allIndexOffset) {
+    private void startIndexReplication(@Nullable IndexReplicationSupervisor.MetadataRetry retry) {
+        indexReplicationSupervisor.start(
+                logTablet, schemaGetter, this::advanceIndexProgress, allIndexPushedOffset, retry);
+    }
+
+    void stopIndexReplication() {
+        if (indexReplicationSupervisor != null) {
+            indexReplicationSupervisor.stop();
+        }
+    }
+
+    // The active replicator publishes progress while holding its lifecycle lock.
+    void advanceIndexProgress(long syncIndexOffset, long allIndexOffset) {
         boolean syncAdvanced = false;
         if (hasSyncIndexes && syncIndexOffset > syncIndexPushedOffset) {
             syncIndexPushedOffset = syncIndexOffset;
@@ -1051,7 +1055,8 @@ public final class Replica {
      *
      * @return the snapshot used to init kv tablet, empty if no any snapshot.
      */
-    private Optional<CompletedSnapshot> initKvTablet(KvRecovery recovery) {
+    private Optional<CompletedSnapshot> initKvTablet(
+            KvRecovery recovery, @Nullable IndexPartitionTombstoneFilter indexFilter) {
         checkNotNull(kvManager);
         TableConfig tableConfig = getTableConfig();
         long startTime = clock.milliseconds();
@@ -1097,16 +1102,7 @@ public final class Replica {
                 // as we have downloaded kv files into the tablet dir, now, we can load it
                 kvTablet =
                         kvManager.loadKv(
-                                tabletDir,
-                                schemaGetter,
-                                this::onKvFlushComplete,
-                                indexPartitionTombstoneFilter == null
-                                        ? null
-                                        : indexPartitionTombstoneFilter
-                                                .createCompactionFilterFactory(),
-                                indexPartitionTombstoneFilter == null
-                                        ? null
-                                        : indexPartitionTombstoneFilter.createTagExtractor());
+                                tabletDir, schemaGetter, this::onKvFlushComplete, indexFilter);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
@@ -1139,13 +1135,7 @@ public final class Replica {
                                 tableConfig,
                                 arrowCompressionInfo,
                                 this::onKvFlushComplete,
-                                indexPartitionTombstoneFilter == null
-                                        ? null
-                                        : indexPartitionTombstoneFilter
-                                                .createCompactionFilterFactory(),
-                                indexPartitionTombstoneFilter == null
-                                        ? null
-                                        : indexPartitionTombstoneFilter.createTagExtractor());
+                                indexFilter);
 
                 rowCount =
                         isHistoricalPartition()
@@ -1195,10 +1185,10 @@ public final class Replica {
     }
 
     private void validateSnapshotIndexPushedOffset(CompletedSnapshot snapshot) {
-        if (!hasSecondaryIndexes) {
+        if (indexReplicationSupervisor == null) {
             return;
         }
-        Long indexPushedOffset = snapshot.getIndexPushedOffset();
+        Long indexPushedOffset = snapshot.getAllIndexPushedOffset();
         if (indexPushedOffset == null || indexPushedOffset < 0) {
             throw new KvStorageException(
                     String.format(
@@ -1219,17 +1209,14 @@ public final class Replica {
     }
 
     private void restoreIndexProgress(CompletedSnapshot snapshot) {
-        Long indexPushedOffset = snapshot.getIndexPushedOffset();
+        Long indexPushedOffset = snapshot.getAllIndexPushedOffset();
         if (indexPushedOffset == null) {
             return;
         }
         if (hasSyncIndexes) {
-            // The confirmed all-index prefix also bounds SYNC visibility in older snapshots.
-            syncIndexPushedOffset =
-                    Optional.ofNullable(snapshot.getSyncIndexPushedOffset())
-                            .orElse(indexPushedOffset);
+            syncIndexPushedOffset = snapshot.getSyncIndexPushedOffsetOrAll();
         }
-        if (hasSecondaryIndexes) {
+        if (indexReplicationSupervisor != null) {
             allIndexPushedOffset = indexPushedOffset;
         }
     }
@@ -1426,10 +1413,10 @@ public final class Replica {
             if (completedSnapshot != null) {
                 lastCompletedSnapshotId = completedSnapshot.getSnapshotID();
                 lastCompletedSnapshotLogOffset = completedSnapshot.getLogOffset();
-                lastCompletedSnapshotIndexPushedOffset = completedSnapshot.getIndexPushedOffset();
+                lastCompletedSnapshotIndexPushedOffset =
+                        completedSnapshot.getAllIndexPushedOffset();
                 lastCompletedSnapshotSyncIndexPushedOffset =
-                        Optional.ofNullable(completedSnapshot.getSyncIndexPushedOffset())
-                                .orElse(lastCompletedSnapshotIndexPushedOffset);
+                        completedSnapshot.getSyncIndexPushedOffsetOrAll();
                 snapshotSize = completedSnapshot.getSnapshotSize();
                 uploadedSstFiles.put(
                         completedSnapshot.getSnapshotID(),
@@ -1879,7 +1866,9 @@ public final class Replica {
                     newHighWatermark,
                     tableBucket);
             updateIndexReplicationLag();
-            indexReplicationSupervisor.onHighWatermarkAdvanced();
+            if (indexReplicationSupervisor != null) {
+                indexReplicationSupervisor.onHighWatermarkAdvanced();
+            }
             return true;
         } else {
             return false;

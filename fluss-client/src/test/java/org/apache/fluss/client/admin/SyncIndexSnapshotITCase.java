@@ -43,7 +43,7 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -70,24 +70,14 @@ class SyncIndexSnapshotITCase {
         TablePath path = TablePath.of("snapshot_visibility", "main_table");
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
-            admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, false).get();
-            admin.createTable(
-                            path,
-                            TableDescriptor.builder()
-                                    .schema(
-                                            Schema.newBuilder()
-                                                    .column("id", DataTypes.INT())
-                                                    .column("name", DataTypes.STRING())
-                                                    .primaryKey("id")
-                                                    .index("idx_name", "name")
-                                                    .build())
-                                    .distributedBy(1, "id")
-                                    .build(),
-                            false)
-                    .get();
-            long tableId = admin.getTableInfo(path).get().getTableId();
-            TableBucket bucket = new TableBucket(tableId, 0);
+            TableBucket bucket = createIndexedBucket(admin, path);
+            long tableId = bucket.getTableId();
             Replica replica = CLUSTER.waitAndGetLeaderReplica(bucket);
+            CLUSTER.newTabletServerClientForNode(CLUSTER.waitAndGetLeader(bucket))
+                    .putKv(
+                            newPutKvRequest(
+                                    tableId, 0, 1, genKvRecordBatch(new Object[] {0, "baseline"})))
+                    .get(30, TimeUnit.SECONDS);
             CompletedSnapshot older = CLUSTER.triggerAndWaitSnapshot(bucket);
             ListKvSnapshotsRequest snapshotIds = new ListKvSnapshotsRequest().setTableId(tableId);
             assertThat(
@@ -95,7 +85,12 @@ class SyncIndexSnapshotITCase {
                                     .listKvSnapshots(snapshotIds)
                                     .get()
                                     .getActiveSnapshotsList())
-                    .allSatisfy(snapshot -> assertThat(snapshot.hasLogOffset()).isFalse());
+                    .anySatisfy(
+                            snapshot -> {
+                                assertThat(snapshot.getSnapshotId())
+                                        .isEqualTo(older.getSnapshotID());
+                                assertThat(snapshot.hasLogOffset()).isFalse();
+                            });
             int leader = CLUSTER.waitAndGetLeader(bucket);
             CLUSTER.getTabletServerById(leader)
                     .getReplicaManager()
@@ -134,58 +129,63 @@ class SyncIndexSnapshotITCase {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "120,3,false", "100,2,false", "90,1,false", "70,0,false",
-        "120,3,true", "100,2,true", "90,1,true", "70,0,true"
-    })
-    void testDiscoveryUsesCommittedSyncProgress(long syncProgress, int expected, boolean legacy)
-            throws Exception {
-        TablePath path =
-                TablePath.of(
-                        "snapshot_visibility", "stored_progress_" + syncProgress + "_" + legacy);
+    @ValueSource(booleans = {false, true})
+    void testDiscoveryUsesCommittedSyncProgress(boolean legacy) throws Exception {
+        TablePath path = TablePath.of("snapshot_visibility", "stored_progress_" + legacy);
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
-            admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
-            admin.createTable(
-                            path,
-                            TableDescriptor.builder()
-                                    .schema(
-                                            Schema.newBuilder()
-                                                    .column("id", DataTypes.INT())
-                                                    .column("name", DataTypes.STRING())
-                                                    .primaryKey("id")
-                                                    .index("idx_name", "name")
-                                                    .build())
-                                    .distributedBy(1, "id")
-                                    .build(),
-                            false)
-                    .get();
-            long tableId = admin.getTableInfo(path).get().getTableId();
-            TableBucket bucket = new TableBucket(tableId, 0);
-            // Discovery must use committed evidence even though the live source is still empty.
-            // Explicit SYNC evidence in ZooKeeper needs no snapshot metadata file for selection.
-            for (int id = 1; id <= 3; id++) {
+            TableBucket bucket = createIndexedBucket(admin, path);
+            // Each committed snapshot advances the WAL by 20. The third snapshot must skip the
+            // second one, and the final snapshot is itself readable. The live source stays empty.
+            long[] syncProgress = {70, 80, 90, 100, 160};
+            int[] expectedSnapshot = {0, 1, 1, 2, 5};
+            for (int id = 1; id <= syncProgress.length; id++) {
+                long progress = syncProgress[id - 1];
+                long logOffset = 60 + 20L * id;
                 if (legacy) {
-                    registerLegacySnapshot(bucket, id, Math.min(syncProgress, 60 + 20 * id));
-                    continue;
+                    registerLegacySnapshot(bucket, id, logOffset, progress);
+                } else {
+                    CLUSTER.getZooKeeperClient()
+                            .registerTableBucketSnapshot(
+                                    bucket, new BucketSnapshot(id, logOffset, "unused", progress));
                 }
-                CLUSTER.getZooKeeperClient()
-                        .registerTableBucketSnapshot(
-                                bucket,
-                                new BucketSnapshot(id, 60 + 20 * id, "unused", syncProgress));
-            }
-            KvSnapshots snapshots = admin.getLatestKvSnapshots(path).get(10, TimeUnit.SECONDS);
-            if (expected == 0) {
-                assertThat(snapshots.getSnapshotId(0)).isEmpty();
-                assertThat(snapshots.getLogOffset(0)).hasValue(0);
-            } else {
-                assertThat(snapshots.getSnapshotId(0)).hasValue(expected);
-                assertThat(snapshots.getLogOffset(0)).hasValue(60 + 20 * expected);
+                KvSnapshots snapshots = admin.getLatestKvSnapshots(path).get(10, TimeUnit.SECONDS);
+                int expected = expectedSnapshot[id - 1];
+                if (expected == 0) {
+                    assertThat(snapshots.getSnapshotId(0)).isEmpty();
+                    assertThat(snapshots.getLogOffset(0)).hasValue(0);
+                } else {
+                    assertThat(snapshots.getSnapshotId(0))
+                            .as("published snapshot %d", id)
+                            .hasValue(expected);
+                    assertThat(snapshots.getLogOffset(0)).hasValue(60 + 20L * expected);
+                }
             }
         }
     }
 
-    private void registerLegacySnapshot(TableBucket bucket, long snapshotId, long indexProgress)
+    private static TableBucket createIndexedBucket(Admin admin, TablePath path) throws Exception {
+        admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("name", DataTypes.STRING())
+                                                .primaryKey("id")
+                                                .index("idx_name", "name")
+                                                .build())
+                                .distributedBy(1, "id")
+                                .build(),
+                        false)
+                .get();
+        long tableId = admin.getTableInfo(path).get().getTableId();
+        return new TableBucket(tableId, 0);
+    }
+
+    private void registerLegacySnapshot(
+            TableBucket bucket, long snapshotId, long logOffset, long indexProgress)
             throws Exception {
         FsPath location =
                 new FsPath(
@@ -201,7 +201,7 @@ class SyncIndexSnapshotITCase {
                         location,
                         KvSnapshotHandle.create(
                                 Collections.emptyList(), Collections.emptyList(), 0L),
-                        60 + 20 * snapshotId,
+                        logOffset,
                         null,
                         indexProgress,
                         null,

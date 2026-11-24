@@ -180,7 +180,6 @@ public final class IndexReplicationManager implements AutoCloseable {
         ReplicatorWorker worker = workerFor(replicator.sourceBucket());
         replicator.checkScheduler(scheduler);
         scheduler.register(worker.workerId, replicator);
-        worker.wakeup();
     }
 
     void unregister(IndexReplicator replicator) {

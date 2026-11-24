@@ -130,6 +130,9 @@ public class DelayedFetchLog extends DelayedOperation {
                         && !fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()
                         && fetchOffset == LogOffsetMetadata.UNKNOWN_OFFSET_METADATA) {
                     Replica replica = replicaManager.getReplicaOrException(tb);
+                    if (params.fetchOnlyLeader() && !replica.isLeader()) {
+                        return forceComplete();
+                    }
                     // A remote-only range blocked by sync progress has no local offset metadata.
                     if (replica.requiresSyncIndexVisibility()
                             && replica.getClientLogHighWatermark()

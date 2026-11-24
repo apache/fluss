@@ -78,8 +78,6 @@ import static org.apache.fluss.utils.PartitionUtils.validateTimeFormat;
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
 
-    private static final String SECONDARY_INDEX_PROPERTY_PREFIX = "secondary-index.";
-
     private static final Set<String> SYSTEM_COLUMNS =
             Collections.unmodifiableSet(
                     new LinkedHashSet<>(
@@ -106,7 +104,10 @@ public class TableDescriptorValidation {
         // check properties should only contain table.* options,
         // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
-            ConfigOption<?> option = TABLE_OPTIONS.get(key);
+            ConfigOption<?> option =
+                    IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID.key().equals(key)
+                            ? IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID
+                            : TABLE_OPTIONS.get(key);
             if (option != null) {
                 validateOptionValue(tableConf, option);
                 continue;
@@ -169,86 +170,6 @@ public class TableDescriptorValidation {
                 TableDescriptor.builder(table.toTableDescriptor()).schema(newSchema).build();
         KafkaTableSchema.validate(updated);
         KafkaTableSchema.validateTablePath(table.getTablePath(), updated);
-    }
-
-    /**
-     * Validates that a schema evolution on a table with secondary indexes is index-safe.
-     *
-     * <p>The index replication pipeline extracts index columns and primary key columns by ordinal
-     * position from the main-table row (see {@code IndexReplicationEncoder}), so a change is
-     * index-safe iff every index column and primary key column keeps an identical name, data type
-     * and ordinal position between the old and the new schema. Changes that only touch other
-     * columns — e.g. adding a nullable column at the last position — do not affect index extraction
-     * and are allowed.
-     *
-     * <p>Checking the outcome (old vs. new schema) instead of the change list keeps this rule
-     * decoupled from the set of {@code TableChange} types supported by {@code SchemaUpdate}: any
-     * future change type is automatically admitted when it preserves the invariant and rejected
-     * when it violates it.
-     *
-     * <p>Tables without secondary indexes are always index-safe.
-     */
-    @Internal
-    public static void validateIndexSafeSchemaEvolution(Schema oldSchema, Schema newSchema) {
-        if (oldSchema.getIndexes().isEmpty()) {
-            return;
-        }
-
-        Set<String> keyColumns = new LinkedHashSet<>();
-        for (Schema.Index index : oldSchema.getIndexes()) {
-            keyColumns.addAll(index.getColumnNames());
-        }
-        keyColumns.addAll(oldSchema.getPrimaryKeyColumnNames());
-
-        List<String> oldColumnNames = oldSchema.getColumnNames();
-        List<Schema.Column> oldColumns = oldSchema.getColumns();
-        List<String> newColumnNames = newSchema.getColumnNames();
-        List<Schema.Column> newColumns = newSchema.getColumns();
-
-        List<String> removedOrRenamed = new ArrayList<>();
-        List<String> typeChanged = new ArrayList<>();
-        List<String> positionShifted = new ArrayList<>();
-        for (String keyColumn : keyColumns) {
-            int newPosition = newColumnNames.indexOf(keyColumn);
-            if (newPosition < 0) {
-                removedOrRenamed.add(keyColumn);
-                continue;
-            }
-            int oldPosition = oldColumnNames.indexOf(keyColumn);
-            if (!oldColumns
-                    .get(oldPosition)
-                    .getDataType()
-                    .equals(newColumns.get(newPosition).getDataType())) {
-                typeChanged.add(keyColumn);
-            }
-            if (oldPosition != newPosition) {
-                positionShifted.add(keyColumn);
-            }
-        }
-
-        if (removedOrRenamed.isEmpty() && typeChanged.isEmpty() && positionShifted.isEmpty()) {
-            return;
-        }
-        StringBuilder message =
-                new StringBuilder(
-                        "Schema change is not index-safe for table with secondary indexes:");
-        if (!removedOrRenamed.isEmpty()) {
-            message.append(" index/PK columns removed or renamed: ")
-                    .append(removedOrRenamed)
-                    .append(';');
-        }
-        if (!typeChanged.isEmpty()) {
-            message.append(" index/PK columns with changed type: ").append(typeChanged).append(';');
-        }
-        if (!positionShifted.isEmpty()) {
-            message.append(" index/PK columns with shifted position: ")
-                    .append(positionShifted)
-                    .append(';');
-        }
-        message.append(
-                " Index columns and primary key columns must keep identical name, type and"
-                        + " ordinal position.");
-        throw new InvalidAlterTableException(message.toString());
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -650,8 +571,7 @@ public class TableDescriptorValidation {
         return tableDescriptor.isIndexTable()
                 && tableDescriptor
                         .getSchema()
-                        .getRowType()
-                        .getFieldNames()
+                        .getPrimaryKeyColumnNames()
                         .contains(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN);
     }
 
@@ -1029,23 +949,9 @@ public class TableDescriptorValidation {
                     "Tables with secondary indexes must define a primary key.");
         }
 
-        Set<String> indexNames = new LinkedHashSet<>();
         for (Schema.Index index : schema.getIndexes()) {
             String indexName = index.getIndexName();
-            if (!indexNames.add(indexName)) {
-                throw new InvalidTableException(
-                        String.format("Duplicate index name '%s'.", indexName));
-            }
-
-            Set<String> indexColumns = new LinkedHashSet<>();
             for (String columnName : index.getColumnNames()) {
-                if (!indexColumns.add(columnName)) {
-                    throw new InvalidTableException(
-                            String.format(
-                                    "Index '%s' contains duplicate column '%s'.",
-                                    indexName, columnName));
-                }
-
                 int columnIndex = schema.getRowType().getFieldIndex(columnName);
                 if (columnIndex < 0) {
                     throw new InvalidTableException(

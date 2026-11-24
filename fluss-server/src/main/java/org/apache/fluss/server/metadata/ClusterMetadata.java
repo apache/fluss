@@ -49,8 +49,7 @@ public class ClusterMetadata {
                 coordinatorServer,
                 aliveTabletServers,
                 Collections.emptyList(),
-                Collections.emptyList(),
-                Collections.emptyMap());
+                Collections.emptyList());
     }
 
     public ClusterMetadata(

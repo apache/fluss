@@ -17,24 +17,42 @@
 
 package org.apache.fluss.server.index;
 
+import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.IndexType;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.PbPutIndexReqForBucket;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IndexTableUtils;
+import org.apache.fluss.utils.types.Tuple2;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Main-table and derived-index metadata for server integration tests. */
 final class TestingIndexTable {
@@ -52,6 +70,51 @@ final class TestingIndexTable {
                         visibility,
                         buckets)
                 .build();
+    }
+
+    static PutKvRequest upsertRequest(TableBucket source, int key, @Nullable String value)
+            throws Exception {
+        return newPutKvRequest(
+                source.getTableId(),
+                source.getPartitionId(),
+                source.getBucket(),
+                1,
+                genKvRecordBatch(new Object[] {key, value}));
+    }
+
+    static PutKvRequest deleteRequest(TableBucket source, int key) throws Exception {
+        return newPutKvRequest(
+                source.getTableId(),
+                source.getPartitionId(),
+                source.getBucket(),
+                1,
+                genKvRecordBatch(Collections.singletonList(Tuple2.of(new Object[] {key}, null))));
+    }
+
+    static void writeSource(TabletServerGateway gateway, PutKvRequest request) throws Exception {
+        assertThat(gateway.putKv(request).get(60, TimeUnit.SECONDS).getBucketsRespsList())
+                .singleElement()
+                .satisfies(
+                        bucket ->
+                                assertThat(bucket.hasErrorCode())
+                                        .as("source bucket %s", bucket.getBucketId())
+                                        .isFalse());
+    }
+
+    static IndexReplicationEncoder.IndexEntry indexEntry(
+            IndexReplicationEncoder encoder, int key, String value) {
+        return encoder.encodeDataEntry(GenericRow.of(key, fromString(value)));
+    }
+
+    static String valueForIndexBucket(
+            IndexReplicationEncoder encoder, String prefix, int targetBucket) {
+        for (int suffix = 0; suffix < 100_000; suffix++) {
+            String value = prefix + '-' + suffix;
+            if (indexEntry(encoder, 1, value).targetBucket() == targetBucket) {
+                return value;
+            }
+        }
+        throw new AssertionError("No value found for index bucket " + targetBucket);
     }
 
     final long mainTableId;
@@ -99,10 +162,51 @@ final class TestingIndexTable {
                 },
                 Duration.ofSeconds(30),
                 "wait for index leaders in source metadata cache");
-        return IndexReplicationEncoder.createAll(source.getTableInfo(), sourceBucket, cache)
-                .stream()
+        return createEncoders(source.getTableInfo(), sourceBucket, cache).stream()
                 .filter(encoder -> encoder.getIndexName().equals(indexName))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Index encoder missing: " + indexName));
+    }
+
+    PutIndexRequest mutationRequest(
+            IndexReplicationEncoder encoder,
+            TableBucket sourceBucket,
+            int targetBucket,
+            long sourceEndOffset,
+            byte[] key,
+            @Nullable BinaryRow value)
+            throws Exception {
+        IndexReplicationEncoder.IndexEntry progress =
+                encoder.encodeProgress(targetBucket, sourceEndOffset);
+        IndexReplicator.BucketBatchBuilder builder =
+                new IndexReplicator.BucketBatchBuilder(
+                        (short) encoder.getIndexSchemaId(),
+                        encoder.getIndexKvFormat(),
+                        new UnmanagedPagedOutputView(4096));
+        builder.append(key, value);
+        BytesView records = builder.finish(progress.key(), progress.value());
+        PutIndexRequest request =
+                new PutIndexRequest()
+                        .setTableId(indexTableId)
+                        .setSourceTableId(sourceBucket.getTableId())
+                        .setAcks(-1)
+                        .setTimeoutMs(10_000);
+        PbPutIndexReqForBucket bucket =
+                request.addBucketsReq()
+                        .setBucketId(targetBucket)
+                        .setSourceBucketId(sourceBucket.getBucket())
+                        .setSourceEndOffset(sourceEndOffset)
+                        .setProgressKey(progress.key())
+                        .setRecordsBytesView(records);
+        if (sourceBucket.getPartitionId() != null) {
+            bucket.setSourcePartitionId(sourceBucket.getPartitionId());
+        }
+        return request;
+    }
+
+    static List<IndexReplicationEncoder> createEncoders(
+            TableInfo main, TableBucket source, TabletServerMetadataCache cache) {
+        return IndexReplicationEncoder.createAll(
+                main, source, IndexReplicationEncoder.resolveIndexTables(main, cache));
     }
 }

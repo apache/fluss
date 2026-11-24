@@ -555,9 +555,9 @@ public final class UnionReadBoundaryPlanner {
                     OptionalLong id = snapshots.getSnapshotId(bucket);
                     OptionalLong offset = snapshots.getLogOffset(bucket);
                     checkArgument(
-                            id.isPresent() == offset.isPresent()
-                                    && (!id.isPresent()
-                                            || (id.getAsLong() >= 0 && offset.getAsLong() >= 0)),
+                            id.isPresent()
+                                    ? id.getAsLong() >= 0 && offset.orElse(-1) >= 0
+                                    : offset.orElse(0) == 0,
                             "Invalid KV snapshot ID or log seam for bucket %s",
                             bucket);
                 }

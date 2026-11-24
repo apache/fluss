@@ -64,9 +64,9 @@ public interface Table extends AutoCloseable {
     /**
      * Creates a {@link Lookuper} for the named secondary index.
      *
-     * <p>The lookuper first reads candidate primary keys from the secondary index, then looks up
-     * the current rows in this table and discards candidates whose current index-column values no
-     * longer match the lookup key.
+     * <p>Supply the lookup key in index-column declaration order. The lookuper first reads
+     * candidate primary keys from the secondary index, then looks up the current rows in this table
+     * and discards candidates whose current index-column values no longer match the lookup key.
      *
      * @param indexName the secondary index name declared in this table's schema
      * @throws IllegalArgumentException if the schema does not declare the named secondary index

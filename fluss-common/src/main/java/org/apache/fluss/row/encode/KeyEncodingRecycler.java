@@ -18,7 +18,6 @@
 package org.apache.fluss.row.encode;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.concurrent.ThreadSafe;
@@ -28,7 +27,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -58,7 +56,6 @@ public final class KeyEncodingRecycler<W> {
     private final Supplier<W> writerFactory;
     private final Consumer<W> writerResetter;
     private final ToIntFunction<W> retainedSizeGetter;
-    private final int maxRetainedSizeInBytes;
 
     /**
      * Creates a key encoding writer recycler with default retention limits.
@@ -71,30 +68,11 @@ public final class KeyEncodingRecycler<W> {
             Supplier<W> writerFactory,
             Consumer<W> writerResetter,
             ToIntFunction<W> retainedSizeGetter) {
-        this(
-                writerFactory,
-                writerResetter,
-                retainedSizeGetter,
-                DEFAULT_RETAINED_WRITERS,
-                DEFAULT_MAX_RETAINED_SIZE_IN_BYTES);
-    }
-
-    @VisibleForTesting
-    KeyEncodingRecycler(
-            Supplier<W> writerFactory,
-            Consumer<W> writerResetter,
-            ToIntFunction<W> retainedSizeGetter,
-            int retainedWriters,
-            int maxRetainedSizeInBytes) {
-        checkArgument(retainedWriters > 0, "Retained writers must be positive.");
-        checkArgument(
-                maxRetainedSizeInBytes >= 0, "Max retained size in bytes must be non-negative.");
         this.writerFactory = checkNotNull(writerFactory, "Writer factory must not be null.");
         this.writerResetter = checkNotNull(writerResetter, "Writer resetter must not be null.");
         this.retainedSizeGetter =
                 checkNotNull(retainedSizeGetter, "Retained size getter must not be null.");
-        this.writers = new AtomicReferenceArray<>(retainedWriters);
-        this.maxRetainedSizeInBytes = maxRetainedSizeInBytes;
+        this.writers = new AtomicReferenceArray<>(DEFAULT_RETAINED_WRITERS);
     }
 
     /**
@@ -119,7 +97,7 @@ public final class KeyEncodingRecycler<W> {
      */
     public void recycle(W writer) {
         W nonNullWriter = checkNotNull(writer, "Writer to recycle must not be null.");
-        if (retainedSizeGetter.applyAsInt(nonNullWriter) > maxRetainedSizeInBytes) {
+        if (retainedSizeGetter.applyAsInt(nonNullWriter) > DEFAULT_MAX_RETAINED_SIZE_IN_BYTES) {
             return;
         }
 

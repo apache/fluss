@@ -21,21 +21,15 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.bytesview.BytesView;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A single pre-encoded index write unit targeting one index-table bucket.
  *
- * <p>A batch carries only a reference to the {@link IndexReplicationWindow} it belongs to; the WAL
- * offset it advances is a property of that window, not of the batch. On successful acknowledgement
- * the batch notifies its window via {@link IndexReplicationWindow#onBatchAcked()}; on failure it is
- * re-enqueued for unlimited retry without advancing any offset.
- *
- * <p>The {@link IndexSendBuffer} owns the batch from admission through its exact-claim terminal
- * transition, so a late or duplicate sender completion cannot acknowledge the window twice.
+ * <p>The window owns the source WAL boundary. The sender notifies the window after the send buffer
+ * accepts completion of its claim. Failed batches can be requeued until the window retires and is
+ * rebuilt from WAL.
  */
 @Internal
 final class IndexBatch {
@@ -46,10 +40,7 @@ final class IndexBatch {
     private final long retainedBytes;
     private final IndexReplicationWindow window;
 
-    private int attempts;
-
-    /** One-shot guard ensuring pending-byte accounting is released at most once. */
-    private final AtomicBoolean released = new AtomicBoolean(false);
+    private int requeueCount;
 
     IndexBatch(
             TableBucket targetBucket,
@@ -66,7 +57,7 @@ final class IndexBatch {
         this.retainedBytes = retainedBytes;
         this.window = checkNotNull(window, "window");
         checkArgument(window.windowEndOffset() >= 0, "sourceEndOffset must not be negative");
-        this.attempts = 0;
+        this.requeueCount = 0;
     }
 
     TableBucket targetBucket() {
@@ -97,19 +88,11 @@ final class IndexBatch {
         return window;
     }
 
-    int attempts() {
-        return attempts;
+    int requeueCount() {
+        return requeueCount;
     }
 
     void reEnqueued() {
-        attempts++;
-    }
-
-    boolean markReleased() {
-        return released.compareAndSet(false, true);
-    }
-
-    boolean isReleased() {
-        return released.get();
+        requeueCount++;
     }
 }

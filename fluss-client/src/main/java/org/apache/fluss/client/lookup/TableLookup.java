@@ -127,14 +127,16 @@ public class TableLookup implements Lookup {
                                 + tableInfo.getPrimaryKeys()
                                 + ". Please use primary key lookup (Lookuper without lookupBy) instead.");
             }
+            int candidateLimit =
+                    tableInfo.isIndexTable() ? lookupClient.secondaryIndexMaxCandidates() : 0;
             return new PrefixKeyLookuper(
                     tableInfo,
                     schemaGetter,
                     metadataUpdater,
                     lookupClient,
                     lookupColumnNames,
-                    tableInfo.isIndexTable() ? lookupClient.secondaryIndexMaxCandidates() : 0,
-                    tableInfo.isIndexTable());
+                    candidateLimit,
+                    candidateLimit > 0);
         }
     }
 

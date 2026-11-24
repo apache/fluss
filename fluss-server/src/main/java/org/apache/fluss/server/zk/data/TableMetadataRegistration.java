@@ -22,7 +22,7 @@ import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
-/** Complete ZooKeeper metadata for one table. */
+/** Metadata written for one table in the atomic table creation transaction. */
 public final class TableMetadataRegistration {
 
     public final TablePath tablePath;

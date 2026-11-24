@@ -88,7 +88,7 @@ The result contains current main-table rows rather than internal index records. 
 
 Flink first uses a primary-key lookup when the equality join conditions contain the complete primary key, then a supported prefix lookup when all required bucket and partition keys are present. Otherwise, it selects a secondary index whose columns are all covered by the conditions. Among eligible indexes, it prefers the one with the most columns, with a stable column-position ordering to break ties. Additional join conditions filter the returned rows.
 
-Flink's FULL lookup cache supports primary-key and prefix lookups. Secondary-index lookups support `lookup.cache = NONE` and `PARTIAL`. A cache hit may return older results. Use `NONE` when a Lookup Join requires read-your-writes.
+Flink's FULL lookup cache supports primary-key and prefix lookups. Secondary-index lookups support `lookup.cache = NONE` and `PARTIAL`. A cache hit may return older results. For read-your-writes, use a synchronous index, wait for write acknowledgement, and set `lookup.cache = NONE`.
 
 Both synchronous and asynchronous Flink lookup execution are supported. The `lookup.async` option controls Flink execution and is independent of the index's write visibility. See [Flink Lookup Joins](../engine-flink/lookups.md#secondary-index-lookup) for an example.
 
@@ -99,7 +99,7 @@ Secondary indexes also support reverse lookups in eligible [foreign-key delta jo
 | Mode | Write acknowledgement | Lookup behavior |
 |---|---|---|
 | `sync` | Waits for the main-table write to commit and for the corresponding changes to reach every synchronous index. | A subsequent lookup that reaches Fluss can observe the acknowledged write. |
-| `async` | Waits for the main-table write to commit. Index propagation continues independently. | Recent writes may be temporarily absent from index lookup results. |
+| `async` | Adds no acknowledgement condition for this index. The writer acknowledgement setting and any synchronous indexes still apply. | Recent writes may be temporarily absent from index lookup results. |
 
 Both modes fetch and validate the current main-table row, so an obsolete index entry does not return a row whose indexed value no longer matches. This validation cannot recover candidates that have not reached an asynchronous index yet. A lookup does not provide a transactionally consistent snapshot across multiple main-table buckets.
 
@@ -133,7 +133,7 @@ Index maintenance consumes committed main-table WAL. Snapshot metadata preserves
 
 An unavailable index bucket prevents source buckets with pending mutations for that target from advancing SYNC visibility. As more source buckets encounter the target, this can stall SYNC write acknowledgements and client log consumption across the whole table. Affected operations retain their existing wait and timeout behavior. During sustained failures, index windows yield their staged payload budget and retry after backoff so other source buckets can compete for capacity.
 
-[Index replication configuration](../maintenance/configuration.md#index-replication) controls reader and sender threads, window sizes, retained batch buffers, and retry backoff. TabletServer aggregate metrics include `indexReplicationPendingBytes`, `indexReplicationMaxNoProgressTimeMs`, `indexReplicationFailedSourceBucketCount`, and `indexReplicationRetriesPerSecond`. Use them with replication logs to investigate backlog and source failures awaiting repair.
+[Index replication configuration](../maintenance/configuration.md#index-replication) controls reader and sender threads, window sizes, retained batch buffers, and retry backoff. On each TabletServer, use `indexReplicationMaxLagOffsets` and `indexReplicationMaxSyncLagOffsets` to track backlog, `indexReplicationBufferUsageRatio` for payload memory pressure, and `indexReplicationMaxNoProgressTimeMs` to detect stalls. Calculate retry rate from the change in `indexReplicationRetriesTotal` over time. Replication logs identify the affected source buckets.
 
 Do not create indexed tables during a rolling upgrade. First upgrade all TabletServers, then all Coordinators and the clients/connectors to index-compatible versions.
 

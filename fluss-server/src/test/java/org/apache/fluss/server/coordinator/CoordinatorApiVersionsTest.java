@@ -48,7 +48,7 @@ class CoordinatorApiVersionsTest extends CoordinatorEventProcessorTestBase {
                 if (attempt == 1) {
                     callback.accept(null, new IllegalStateException("temporary query failure"));
                 } else {
-                    callback.accept(versions(0, 0), null);
+                    callback.accept(versions(ApiKeys.PUT_INDEX, 0, 0), null);
                 }
             }
         };
@@ -67,7 +67,9 @@ class CoordinatorApiVersionsTest extends CoordinatorEventProcessorTestBase {
 
         ServerInfo registration = context.getLiveTabletServers().get(0);
         for (ApiVersionsResponse incompatible :
-                new ApiVersionsResponse[] {new ApiVersionsResponse(), versions(1, 1)}) {
+                new ApiVersionsResponse[] {
+                    versions(ApiKeys.PUT_KV, 0, 0), versions(ApiKeys.PUT_INDEX, 1, 1)
+                }) {
             eventProcessor
                     .getCoordinatorEventManager()
                     .put(new TabletServerApiVersionsEvent(registration, incompatible));
@@ -79,7 +81,9 @@ class CoordinatorApiVersionsTest extends CoordinatorEventProcessorTestBase {
             // Restore support through the same event path before the next response.
             eventProcessor
                     .getCoordinatorEventManager()
-                    .put(new TabletServerApiVersionsEvent(registration, versions(0, 0)));
+                    .put(
+                            new TabletServerApiVersionsEvent(
+                                    registration, versions(ApiKeys.PUT_INDEX, 0, 0)));
             retry(
                     Duration.ofSeconds(10),
                     () ->
@@ -88,10 +92,10 @@ class CoordinatorApiVersionsTest extends CoordinatorEventProcessorTestBase {
         }
     }
 
-    private static ApiVersionsResponse versions(int minVersion, int maxVersion) {
+    private static ApiVersionsResponse versions(ApiKeys key, int minVersion, int maxVersion) {
         ApiVersionsResponse response = new ApiVersionsResponse();
         response.addApiVersion()
-                .setApiKey(ApiKeys.PUT_INDEX.id)
+                .setApiKey(key.id)
                 .setMinVersion(minVersion)
                 .setMaxVersion(maxVersion);
         return response;

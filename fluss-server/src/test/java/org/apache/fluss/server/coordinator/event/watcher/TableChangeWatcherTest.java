@@ -41,7 +41,6 @@ import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.zk.NOPErrorHandler;
-import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -90,7 +89,6 @@ class TableChangeWatcherTest {
     private TableLifecycleThrottler lifecycleThrottler;
     private TableChangeWatcher tableChangeWatcher;
     private static MetadataManager metadataManager;
-    private ZkEpoch zkEpoch;
 
     @BeforeAll
     static void beforeAll() {
@@ -107,8 +105,7 @@ class TableChangeWatcherTest {
     }
 
     @BeforeEach
-    void before() throws Exception {
-        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
+    void before() {
         // Clean up ZK state from previous tests to prevent CuratorCache initial sync
         // from picking up leftover data
         try {

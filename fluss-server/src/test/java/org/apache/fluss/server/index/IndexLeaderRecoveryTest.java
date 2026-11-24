@@ -17,8 +17,6 @@
 
 package org.apache.fluss.server.index;
 
-import org.apache.fluss.cluster.Endpoint;
-import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
@@ -37,11 +35,12 @@ import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
-import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.ServerMetadataSnapshot;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
@@ -65,7 +64,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -162,15 +160,7 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
     @MethodSource("snapshotSyncProgress")
     void testRestoresSyncAndAllIndexProgressBeforeReplay(
             Long syncProgress, long expectedSyncProgress) throws Exception {
-        Schema schema =
-                Schema.newBuilder().fromSchema(indexedSchema()).index("idx_sync", "b").build();
-        // Only the source metadata is registered. Without index-table metadata the supervisor
-        // cannot start WAL replay, so progress here must come from the persisted snapshot.
-        registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, schema);
-        TableBucket tableBucket = new TableBucket(INDEXED_TABLE_ID, 0);
-        injectLatestSnapshot(tableBucket, 80L, syncProgress, TRUNCATED_LOG_START_OFFSET);
-        makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, tableBucket);
-
+        TableBucket tableBucket = followerWithIndexSnapshot(80L, syncProgress);
         NotifyLeaderAndIsrResultForBucket result =
                 tryBecomeLeader(tableBucket, INDEXED_TABLE_PATH, FOLLOWER_LEADER_EPOCH + 1);
         assertThat(result.getErrorMessage()).isNull();
@@ -211,18 +201,24 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
     @ParameterizedTest
     @ValueSource(longs = {-1L, 79L})
     void testInvalidSyncSnapshotProgressBlocksLeadership(long syncProgress) throws Exception {
-        Schema schema =
-                Schema.newBuilder().fromSchema(indexedSchema()).index("idx_sync", "b").build();
-        registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, schema);
-        TableBucket bucket = new TableBucket(INDEXED_TABLE_ID, 0);
-        injectLatestSnapshot(bucket, 80L, syncProgress, TRUNCATED_LOG_START_OFFSET);
-        makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, bucket);
-
+        TableBucket bucket = followerWithIndexSnapshot(80L, syncProgress);
         NotifyLeaderAndIsrResultForBucket result =
                 tryBecomeLeader(bucket, INDEXED_TABLE_PATH, FOLLOWER_LEADER_EPOCH + 1);
 
         assertThat(result.failed()).isTrue();
         assertNotLeaderAndNoIndexProgress(bucket);
+    }
+
+    private TableBucket followerWithIndexSnapshot(long allProgress, Long syncProgress)
+            throws Exception {
+        Schema schema =
+                Schema.newBuilder().fromSchema(indexedSchema()).index("idx_sync", "b").build();
+        // Register only the source table so WAL replay cannot advance the snapshot offsets.
+        registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, schema);
+        TableBucket bucket = new TableBucket(INDEXED_TABLE_ID, 0);
+        injectLatestSnapshot(bucket, allProgress, syncProgress, TRUNCATED_LOG_START_OFFSET);
+        makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, bucket);
+        return bucket;
     }
 
     @Test
@@ -265,11 +261,12 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
         for (int bucket = 0; bucket < indexTableInfo.getNumBuckets(); bucket++) {
             indexBuckets.add(new BucketMetadata(bucket, null, null, Collections.emptyList()));
         }
+        ServerMetadataSnapshot cluster = serverMetadataCache.getSnapshot();
         replicaManager.maybeUpdateMetadataCache(
                 INITIAL_COORDINATOR_EPOCH,
                 new ClusterMetadata(
-                        coordinatorServerInfo(),
-                        aliveTabletServerInfos(),
+                        cluster.getCoordinatorServer(),
+                        new HashSet<>(cluster.getAliveTabletServers().values()),
                         Collections.singletonList(new TableMetadata(indexTableInfo, indexBuckets)),
                         Collections.emptyList()));
 
@@ -383,6 +380,15 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
         zkClient.registerTableBucketSnapshot(
                 tableBucket,
                 new BucketSnapshot(SNAPSHOT_ID, snapshot.getLogOffset(), metadataPath.toString()));
+        BucketSnapshot registered = zkClient.getTableBucketSnapshot(tableBucket, SNAPSHOT_ID).get();
+        CompletedSnapshot restored =
+                new CompletedSnapshotHandle(
+                                registered.getSnapshotId(),
+                                new FsPath(registered.getMetadataPath()),
+                                registered.getLogOffset())
+                        .retrieveCompleteSnapshot();
+        assertThat(restored.getAllIndexPushedOffset()).isEqualTo(indexPushedOffset);
+        assertThat(restored.getSyncIndexPushedOffset()).isEqualTo(syncIndexPushedOffset);
     }
 
     /** Drives the production leader-promotion entry point and returns the result of the bucket. */
@@ -418,33 +424,5 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
                 .column("b", DataTypes.STRING())
                 .primaryKey("a")
                 .build();
-    }
-
-    private static ServerInfo coordinatorServerInfo() {
-        return new ServerInfo(
-                0,
-                null,
-                Endpoint.fromListenersString("CLIENT://localhost:1234"),
-                ServerType.COORDINATOR);
-    }
-
-    private static Set<ServerInfo> aliveTabletServerInfos() {
-        return new HashSet<>(
-                Arrays.asList(
-                        new ServerInfo(
-                                TABLET_SERVER_ID,
-                                "rack1",
-                                Endpoint.fromListenersString("CLIENT://localhost:90"),
-                                ServerType.TABLET_SERVER),
-                        new ServerInfo(
-                                2,
-                                "rack2",
-                                Endpoint.fromListenersString("CLIENT://localhost:91"),
-                                ServerType.TABLET_SERVER),
-                        new ServerInfo(
-                                3,
-                                "rack3",
-                                Endpoint.fromListenersString("CLIENT://localhost:92"),
-                                ServerType.TABLET_SERVER)));
     }
 }

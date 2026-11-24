@@ -34,7 +34,6 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoubleSupplier;
 import java.util.function.LongSupplier;
 
@@ -93,8 +92,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter indexReplicationCompletedBytes;
     private final Counter indexReplicationRetries;
     private final Histogram indexReplicationRequestLatencyHistogram;
-    private final AtomicReference<IndexReplicationGaugeSource> indexReplicationGaugeSource =
-            new AtomicReference<>(IndexReplicationGaugeSource.EMPTY);
+    private volatile IndexReplicationGaugeSource indexReplicationGaugeSource =
+            IndexReplicationGaugeSource.EMPTY;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -172,16 +171,16 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
                 indexReplicationRequestLatencyHistogram);
         gauge(
                 MetricNames.INDEX_REPLICATION_BUFFER_USAGE_RATIO,
-                () -> indexReplicationGaugeSource.get().bufferUsageRatioSupplier.getAsDouble());
+                () -> indexReplicationGaugeSource.bufferUsageRatioSupplier.getAsDouble());
         gauge(
                 MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS,
-                () -> indexReplicationGaugeSource.get().maxLagOffsetsSupplier.getAsLong());
+                () -> indexReplicationGaugeSource.maxLagOffsetsSupplier.getAsLong());
         gauge(
                 MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS,
-                () -> indexReplicationGaugeSource.get().maxSyncLagOffsetsSupplier.getAsLong());
+                () -> indexReplicationGaugeSource.maxSyncLagOffsetsSupplier.getAsLong());
         gauge(
                 MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS,
-                () -> indexReplicationGaugeSource.get().maxNoProgressTimeMsSupplier.getAsLong());
+                () -> indexReplicationGaugeSource.maxNoProgressTimeMsSupplier.getAsLong());
 
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
@@ -359,28 +358,21 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         return indexReplicationRequestLatencyHistogram;
     }
 
-    public GaugeRegistration registerIndexReplicationGauges(
+    public void registerIndexReplicationGauges(
             DoubleSupplier bufferUsageRatioSupplier,
             LongSupplier maxLagOffsetsSupplier,
             LongSupplier maxSyncLagOffsetsSupplier,
             LongSupplier maxNoProgressTimeMsSupplier) {
-        IndexReplicationGaugeSource source =
+        indexReplicationGaugeSource =
                 new IndexReplicationGaugeSource(
                         bufferUsageRatioSupplier,
                         maxLagOffsetsSupplier,
                         maxSyncLagOffsetsSupplier,
                         maxNoProgressTimeMsSupplier);
-        indexReplicationGaugeSource.set(source);
-        return () ->
-                indexReplicationGaugeSource.compareAndSet(
-                        source, IndexReplicationGaugeSource.EMPTY);
     }
 
-    /** Scoped ownership of replaceable server-level gauge suppliers. */
-    @FunctionalInterface
-    public interface GaugeRegistration extends AutoCloseable {
-        @Override
-        void close();
+    public void clearIndexReplicationGauges() {
+        indexReplicationGaugeSource = IndexReplicationGaugeSource.EMPTY;
     }
 
     private static final class IndexReplicationGaugeSource {

@@ -191,7 +191,7 @@ public class CompletedSnapshot {
      * captured for replay and WAL retention. Null when index progress is not applicable.
      */
     @Nullable
-    public Long getIndexPushedOffset() {
+    public Long getAllIndexPushedOffset() {
         return allIndexPushedOffset;
     }
 
@@ -199,6 +199,12 @@ public class CompletedSnapshot {
     @Nullable
     public Long getSyncIndexPushedOffset() {
         return syncIndexPushedOffset;
+    }
+
+    /** Older snapshots confirm at least the prefix already pushed to every index. */
+    @Nullable
+    public Long getSyncIndexPushedOffsetOrAll() {
+        return syncIndexPushedOffset != null ? syncIndexPushedOffset : allIndexPushedOffset;
     }
 
     @Nullable

@@ -164,18 +164,10 @@ class RocksDBKvTest {
             try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
                 assertThat(lookup.readAll(2, false))
                         .containsExactly(new byte[] {1}, new byte[] {2});
-            }
-            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
                 assertThatThrownBy(() -> lookup.readAll(2, true))
                         .isInstanceOf(LookupLimitExceededException.class)
                         .hasMessageContaining("2");
-            }
-            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
                 assertThat(lookup.readAll(3, true))
-                        .containsExactly(new byte[] {1}, new byte[] {2}, new byte[] {3});
-            }
-            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
-                assertThat(lookup.readAll())
                         .containsExactly(new byte[] {1}, new byte[] {2}, new byte[] {3});
             }
             try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {3})) {

@@ -18,6 +18,7 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.client.lookup.Lookup;
+import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
@@ -107,6 +108,11 @@ class TestingScanTable implements Table {
     @Override
     public Lookup newLookup() {
         return delegate.newLookup();
+    }
+
+    @Override
+    public Lookuper getSecondaryIndexLookuper(String indexName) {
+        return delegate.getSecondaryIndexLookuper(indexName);
     }
 
     @Override

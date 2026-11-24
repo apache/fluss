@@ -517,6 +517,6 @@ LEFT JOIN customer_by_email FOR SYSTEM_TIME AS OF r.proc_time AS c
 ON r.email = c.email;
 ```
 
-Flink prefers a complete primary-key lookup when available. Otherwise, it selects a secondary index whose full column set appears in the equality conditions, preferring the index with more columns. Additional conditions filter the lookup results. For composite indexes, every indexed column must be supplied; a leading-column subset is insufficient.
+Flink first tries the complete primary key, then a primary-key prefix that includes the required bucket and partition keys. If neither applies, it selects a secondary index whose full column set appears in the equality conditions, preferring the index with more columns. Additional conditions filter the lookup results. For composite indexes, every indexed column must be supplied; a leading-column subset is insufficient.
 
 Lookup execution is asynchronous by default. Add `/*+ OPTIONS('lookup.async' = 'false') */` after the dimension table name to use synchronous execution. This option does not change index visibility: `secondary-index.<name>.visibility` controls whether main-table write acknowledgement waits for index propagation. An `async` index may temporarily omit recent rows regardless of the Flink execution mode.

@@ -371,6 +371,17 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
                             .getLogRangeAt(0);
             assertThat(completeLog.getBaseline()).isZero();
             assertThat(completeLog.getStartOffset()).isZero();
+            kv.set(
+                    new KvSnapshots(
+                            tableId,
+                            null,
+                            Collections.emptyMap(),
+                            Collections.singletonMap(0, 0L)));
+            assertThat(
+                            UnionReadBoundaryPlanner.captureReadContext(captureAdmin, path)
+                                    .getLogRangeAt(0)
+                                    .getStartOffset())
+                    .isZero();
             earliestOffset.set(1);
             assertThatThrownBy(
                             () -> UnionReadBoundaryPlanner.captureReadContext(captureAdmin, path))

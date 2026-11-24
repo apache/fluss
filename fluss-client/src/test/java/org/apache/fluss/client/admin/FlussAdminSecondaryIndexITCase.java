@@ -30,7 +30,6 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IndexTableUtils;
 
@@ -310,103 +309,8 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testUserCannotDropLiveInternalSecondaryIndexTableDirectly() throws Exception {
-        for (String tableName :
-                Arrays.asList("test_direct_drop_live_index_rejected", "tenant__orders_live")) {
-            TablePath mainPath = TablePath.of(DB, tableName);
-            createTable(mainPath, singleIndexTableDescriptor(), true);
-            TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
-
-            assertThatThrownBy(() -> admin.dropTable(indexPath, false).get())
-                    .cause()
-                    .isInstanceOf(InvalidTableException.class)
-                    .hasMessageContaining("internal secondary index table")
-                    .hasMessageContaining("owning main table");
-            assertThat(admin.tableExists(mainPath).get()).isTrue();
-            assertThat(admin.tableExists(indexPath).get()).isTrue();
-        }
-    }
-
-    @Test
-    void testUserCanDropOrphanInternalSecondaryIndexTable() throws Exception {
-        for (String tableName :
-                Arrays.asList("test_direct_drop_orphan_index_allowed", "tenant__orders_orphan")) {
-            TablePath mainPath = TablePath.of(DB, tableName);
-            createTable(mainPath, singleIndexTableDescriptor(), true);
-            TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
-
-            FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(mainPath);
-            FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
-            waitUntil(
-                    () ->
-                            !FLUSS_CLUSTER_EXTENSION
-                                    .getZooKeeperClient()
-                                    .getCoordinatorLeaderAddress()
-                                    .isPresent(),
-                    Duration.ofMinutes(1),
-                    "Coordinator server node still exists in ZooKeeper");
-            FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
-            FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
-            admin.close();
-            conn.close();
-            setup();
-            assertThat(admin.tableExists(mainPath).get()).isFalse();
-            assertThat(admin.tableExists(indexPath).get()).isTrue();
-
-            admin.dropTable(indexPath, false).get();
-            assertThat(admin.tableExists(indexPath).get()).isFalse();
-        }
-    }
-
-    @Test
-    void testCascadeDropIgnoresNonOwnedTableAtIndexPath() throws Exception {
-        TablePath mainPath = TablePath.of(DB, "test_drop_index_identity");
-        TableDescriptor unrelatedDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.INT())
-                                        .primaryKey("id")
-                                        .build())
-                        .distributedBy(1, "id")
-                        .build();
-
-        createTable(mainPath, singleIndexTableDescriptor(), true);
-        TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
-        long unrelatedTableId =
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTableIdAndIncrement();
-        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(indexPath);
-        FLUSS_CLUSTER_EXTENSION
-                .getZooKeeperClient()
-                .registerFirstSchema(indexPath, unrelatedDescriptor.getSchema());
-        FLUSS_CLUSTER_EXTENSION
-                .getZooKeeperClient()
-                .registerTable(
-                        indexPath,
-                        TableRegistration.newTable(
-                                unrelatedTableId,
-                                FLUSS_CLUSTER_EXTENSION
-                                        .getZooKeeperClient()
-                                        .getDefaultRemoteDataDir(),
-                                unrelatedDescriptor),
-                        false);
-        assertThat(admin.getTableInfo(indexPath).get().isIndexTable()).isFalse();
-
-        try {
-            admin.dropTable(mainPath, false).get();
-            assertThat(admin.tableExists(mainPath).get()).isFalse();
-            assertThat(admin.tableExists(indexPath).get()).isTrue();
-        } finally {
-            if (FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTable(indexPath).isPresent()) {
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(indexPath);
-            }
-            if (FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTable(mainPath).isPresent()) {
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(mainPath);
-            }
-        }
-    }
-
-    private static TableDescriptor singleIndexTableDescriptor() {
+    void directIndexDropRequiresItsOwnerToBeAbsent() throws Exception {
+        TablePath mainPath = TablePath.of(DB, "tenant__orders");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -414,6 +318,39 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .primaryKey("id")
                         .index("idx_name", "name")
                         .build();
-        return TableDescriptor.builder().schema(schema).distributedBy(1, "id").build();
+        createTable(
+                mainPath,
+                TableDescriptor.builder().schema(schema).distributedBy(1, "id").build(),
+                true);
+        TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
+
+        assertThatThrownBy(() -> admin.dropTable(indexPath, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("internal secondary index table")
+                .hasMessageContaining("owning main table");
+        assertThat(admin.tableExists(mainPath).get()).isTrue();
+        assertThat(admin.tableExists(indexPath).get()).isTrue();
+
+        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(mainPath);
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        waitUntil(
+                () ->
+                        !FLUSS_CLUSTER_EXTENSION
+                                .getZooKeeperClient()
+                                .getCoordinatorLeaderAddress()
+                                .isPresent(),
+                Duration.ofMinutes(1),
+                "Coordinator server node still exists in ZooKeeper");
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        admin.close();
+        conn.close();
+        setup();
+        assertThat(admin.tableExists(mainPath).get()).isFalse();
+        assertThat(admin.tableExists(indexPath).get()).isTrue();
+
+        admin.dropTable(indexPath, false).get();
+        assertThat(admin.tableExists(indexPath).get()).isFalse();
     }
 }

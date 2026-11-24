@@ -111,6 +111,11 @@ public class FlinkConversions {
 
     private FlinkConversions() {}
 
+    public static boolean isSecondaryIndexColumnsOption(String key) {
+        Matcher matcher = SECONDARY_INDEX_OPTION_PATTERN.matcher(key);
+        return matcher.matches() && SECONDARY_INDEX_COLUMNS_SUFFIX.equals(matcher.group(2));
+    }
+
     /** Convert Fluss's type to Flink's type. */
     @VisibleForTesting
     public static org.apache.flink.table.types.DataType toFlinkType(DataType flussDataType) {

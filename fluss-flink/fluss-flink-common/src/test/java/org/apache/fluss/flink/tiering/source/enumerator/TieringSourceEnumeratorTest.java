@@ -228,9 +228,16 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         if (!historicalPartition) {
             kvSnapshots.set(
                     new KvSnapshots(
-                            tableId, partitionId, Collections.emptyMap(), Collections.emptyMap()));
+                            tableId,
+                            partitionId,
+                            Collections.emptyMap(),
+                            Collections.singletonMap(1, 0L)));
             assertThat(generator.generateTableSplits(tableInfo, partitions))
-                    .containsExactly(logSplit, bucket1LogSplit, bucket2LogSplit);
+                    .containsExactly(
+                            logSplit,
+                            new TieringLogSplit(
+                                    DEFAULT_TABLE_PATH, bucket1, partitionName, 0, 10, 0),
+                            bucket2LogSplit);
             assertThat(kvSnapshotRequests).hasValue(2);
 
             kvSnapshots.set(null);

@@ -242,25 +242,14 @@ final class ReplicaTest extends ReplicaTestBase {
         zkClient.registerFirstSchema(path, descriptor.getSchema());
         makeKvTableAsLeader(tb, path, INITIAL_LEADER_EPOCH, false);
         Replica replica = replicaManager.getReplicaOrException(tb);
-        assertThat(putIndexRecords(tb, 1).get(10, TimeUnit.SECONDS))
+        assertThat(putIndexRecords(indexRecords(tb, 1)).get(10, TimeUnit.SECONDS))
                 .containsExactly(new PutKvResultForBucket(tb, 2L));
 
-        RowType rowType = replica.getTableInfo().getRowType();
-        RowType keyType = rowType.project(descriptor.getSchema().getPrimaryKeyIndexes());
-        byte[] routingKey = new byte[] {1};
-        byte[] rowKey = new byte[] {1};
-        Object[] dataKey = new Object[] {IndexTableUtils.DATA_RECORD_KIND, routingKey, rowKey};
-        KvRecordBatch records =
-                genKvRecordBatch(
-                        keyType,
-                        rowType,
-                        Collections.singletonList(
-                                Tuple2.of(
-                                        dataKey,
-                                        new Object[] {
-                                            "corrupted", 1, dataKey[0], routingKey, rowKey, null
-                                        })));
-        assertThatThrownBy(() -> replica.putRecordsToLeader(records, null, MergeMode.OVERWRITE, 1))
+        PutIndexDataForBucket next = indexRecords(tb, 2);
+        assertThatThrownBy(
+                        () ->
+                                replica.putRecordsToLeader(
+                                        next.records(), null, MergeMode.OVERWRITE, 1))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("system-managed Index Table");
         assertThatThrownBy(
@@ -268,13 +257,19 @@ final class ReplicaTest extends ReplicaTestBase {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("primary-key table");
         assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(2L);
-        assertThat(putIndexRecords(tb, 2).get(10, TimeUnit.SECONDS))
+        assertThat(putIndexRecords(next).get(10, TimeUnit.SECONDS))
                 .containsExactly(new PutKvResultForBucket(tb, 4L));
     }
 
-    private CompletableFuture<List<PutKvResultForBucket>> putIndexRecords(TableBucket tb, int key)
-            throws Exception {
+    private CompletableFuture<List<PutKvResultForBucket>> putIndexRecords(
+            PutIndexDataForBucket data) {
         CompletableFuture<List<PutKvResultForBucket>> result = new CompletableFuture<>();
+        replicaManager.putIndexRecords(
+                300000, -1, Collections.singletonList(data), result::complete);
+        return result;
+    }
+
+    private PutIndexDataForBucket indexRecords(TableBucket tb, int key) throws Exception {
         TableInfo tableInfo = replicaManager.getReplicaOrException(tb).getTableInfo();
         RowType rowType = tableInfo.getRowType();
         RowType keyType = rowType.project(tableInfo.getSchema().getPrimaryKeyIndexes());
@@ -304,18 +299,8 @@ final class ReplicaTest extends ReplicaTestBase {
                                             (long) key
                                         })));
         byte[] encodedProgressKey = new CompactedKeyEncoder(keyType).encodeKey(row(progressKey));
-        replicaManager.putIndexRecords(
-                300000,
-                -1,
-                Collections.singletonList(
-                        new PutIndexDataForBucket(
-                                tb,
-                                new TableBucket(DATA1_TABLE_ID_PK, 1),
-                                key,
-                                encodedProgressKey,
-                                records)),
-                result::complete);
-        return result;
+        return new PutIndexDataForBucket(
+                tb, new TableBucket(DATA1_TABLE_ID_PK, 1), key, encodedProgressKey, records);
     }
 
     @Override

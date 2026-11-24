@@ -137,7 +137,7 @@ public final class KvStateAccessor {
     }
 
     /** Looks up the prewrite buffer, distinguishing missing keys from pending deletes. */
-    private KvStateLookupResult lookupPreWriteBuffer(Key key) {
+    KvStateLookupResult lookupPreWriteBuffer(Key key) {
         KvPreWriteBuffer.Value preWriteValue = preWriteBuffer.get(key);
         if (preWriteValue == null) {
             return KvStateLookupResult.notFound();

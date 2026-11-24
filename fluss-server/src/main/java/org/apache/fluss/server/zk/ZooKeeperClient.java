@@ -124,7 +124,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -141,6 +140,7 @@ import java.util.stream.Collectors;
 import static java.util.stream.Collectors.toMap;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.zk.ZooKeeperOp.multiRequest;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -830,45 +830,32 @@ public class ZooKeeperClient implements AutoCloseable {
                 tablePath.getDatabaseName());
     }
 
-    /** Atomically registers complete metadata for a group of tables. */
+    /** Atomically registers a main table and its indexes in one database. */
     public void registerTablesAtomically(
             List<TableMetadataRegistration> registrations, int expectedZkVersion) throws Exception {
         if (registrations.isEmpty()) {
             return;
         }
 
-        Map<String, Stat> databaseStats = new LinkedHashMap<>();
-        Set<String> missingTablesNodes = new HashSet<>();
+        String database = registrations.get(0).tablePath.getDatabaseName();
         for (TableMetadataRegistration registration : registrations) {
-            String databaseName = registration.tablePath.getDatabaseName();
-            if (databaseStats.containsKey(databaseName)) {
-                continue;
-            }
-            Stat databaseStat = new Stat();
-            byte[] databaseBytes =
-                    zkClient.getData()
-                            .storingStatIn(databaseStat)
-                            .forPath(DatabaseZNode.path(databaseName));
-            DatabaseZNode.decode(databaseBytes);
-            databaseStats.put(databaseName, databaseStat);
-            if (zkClient.checkExists().forPath(TablesZNode.path(databaseName)) == null) {
-                missingTablesNodes.add(databaseName);
-            }
+            checkArgument(
+                    database.equals(registration.tablePath.getDatabaseName()),
+                    "Main table and index tables must target one database.");
         }
+        String databasePath = DatabaseZNode.path(database);
+        Stat databaseStat = new Stat();
+        DatabaseZNode.decode(zkClient.getData().storingStatIn(databaseStat).forPath(databasePath));
+        String tablesPath = TablesZNode.path(database);
+        boolean createTablesNode = zkClient.checkExists().forPath(tablesPath) == null;
         if (registrations.stream().anyMatch(r -> r.tableAssignment != null)) {
             createRecursiveWithEpochCheck(TableIdsZNode.path(), null, expectedZkVersion, false);
         }
 
         List<CuratorOp> operations = new ArrayList<>();
-        for (Map.Entry<String, Stat> database : databaseStats.entrySet()) {
-            String databaseName = database.getKey();
-            operations.add(
-                    zkOp.checkOp(
-                            DatabaseZNode.path(databaseName), database.getValue().getVersion()));
-            if (missingTablesNodes.contains(databaseName)) {
-                operations.add(
-                        zkOp.createOp(TablesZNode.path(databaseName), null, CreateMode.PERSISTENT));
-            }
+        operations.add(zkOp.checkOp(databasePath, databaseStat.getVersion()));
+        if (createTablesNode) {
+            operations.add(zkOp.createOp(tablesPath, null, CreateMode.PERSISTENT));
         }
         for (TableMetadataRegistration registration : registrations) {
             TablePath tablePath = registration.tablePath;
@@ -1388,29 +1375,27 @@ public class ZooKeeperClient implements AutoCloseable {
             long expectedTableId,
             long expectedPartitionId,
             PartitionTombstone tombstone,
-            Optional<Integer> expectedTombstoneVersion)
+            int expectedTombstoneVersion)
             throws Exception {
         String tablePathInZk = TableZNode.path(tablePath);
         Stat tableStat = getActiveTableStat(tablePath, expectedTableId);
         String partitionPath = PartitionZNode.path(tablePath, partitionName);
         Stat partitionStat =
                 getPartitionStat(tablePath, partitionName, expectedTableId, expectedPartitionId);
-        String tombstonePath = PartitionTombstoneZNode.path(tablePath);
+        String tombstonePath = PartitionTombstoneZNode.path(tablePath, expectedTableId);
         byte[] tombstoneBytes = PartitionTombstoneBinarySerde.serialize(tombstone);
 
         List<CuratorOp> ops = new ArrayList<>(4);
         ops.add(zkOp.checkOp(tablePathInZk, tableStat.getVersion()));
         ops.add(zkOp.checkOp(partitionPath, partitionStat.getVersion()));
         ops.add(zkOp.deleteOp(partitionPath));
-        if (expectedTombstoneVersion.isPresent()) {
-            ops.add(
-                    zkClient.transactionOp()
-                            .setData()
-                            .withVersion(expectedTombstoneVersion.get())
-                            .forPath(tombstonePath, tombstoneBytes));
-        } else {
-            ops.add(zkOp.createOp(tombstonePath, tombstoneBytes, CreateMode.PERSISTENT));
-        }
+        // Registration created this node for the same table ID. If the table was recreated,
+        // setData fails and ZooKeeper rolls back the partition delete in this transaction.
+        ops.add(
+                zkClient.transactionOp()
+                        .setData()
+                        .withVersion(expectedTombstoneVersion)
+                        .forPath(tombstonePath, tombstoneBytes));
         zkClient.transaction().forOperations(ops);
     }
 
@@ -1423,8 +1408,9 @@ public class ZooKeeperClient implements AutoCloseable {
      * PartitionTombstone#EMPTY} when the znode does not exist (i.e. no partition has ever been
      * dropped for this table).
      */
-    public PartitionTombstone getPartitionTombstone(TablePath tablePath) throws Exception {
-        String path = PartitionTombstoneZNode.path(tablePath);
+    public PartitionTombstone getPartitionTombstone(TablePath tablePath, long tableId)
+            throws Exception {
+        String path = PartitionTombstoneZNode.path(tablePath, tableId);
         Optional<byte[]> data = getOrEmpty(path);
         if (data.isPresent()) {
             return decodePartitionTombstone(data.get());
@@ -1437,8 +1423,8 @@ public class ZooKeeperClient implements AutoCloseable {
      * returned as {@code (PartitionTombstone.EMPTY, Optional.empty())}.
      */
     public Tuple2<PartitionTombstone, Optional<Integer>> getPartitionTombstoneWithVersion(
-            TablePath tablePath) throws Exception {
-        String path = PartitionTombstoneZNode.path(tablePath);
+            TablePath tablePath, long tableId) throws Exception {
+        String path = PartitionTombstoneZNode.path(tablePath, tableId);
         try {
             Stat stat = new Stat();
             byte[] bytes = zkClient.getData().storingStatIn(stat).forPath(path);
@@ -1548,14 +1534,16 @@ public class ZooKeeperClient implements AutoCloseable {
         String metadataPartitionParentPath = PartitionsZNode.path(tablePath);
         String tabletServerPartitionPath = PartitionIdZNode.path(partitionId);
         String metadataPath = PartitionZNode.path(tablePath, partitionName);
-        String tombstonePath = PartitionTombstoneZNode.path(tablePath);
+        String tombstonePath = PartitionTombstoneZNode.path(tablePath, tableId);
         Exception lastConflict = null;
         for (int attempt = 0; attempt < PARTITION_REGISTRATION_RETRY_LIMIT; attempt++) {
             Stat tableStat = getActiveTableStat(tablePath, tableId);
             boolean createMetadataPartitionParent =
                     zkClient.checkExists().forPath(metadataPartitionParentPath) == null;
             Tuple2<PartitionTombstone, Optional<Integer>> tombstone =
-                    guardPartitionTombstone ? getPartitionTombstoneWithVersion(tablePath) : null;
+                    guardPartitionTombstone
+                            ? getPartitionTombstoneWithVersion(tablePath, tableId)
+                            : null;
             boolean createTombstone = tombstone != null && !tombstone.f1.isPresent();
             if (tombstone != null && partitionId <= tombstone.f0.getFloor()) {
                 throw new StaleMetadataException(

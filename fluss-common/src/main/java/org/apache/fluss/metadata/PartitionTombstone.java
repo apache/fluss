@@ -61,7 +61,10 @@ public final class PartitionTombstone {
                     floor);
         }
         this.floor = floor;
-        this.explicitSet = Collections.unmodifiableSet(new HashSet<>(explicitSet));
+        this.explicitSet =
+                explicitSet.isEmpty()
+                        ? Collections.emptySet()
+                        : Collections.unmodifiableSet(new HashSet<>(explicitSet));
         this.version = version;
     }
 

@@ -40,6 +40,7 @@ import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
@@ -1333,6 +1334,8 @@ public class LookupSenderTest {
                             assertThat(request.hasLimit()).isFalse();
                             assertThat(request.hasFailOnLimitExceeded()).isFalse();
                             assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(1);
+                            assertThat(request.getBucketsReqAt(0).getKeyAt(0))
+                                    .isEqualTo(bytes("unlimited"));
                         });
         assertThat(requests)
                 .anySatisfy(
@@ -1341,6 +1344,8 @@ public class LookupSenderTest {
                             assertThat(request.getLimit()).isEqualTo(2);
                             assertThat(request.isFailOnLimitExceeded()).isFalse();
                             assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(1);
+                            assertThat(request.getBucketsReqAt(0).getKeyAt(0))
+                                    .isEqualTo(bytes("truncate"));
                         });
         assertThat(requests)
                 .anySatisfy(
@@ -1348,7 +1353,10 @@ public class LookupSenderTest {
                             assertThat(request.hasLimit()).isTrue();
                             assertThat(request.getLimit()).isEqualTo(2);
                             assertThat(request.isFailOnLimitExceeded()).isTrue();
-                            assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(2);
+                            PbPrefixLookupReqForBucket bucket = request.getBucketsReqAt(0);
+                            assertThat(bucket.getKeysCount()).isEqualTo(2);
+                            assertThat(Arrays.asList(bucket.getKeyAt(0), bucket.getKeyAt(1)))
+                                    .containsExactlyInAnyOrder(bytes("fail"), bytes("same"));
                         });
         for (PrefixLookupQuery query : Arrays.asList(unlimited, truncate, fail, samePolicy)) {
             assertThat(query.future().get(5, TimeUnit.SECONDS)).isEmpty();

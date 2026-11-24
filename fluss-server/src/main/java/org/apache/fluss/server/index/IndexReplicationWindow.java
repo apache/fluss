@@ -25,7 +25,7 @@ import java.util.Collections;
 import java.util.Set;
 
 /**
- * A deterministic replication window produced by a single {@link IndexReplicator#poll()} cycle.
+ * A deterministic replication window produced by a single {@link IndexReplicator} scheduling cycle.
  *
  * <p>The offset is a property of the window, not of any individual {@link IndexBatch}. A window
  * covers the half-open WAL offset range {@code [windowStart, windowEndOffset)} for exactly one
@@ -48,7 +48,6 @@ final class IndexReplicationWindow {
     private final long windowEndOffset;
     private int remaining;
     private final IndexReplicator owner;
-    private final IndexReplicationRetryState retry;
     private Set<TableBucket> targetBuckets = Collections.emptySet();
     private volatile boolean admitted;
     private long admittedPayloadBytes;
@@ -60,7 +59,6 @@ final class IndexReplicationWindow {
         this.index = index;
         this.windowEndOffset = windowEndOffset;
         this.owner = owner;
-        this.retry = index.retryState();
     }
 
     IndexReplicationState index() {
@@ -84,20 +82,18 @@ final class IndexReplicationWindow {
      * Retires this window without notifying its owner, when its owner is closed or construction is
      * abandoned or its retained payload is yielded after sustained failures.
      */
-    boolean tryRetire() {
-        synchronized (this) {
-            if (terminal) {
-                return false;
-            }
-            terminal = true;
-            return true;
+    synchronized boolean tryRetire() {
+        if (terminal) {
+            return false;
         }
+        terminal = true;
+        return true;
     }
 
     synchronized void onFailure() {
         if (acceptsBatches()) {
             failed = true;
-            retry.onFailure();
+            index.retryState().onFailure();
         }
     }
 
@@ -106,7 +102,7 @@ final class IndexReplicationWindow {
     }
 
     boolean isReadyForSend() {
-        return retry.remainingDelayNanos() == 0;
+        return index.retryState().remainingDelayNanos() == 0;
     }
 
     synchronized boolean isAcknowledged() {
@@ -137,20 +133,14 @@ final class IndexReplicationWindow {
      * acknowledged, the window is complete and the owning replicator's pushed offset is advanced.
      */
     void onBatchAcked() {
-        boolean completed = false;
-        long completedBytes = 0L;
+        long completedBytes;
         synchronized (this) {
-            if (terminal) {
+            if (terminal || --remaining != 0) {
                 return;
             }
-            if (--remaining == 0) {
-                completedBytes = admittedPayloadBytes;
-                terminal = true;
-                completed = true;
-            }
+            terminal = true;
+            completedBytes = admittedPayloadBytes;
         }
-        if (completed) {
-            owner.onWindowComplete(this, completedBytes);
-        }
+        owner.onWindowComplete(this, completedBytes);
     }
 }

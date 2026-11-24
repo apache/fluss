@@ -25,14 +25,8 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.record.KvRecordBatch;
-import org.apache.fluss.record.bytesview.BytesView;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutIndexResponse;
-import org.apache.fluss.rpc.messages.PutKvResponse;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -42,7 +36,6 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.utils.ByteArraySlice;
-import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -53,10 +46,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.server.index.TestingIndexTable.INDEX_NAME;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
-import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.server.index.TestingIndexTable.deleteRequest;
+import static org.apache.fluss.server.index.TestingIndexTable.indexEntry;
+import static org.apache.fluss.server.index.TestingIndexTable.upsertRequest;
+import static org.apache.fluss.server.index.TestingIndexTable.writeSource;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -112,24 +106,20 @@ class IndexTargetRecoveryITCase {
         Replica pausedFollower = followerManager.getReplicaOrException(indexBucket);
         long pausedFollowerOffset = pausedFollower.getLogTablet().localLogEndOffset();
 
-        putMainMutation(mainGateway, mainTableId, 1, "before-update");
-        putMainMutation(mainGateway, mainTableId, 2, "removed-after-snapshot");
+        writeSource(mainGateway, upsertRequest(mainBucket, 1, "before-update"));
+        writeSource(mainGateway, upsertRequest(mainBucket, 2, "removed-after-snapshot"));
 
-        CompletedSnapshot committedKvSnapshot;
-        try {
-            committedKvSnapshot = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(indexBucket);
-        } catch (Exception failure) {
-            throw new AssertionError("failed target KV snapshot after pre-K writes", failure);
-        }
-        long kvSnapshotOffset = committedKvSnapshot.getLogOffset();
+        writeSource(mainGateway, upsertRequest(mainBucket, 4, "snapshot-only"));
+        long kvSnapshotOffset =
+                FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(indexBucket).getLogOffset();
         assertThat(pausedFollowerOffset).isLessThan(kvSnapshotOffset);
 
         Replica originalReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(indexBucket);
-        putMainMutation(mainGateway, mainTableId, 1, "after-update");
+        writeSource(mainGateway, upsertRequest(mainBucket, 1, "after-update"));
         originalReplica.getLogTablet().roll(Optional.empty());
-        deleteMainMutation(mainGateway, mainTableId, 2);
+        writeSource(mainGateway, deleteRequest(mainBucket, 2));
         originalReplica.getLogTablet().roll(Optional.empty());
-        putMainMutation(mainGateway, mainTableId, 3, "inserted-after-snapshot");
+        writeSource(mainGateway, upsertRequest(mainBucket, 3, "inserted-after-snapshot"));
         originalReplica.getLogTablet().roll(Optional.empty());
 
         long expectedFence = mainLeader.getSyncIndexPushedOffset();
@@ -175,10 +165,17 @@ class IndexTargetRecoveryITCase {
                 Duration.ofMinutes(3),
                 "wait for production promotion and synchronous KV replay");
 
-        byte[] oldUpdatedKey = encodeIndexKey(indexEncoder, "before-update", 1);
-        byte[] updatedKey = encodeIndexKey(indexEncoder, "after-update", 1);
-        byte[] deletedKey = encodeIndexKey(indexEncoder, "removed-after-snapshot", 2);
-        byte[] insertedKey = encodeIndexKey(indexEncoder, "inserted-after-snapshot", 3);
+        assertThat(
+                        recoveredReplica
+                                .lookups(
+                                        Collections.singletonList(
+                                                indexEntry(indexEncoder, 4, "snapshot-only").key()))
+                                .get(0))
+                .isNotNull();
+        byte[] oldUpdatedKey = indexEntry(indexEncoder, 1, "before-update").key();
+        byte[] updatedKey = indexEntry(indexEncoder, 1, "after-update").key();
+        byte[] deletedKey = indexEntry(indexEncoder, 2, "removed-after-snapshot").key();
+        byte[] insertedKey = indexEntry(indexEncoder, 3, "inserted-after-snapshot").key();
         List<ByteArraySlice> recoveredValues =
                 recoveredReplica.lookups(
                         Arrays.asList(oldUpdatedKey, updatedKey, deletedKey, insertedKey));
@@ -192,14 +189,22 @@ class IndexTargetRecoveryITCase {
 
         TabletServerGateway promotedGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(followerToPromote);
-        putIndexMutation(
-                promotedGateway,
-                indexTableId,
-                indexEncoder,
-                mainBucket,
-                0,
-                expectedFence - 1,
-                insertedKey);
+        PutIndexResponse replay =
+                promotedGateway
+                        .putIndex(
+                                table.mutationRequest(
+                                        indexEncoder,
+                                        mainBucket,
+                                        0,
+                                        expectedFence,
+                                        insertedKey,
+                                        indexEntry(indexEncoder, 3, "inserted-after-snapshot")
+                                                .value()
+                                                .copy()))
+                        .get();
+        assertThat(replay.getBucketsRespsList())
+                .singleElement()
+                .satisfies(bucket -> assertThat(bucket.hasErrorCode()).isFalse());
 
         assertThat(recoveredReplica.getLogTablet().localLogEndOffset()).isEqualTo(walEndBefore);
         assertThat(
@@ -221,90 +226,5 @@ class IndexTargetRecoveryITCase {
         conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME, Duration.ofSeconds(5));
         return conf;
-    }
-
-    private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {
-        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).key();
-    }
-
-    private static void putMainMutation(
-            TabletServerGateway gateway, long mainTableId, int key, String indexedValue)
-            throws Exception {
-        writeMainMutation(
-                gateway,
-                mainTableId,
-                key,
-                genKvRecordBatch(new Object[] {key, indexedValue}),
-                "UPSERT");
-    }
-
-    private static void deleteMainMutation(TabletServerGateway gateway, long mainTableId, int key)
-            throws Exception {
-        writeMainMutation(
-                gateway,
-                mainTableId,
-                key,
-                genKvRecordBatch(Collections.singletonList(Tuple2.of(new Object[] {key}, null))),
-                "DELETE");
-    }
-
-    private static void writeMainMutation(
-            TabletServerGateway gateway,
-            long mainTableId,
-            int key,
-            KvRecordBatch batch,
-            String operation)
-            throws Exception {
-        try {
-            PutKvResponse response = gateway.putKv(newPutKvRequest(mainTableId, 0, 1, batch)).get();
-            assertThat(response.getBucketsRespsList())
-                    .allSatisfy(
-                            bucket ->
-                                    assertThat(bucket.hasErrorCode())
-                                            .as(
-                                                    "main-table %s key=%s error=%s",
-                                                    operation,
-                                                    key,
-                                                    bucket.hasErrorMessage()
-                                                            ? bucket.getErrorMessage()
-                                                            : "none")
-                                            .isFalse());
-        } catch (Exception failure) {
-            throw new AssertionError("failed main-table " + operation + " for key " + key, failure);
-        }
-    }
-
-    private static void putIndexMutation(
-            TabletServerGateway gateway,
-            long indexTableId,
-            IndexReplicationEncoder encoder,
-            TableBucket sourceBucket,
-            int targetBucket,
-            long sourceEndOffset,
-            byte[] key)
-            throws Exception {
-        IndexReplicationEncoder.IndexEntry progress =
-                encoder.encodeProgress(targetBucket, sourceEndOffset);
-        IndexReplicator.BucketBatchBuilder builder =
-                new IndexReplicator.BucketBatchBuilder(
-                        (short) encoder.getIndexSchemaId(), encoder.getIndexKvFormat());
-        builder.appendDelete(key);
-        BytesView batch = builder.finish(progress.key(), progress.value());
-        PutIndexRequest request =
-                new PutIndexRequest()
-                        .setTableId(indexTableId)
-                        .setSourceTableId(sourceBucket.getTableId())
-                        .setAcks(-1)
-                        .setTimeoutMs(30_000);
-        request.addBucketsReq()
-                .setBucketId(targetBucket)
-                .setSourceBucketId(sourceBucket.getBucket())
-                .setSourceEndOffset(sourceEndOffset)
-                .setProgressKey(progress.key())
-                .setRecordsBytesView(batch);
-        PutIndexResponse response = gateway.putIndex(request).get();
-        assertThat(response.getBucketsRespsList())
-                .singleElement()
-                .satisfies(bucket -> assertThat(bucket.hasErrorCode()).isFalse());
     }
 }

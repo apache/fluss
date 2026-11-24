@@ -28,8 +28,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * A class representing the kv snapshots of a table or a partition. It contains multiple snapshots
- * for each kv tablet (bucket).
+ * The selected KV snapshot and log start offset for each bucket of a table or partition.
  *
  * @since 0.6
  */
@@ -40,13 +39,10 @@ public class KvSnapshots {
 
     @Nullable private final Long partitionId;
 
-    // map from bucket id to the latest snapshot id,
-    // null or empty if there is no snapshot for this bucket
+    // Buckets without a selected snapshot have no entry.
     private final Map<Integer, Long> snapshotIds;
 
-    // map from bucket id to the log offset to read after the snapshot,
-    // null or empty if no explicit log start is provided for this bucket,
-    // then read from EARLIEST offset
+    // Explicit log start offsets, including zero for a bucket without a readable SYNC snapshot.
     private final Map<Integer, Long> logOffsets;
 
     public KvSnapshots(

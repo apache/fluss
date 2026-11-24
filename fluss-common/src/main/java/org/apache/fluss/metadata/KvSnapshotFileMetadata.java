@@ -148,7 +148,7 @@ public final class KvSnapshotFileMetadata {
      * captured for replay and WAL retention. Null when index progress is not applicable.
      */
     @Nullable
-    public Long getIndexPushedOffset() {
+    public Long getAllIndexPushedOffset() {
         return allIndexPushedOffset;
     }
 

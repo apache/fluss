@@ -711,7 +711,10 @@ class ZooKeeperClientTest {
         List<TableMetadataRegistration> registrations =
                 Arrays.asList(
                         new TableMetadataRegistration(
-                                mainPath, tableRegistration(1, schema, 1), schema, null),
+                                mainPath,
+                                tableRegistration(1, schema, 1),
+                                schema,
+                                TableAssignment.builder().add(0, BucketAssignment.of(0)).build()),
                         new TableMetadataRegistration(
                                 indexPath, tableRegistration(2, schema, 1), schema, null));
         assertThatThrownBy(
@@ -720,6 +723,7 @@ class ZooKeeperClientTest {
                                         registrations, zkEpoch.getCoordinatorEpochZkVersion()))
                 .isInstanceOf(KeeperException.NodeExistsException.class);
 
+        assertThat(zookeeperClient.getTableAssignment(1L)).isEmpty();
         assertThat(zookeeperClient.getTable(mainPath)).isEmpty();
         assertThat(zookeeperClient.getSchemaById(mainPath, 1)).isEmpty();
         assertThat(zookeeperClient.getTable(indexPath)).contains(existingIndex);
@@ -759,8 +763,6 @@ class ZooKeeperClientTest {
                         .primaryKey("a")
                         .build();
         int registeredSchemaId = zookeeperClient.registerFirstSchema(tablePath, schema);
-        long tableId = 1L;
-        zookeeperClient.registerTable(tablePath, tableRegistration(tableId, schema, 1), false);
         assertThat(registeredSchemaId).isEqualTo(schemaId);
         assertThat(zookeeperClient.getCurrentSchemaId(tablePath)).isEqualTo(schemaId);
 

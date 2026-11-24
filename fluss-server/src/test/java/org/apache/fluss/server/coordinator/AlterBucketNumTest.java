@@ -304,7 +304,7 @@ class AlterBucketNumTest {
         TableInfo tableInfo = mm.getTable(tablePath);
         mm.createPartition(
                 tablePath,
-                tableInfo.getTableId(),
+                tableInfo.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(
                         tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
@@ -466,7 +466,7 @@ class AlterBucketNumTest {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         metadataManager.createPartition(
                 tablePath,
-                tableInfo.getTableId(),
+                tableInfo.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(
                         tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
@@ -510,7 +510,7 @@ class AlterBucketNumTest {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         metadataManager.createPartition(
                 tablePath,
-                tableInfo.getTableId(),
+                tableInfo.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(
                         tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
@@ -566,7 +566,7 @@ class AlterBucketNumTest {
                 new PartitionAssignment(tableId, tableAssignment.getBucketAssignments());
         metadataManager.createPartition(
                 tablePath,
-                tableId,
+                tableInfo.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(tableInfo.getPartitionKeys(), "legacy"),
@@ -574,7 +574,7 @@ class AlterBucketNumTest {
                 originalBucketCount);
         metadataManager.createPartition(
                 tablePath,
-                tableId,
+                tableInfo.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(tableInfo.getPartitionKeys(), "new"),
@@ -644,7 +644,7 @@ class AlterBucketNumTest {
                 new PartitionAssignment(tableId, tableAssignment.getBucketAssignments());
         metadataManager.createPartition(
                 tablePath,
-                tableId,
+                tableInfo.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(tableInfo.getPartitionKeys(), "2024-01"),
@@ -659,7 +659,7 @@ class AlterBucketNumTest {
                                 () ->
                                         metadataManager.createPartition(
                                                 tablePath,
-                                                tableId,
+                                                tableInfo.getSchema(),
                                                 remoteDataDir,
                                                 new PartitionAssignment(
                                                         tableId,
@@ -721,7 +721,7 @@ class AlterBucketNumTest {
             TableInfo tableInfo = metadataManager.getTable(tablePath);
             metadataManager.createPartition(
                     tablePath,
-                    tableInfo.getTableId(),
+                    tableInfo.getSchema(),
                     remoteDataDir,
                     new PartitionAssignment(
                             tableInfo.getTableId(), tableAssignment.getBucketAssignments()),
@@ -947,7 +947,7 @@ class AlterBucketNumTest {
         String victimPartition = "2024-01";
         metadataManager.createPartition(
                 tablePath,
-                tableId,
+                tableInfo.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(tableId, tableAssignment.getBucketAssignments()),
                 fromPartitionName(tableInfo.getPartitionKeys(), victimPartition),
@@ -1116,7 +1116,7 @@ class AlterBucketNumTest {
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         metadataManager.createPartition(
                 tablePath,
-                tableInfo.getTableId(),
+                tableInfo.getSchema(),
                 remoteDataDir,
                 new PartitionAssignment(
                         tableInfo.getTableId(), tableAssignment.getBucketAssignments()),

@@ -32,7 +32,6 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.RowData.FieldGetter;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.logical.LogicalType;
-import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,16 +67,13 @@ public class LookupNormalizer implements Serializable {
     private static final Logger LOG = LoggerFactory.getLogger(LookupNormalizer.class);
 
     /** Mapping from normalized key index to the lookup key index (in the lookup row). */
-    @Nullable private final FieldGetter[] normalizedKeyGetters;
+    private final FieldGetter[] normalizedKeyGetters;
 
     /** The field getter to get remaining condition value from the lookup key row. */
     @Nullable private final FieldGetter[] conditionFieldGetters;
 
     /** The field getter to get the remaining condition result from the lookup result row. */
     @Nullable private final FieldGetter[] resultFieldGetters;
-
-    /** The logical types of the remaining conditions. */
-    @Nullable private final LogicalTypeRoot[] conditionTypeRoots;
 
     /**
      * The lookup request type (primary key lookup or prefix lookup) requested from Flink to Fluss.
@@ -90,23 +86,19 @@ public class LookupNormalizer implements Serializable {
     private LookupNormalizer(
             LookupType lookupType,
             int[] lookupKeyIndexes,
-            @Nullable FieldGetter[] normalizedKeyGetters,
+            FieldGetter[] normalizedKeyGetters,
             @Nullable FieldGetter[] conditionFieldGetters,
-            @Nullable FieldGetter[] resultFieldGetters,
-            @Nullable LogicalTypeRoot[] conditionTypeRoots) {
+            @Nullable FieldGetter[] resultFieldGetters) {
         this.lookupType = lookupType;
         this.lookupKeyIndexes = lookupKeyIndexes;
         this.normalizedKeyGetters = normalizedKeyGetters;
         this.conditionFieldGetters = conditionFieldGetters;
         this.resultFieldGetters = resultFieldGetters;
-        this.conditionTypeRoots = conditionTypeRoots;
         if (conditionFieldGetters != null) {
             checkState(resultFieldGetters != null, "The resultFieldGetters should not be null.");
-            checkState(conditionTypeRoots != null, "The conditionTypeRoots should not be null.");
             checkState(
-                    conditionFieldGetters.length == resultFieldGetters.length
-                            && conditionFieldGetters.length == conditionTypeRoots.length,
-                    "The remaining condition getters and types should have the same length.");
+                    conditionFieldGetters.length == resultFieldGetters.length,
+                    "The length of conditionFieldGetters and resultFieldGetters should be equal.");
         }
     }
 
@@ -156,10 +148,6 @@ public class LookupNormalizer implements Serializable {
 
     /** Normalize the lookup key row to match the request key and the key fields order. */
     public RowData normalizeLookupKey(RowData lookupKey) {
-        if (normalizedKeyGetters == null) {
-            return lookupKey;
-        }
-
         GenericRowData normalizedKey = new GenericRowData(normalizedKeyGetters.length);
         for (int i = 0; i < normalizedKeyGetters.length; i++) {
             normalizedKey.setField(i, normalizedKeyGetters[i].getFieldOrNull(lookupKey));
@@ -169,9 +157,7 @@ public class LookupNormalizer implements Serializable {
 
     @Nullable
     public RemainingFilter createRemainingFilter(RowData lookupKey) {
-        if (conditionFieldGetters == null
-                || resultFieldGetters == null
-                || conditionTypeRoots == null) {
+        if (conditionFieldGetters == null || resultFieldGetters == null) {
             return null;
         }
 
@@ -180,8 +166,7 @@ public class LookupNormalizer implements Serializable {
             fieldConditions[i] =
                     new FieldCondition(
                             copyConditionValue(conditionFieldGetters[i].getFieldOrNull(lookupKey)),
-                            resultFieldGetters[i],
-                            conditionTypeRoots[i]);
+                            resultFieldGetters[i]);
         }
         return new RemainingFilter(fieldConditions);
     }
@@ -217,21 +202,15 @@ public class LookupNormalizer implements Serializable {
     private static class FieldCondition {
         private final Object expectedValue;
         private final FieldGetter resultFieldGetter;
-        private final LogicalTypeRoot typeRoot;
 
-        private FieldCondition(
-                Object expectedValue, FieldGetter resultFieldGetter, LogicalTypeRoot typeRoot) {
+        private FieldCondition(Object expectedValue, FieldGetter resultFieldGetter) {
             this.expectedValue = expectedValue;
             this.resultFieldGetter = resultFieldGetter;
-            this.typeRoot = typeRoot;
         }
 
         public boolean fieldMatches(RowData result) {
             Object fieldValue = resultFieldGetter.getFieldOrNull(result);
-            if (typeRoot == LogicalTypeRoot.BINARY || typeRoot == LogicalTypeRoot.VARBINARY) {
-                return Arrays.equals((byte[]) expectedValue, (byte[]) fieldValue);
-            }
-            return Objects.equals(expectedValue, fieldValue);
+            return Objects.deepEquals(expectedValue, fieldValue);
         }
     }
 
@@ -440,19 +419,17 @@ public class LookupNormalizer implements Serializable {
             normalizedKeyGetters[i] = RowData.createFieldGetter(fieldType, idxInLookupKey);
         }
 
-        if (originalLookupKeys.equals(expectedLookupKeys)) {
+        if (originalLookupKeys.size() == expectedLookupKeys.size()) {
             return new LookupNormalizer(
                     lookupType,
                     fieldIndexes(expectedLookupKeys, schema),
                     normalizedKeyGetters,
-                    null,
                     null,
                     null);
         }
 
         List<FieldGetter> conditionFieldGetters = new ArrayList<>();
         List<FieldGetter> resultFieldGetters = new ArrayList<>();
-        List<LogicalTypeRoot> conditionTypeRoots = new ArrayList<>();
         for (int i = 0; i < originalLookupKeys.size(); i++) {
             String originalKey = originalLookupKeys.get(i);
             if (!expectedLookupKeys.contains(originalKey)) {
@@ -461,7 +438,6 @@ public class LookupNormalizer implements Serializable {
                 conditionFieldGetters.add(RowData.createFieldGetter(fieldType, i));
                 // get the result field from the lookup result row (projected)
                 resultFieldGetters.add(RowData.createFieldGetter(fieldType, lookupKeyIndexes[i]));
-                conditionTypeRoots.add(fieldType.getTypeRoot());
             }
         }
 
@@ -470,8 +446,7 @@ public class LookupNormalizer implements Serializable {
                 fieldIndexes(expectedLookupKeys, schema),
                 normalizedKeyGetters,
                 conditionFieldGetters.toArray(new FieldGetter[0]),
-                resultFieldGetters.toArray(new FieldGetter[0]),
-                conditionTypeRoots.toArray(new LogicalTypeRoot[0]));
+                resultFieldGetters.toArray(new FieldGetter[0]));
     }
 
     private static int findIndex(List<String> columnNames, String key) {

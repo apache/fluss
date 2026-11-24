@@ -19,17 +19,19 @@ package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonProcessingException;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /** Encoding for secondary-index column names stored in Flink table options. */
 @Internal
 public final class SecondaryIndexColumnNames {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER =
+            new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     private SecondaryIndexColumnNames() {}
 
@@ -47,8 +49,15 @@ public final class SecondaryIndexColumnNames {
     public static List<String> decode(String value) {
         if (value.trim().startsWith("[")) {
             try {
-                String[] columnNames = OBJECT_MAPPER.readValue(value, String[].class);
-                List<String> result = Arrays.asList(columnNames);
+                JsonNode columns = OBJECT_MAPPER.readTree(value);
+                List<String> result = new ArrayList<>(columns.size());
+                for (JsonNode column : columns) {
+                    if (!column.isTextual()) {
+                        throw new IllegalArgumentException(
+                                "Secondary index column names must be JSON strings");
+                    }
+                    result.add(column.textValue());
+                }
                 validate(result);
                 return result;
             } catch (JsonProcessingException e) {

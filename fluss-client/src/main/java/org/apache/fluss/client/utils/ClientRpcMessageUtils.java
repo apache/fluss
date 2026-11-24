@@ -270,11 +270,6 @@ public class ClientRpcMessageUtils {
         return request;
     }
 
-    public static PrefixLookupRequest makePrefixLookupRequest(
-            long tableId, Collection<PrefixLookupBatch> lookupBatches) {
-        return makePrefixLookupRequest(tableId, lookupBatches, 0, false);
-    }
-
     /** Builds a request whose limit applies independently to every prefix. */
     public static PrefixLookupRequest makePrefixLookupRequest(
             long tableId,

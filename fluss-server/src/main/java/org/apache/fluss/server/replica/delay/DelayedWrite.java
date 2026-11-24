@@ -127,7 +127,7 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
                 Replica replica = null;
                 try {
                     replica = replicaManager.getReplicaOrException(tableBucket);
-                    if (delayedBucketStatus.requiresDataAck()) {
+                    if (delayedWriteMetadata.requiredAcks == -1) {
                         result =
                                 replica.checkEnoughReplicasReachOffset(
                                         delayedBucketStatus.getRequiredOffset());
@@ -150,10 +150,10 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
                     // HW satisfied; additionally gate on the sync index-pushed-offset watermark
                     // when a requirement is configured (replica is non-null here because no
                     // exception was thrown above).
-                    long requiredIndexOffset = delayedBucketStatus.getRequiredIndexOffset();
                     boolean indexOk =
-                            requiredIndexOffset == DelayedBucketStatus.NO_INDEX_OFFSET_REQUIRED
-                                    || replica.getSyncIndexPushedOffset() >= requiredIndexOffset;
+                            !delayedBucketStatus.waitForSyncIndex
+                                    || replica.getSyncIndexPushedOffset()
+                                            >= delayedBucketStatus.getRequiredOffset();
                     if (indexOk) {
                         delayedBucketStatus.setAcksPending(false);
                         delayedBucketStatus.setDelayedError(errors);
@@ -234,45 +234,20 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
 
     /** DelayedProduceMetadata. */
     public static class DelayedBucketStatus<T extends WriteResultForBucket> {
-        /** Sentinel meaning "no index-pushed-offset requirement". */
-        public static final long NO_INDEX_OFFSET_REQUIRED = -1L;
-
-        private final long requiredOffset;
-        private final long requiredIndexOffset;
-        private final boolean requiresDataAck;
+        private final boolean waitForSyncIndex;
         private final T writeResultForBucket;
         /** Whether this bucket is waiting acks. */
         private volatile boolean acksPending;
         /** The error code of the delayed operation. */
         private volatile Errors delayedError;
 
-        public DelayedBucketStatus(long requiredOffset, T writeResultForBucket) {
-            this(requiredOffset, NO_INDEX_OFFSET_REQUIRED, true, writeResultForBucket);
-        }
-
-        public DelayedBucketStatus(
-                long requiredOffset,
-                long requiredIndexOffset,
-                boolean requiresDataAck,
-                T writeResultForBucket) {
-            this.requiredOffset = requiredOffset;
-            this.requiredIndexOffset = requiredIndexOffset;
-            this.requiresDataAck = requiresDataAck;
+        public DelayedBucketStatus(T writeResultForBucket, boolean waitForSyncIndex) {
             this.writeResultForBucket = writeResultForBucket;
-            this.acksPending = false;
-            this.delayedError = null;
+            this.waitForSyncIndex = waitForSyncIndex;
         }
 
         public long getRequiredOffset() {
-            return requiredOffset;
-        }
-
-        public long getRequiredIndexOffset() {
-            return requiredIndexOffset;
-        }
-
-        public boolean requiresDataAck() {
-            return requiresDataAck;
+            return writeResultForBucket.getWriteLogEndOffset();
         }
 
         public T getWriteResultForBucket() {
@@ -298,12 +273,8 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
         @Override
         public String toString() {
             return "DelayedBucketStatus{"
-                    + "requiredOffset="
-                    + requiredOffset
-                    + ", requiredIndexOffset="
-                    + requiredIndexOffset
-                    + ", requiresDataAck="
-                    + requiresDataAck
+                    + "waitForSyncIndex="
+                    + waitForSyncIndex
                     + ", writeResultForBucket="
                     + writeResultForBucket
                     + ", acksPending="

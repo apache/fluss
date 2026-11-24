@@ -310,6 +310,52 @@ public class FlinkConversionsTest {
     }
 
     @Test
+    void testSecondaryIndexOptionsRoundTrip() {
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "region", org.apache.flink.table.api.DataTypes.STRING()),
+                                Column.physical(
+                                        "tenant", org.apache.flink.table.api.DataTypes.INT())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("pk", Collections.singletonList("id")));
+        Map<String, String> options = new HashMap<>();
+        options.put("secondary-index.by_region.columns", "region,tenant");
+        options.put("secondary-index.by_region.visibility", "ASYNC");
+        options.put("secondary-index.by_region.bucket.num", "7");
+        CatalogTable input =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "",
+                        Collections.emptyList(),
+                        options);
+        TableDescriptor descriptor =
+                FlinkConversions.toFlussTable(new ResolvedCatalogTable(input, schema));
+        assertThat(descriptor.getSchema().getIndexes()).hasSize(1);
+        assertThat(descriptor.getCustomProperties())
+                .doesNotContainKeys(options.keySet().toArray(new String[0]));
+        CatalogTable output =
+                (CatalogTable)
+                        FlinkConversions.toFlinkTable(
+                                TableInfo.of(
+                                        TablePath.of("db", "table"),
+                                        1L,
+                                        1,
+                                        descriptor.withBucketCount(3),
+                                        DEFAULT_REMOTE_DATA_DIR,
+                                        1L,
+                                        1L));
+        assertThat(
+                        FlinkConversions.toFlussTable(new ResolvedCatalogTable(output, schema))
+                                .getSchema()
+                                .getIndexes())
+                .isEqualTo(descriptor.getSchema().getIndexes());
+    }
+
+    @Test
     void testTableConversionWithOptions() {
         Map<String, String> options = new HashMap<>();
         // forward table option & enum type
@@ -419,6 +465,15 @@ public class FlinkConversionsTest {
                 .containsEntry(
                         ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
                         String.valueOf(KvValueLayout.TAGGED.version()));
+    }
+
+    @Test
+    void rejectsInvalidIndexColumnArrays() {
+        for (String columns :
+                Arrays.asList("[42]", "[true]", "[\"a\"] [\"b\"]", "[\"a\"] trailing")) {
+            assertThatThrownBy(() -> SecondaryIndexColumnNames.decode(columns))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Test

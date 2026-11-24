@@ -99,28 +99,7 @@ public class FlussTable implements Table {
         return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
     }
 
-    /**
-     * Returns a {@link Lookuper} for the named secondary index that performs a two-hop lookup with
-     * stale-pointer recheck:
-     *
-     * <ul>
-     *   <li>Hop 1: prefix-scan the Index Table by the user-provided index-column key to retrieve
-     *       candidate {@code (idxCols, basePK)} rows.
-     *   <li>Hop 2: deduplicate candidates by logical {@code basePK}, then point-get the main table
-     *       once per distinct key. Rows that have been deleted upstream are dropped (empty main
-     *       lookup result).
-     *   <li>Recheck: re-evaluate the index columns of every surviving main row against the lookup
-     *       key values captured at lookup entry; rows that no longer match are discarded as stale
-     *       index pointers.
-     * </ul>
-     *
-     * <p>The returned lookuper can be reused by concurrent callers.
-     *
-     * @param indexName the name of the secondary index as declared via {@code Schema.Builder.index}
-     * @return a {@link SecondaryIndexLookuper} wired against this table and its Index Table
-     * @throws IllegalArgumentException if no secondary index with the given name is declared on
-     *     this table.
-     */
+    /** The returned lookuper can be reused by concurrent callers. */
     @Override
     public Lookuper getSecondaryIndexLookuper(String indexName) {
         Schema mainSchema = tableInfo.getSchema();
@@ -131,7 +110,7 @@ public class FlussTable implements Table {
                 index.getColumnNames(),
                 conn.getTable(indexTablePath),
                 this.newLookup().createLookuper(),
-                conn.getOrCreateLookupClient().getLookupContinuationExecutor());
+                conn.getOrCreateLookupClient());
     }
 
     private static Schema.Index findIndexOrThrow(

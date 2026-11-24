@@ -125,7 +125,7 @@ Sink(table=[fluss_catalog.my_db.snk], fields=[city_id, order_id, content, city_n
 
 Delta Join relies on performing lookups by the join key (e.g., the `city_id` in the above example) on the Fluss source tables. This requires that the Fluss source tables are defined with appropriate index on the join key to enable efficient lookups.
 
-Currently, Fluss only supports to defines a single index key per table, which is also referred to as the **prefix key**. The general secondary index which allows define multiple indexes with arbitrary fields is planned to be supported in the near future releases.
+A Fluss primary key table supports lookup by primary key, by a routable primary-key prefix, and by a declared secondary index. See [foreign-key joins with secondary indexes](#foreign-key-joins-with-secondary-indexes) for a Flink 2.3 example.
 
 A prefix key defines the portion of a table’s primary key that can be used for efficient key-based lookups or index pruning.
 
@@ -204,7 +204,7 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 
 #### Limitations
 
-- The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
+- On each lookup side, the equality conditions must cover the primary key, a routable primary-key prefix, or all columns of a declared secondary index. Updating inputs must also satisfy the upsert-key requirements below.
 - The join must be an INNER join. LEFT JOIN, RIGHT JOIN, and FULL OUTER JOIN are not supported.
 - The downstream node of the join must support idempotent updates, typically it's an upsert sink and should not have a `SinkUpsertMaterializer` node before it.
   - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink's primary key does not fully cover the upstream update key.

@@ -19,17 +19,13 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.IndexVisibility;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
-import org.apache.fluss.row.compacted.CompactedRow;
-import org.apache.fluss.row.compacted.CompactedRowWriter;
+import org.apache.fluss.server.index.TestingIndexSourceLog.RemoteSessions;
 import org.apache.fluss.testutils.ListLogRecords;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ExponentialBackoff;
@@ -46,6 +42,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.server.index.TestingIndexEncoders.encoder;
+import static org.apache.fluss.server.index.TestingIndexEncoders.fanout;
+import static org.apache.fluss.server.index.TestingIndexSourceLog.LOCAL_WAL_ONLY;
 import static org.apache.fluss.server.index.TestingIndexSourceLog.sourceRecords;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -65,26 +64,26 @@ class IndexReplicationSchedulerTest {
                 Source second = new Source(1, new TableBucket(1L, 1), io, encoder("b", 11L));
                 Source third = new Source(2, new TableBucket(1L, 2), io, encoder("c", 12L));
                 Source otherTable = new Source(3, new TableBucket(2L, 0), io, encoder("d", 13L))) {
-            assertThat(first.replicator.poll()).isTrue();
-            assertThat(second.replicator.poll()).isFalse();
-            assertThat(third.replicator.poll()).isFalse();
-            assertThat(otherTable.replicator.poll()).isFalse();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
+            assertThat(scheduler.pollWorker(second.worker)).isFalse();
+            assertThat(scheduler.pollWorker(third.worker)).isFalse();
+            assertThat(scheduler.pollWorker(otherTable.worker)).isFalse();
             assertThat(io.numQueuedRunnables()).isEqualTo(1);
             // Cancelling a read gives its slot to the next source, not to a fresh arrival.
             first.close();
             io.trigger();
-            assertThat(second.replicator.poll()).isTrue();
-            assertThat(third.replicator.poll()).isFalse();
+            assertThat(scheduler.pollWorker(second.worker)).isTrue();
+            assertThat(scheduler.pollWorker(third.worker)).isFalse();
             io.trigger();
-            assertThat(second.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(second.worker)).isTrue();
             // The next table gets a turn before the remaining source in the larger table.
-            assertThat(third.replicator.poll()).isFalse();
-            assertThat(otherTable.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(third.worker)).isFalse();
+            assertThat(scheduler.pollWorker(otherTable.worker)).isTrue();
             io.trigger();
-            assertThat(otherTable.replicator.poll()).isTrue();
-            assertThat(third.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(otherTable.worker)).isTrue();
+            assertThat(scheduler.pollWorker(third.worker)).isTrue();
             io.trigger();
-            assertThat(third.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(third.worker)).isTrue();
             drain(buffer);
             assertThat(second.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
             assertThat(otherTable.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
@@ -103,22 +102,22 @@ class IndexReplicationSchedulerTest {
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 Source owner = new Source(0, new TableBucket(1L, 0), io, encoder("a", 10L));
                 Source other = new Source(1, new TableBucket(2L, 0), io, encoder("b", 11L))) {
-            assertThat(owner.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
             blocker.allocatePage(8192);
             io.trigger();
-            assertThat(owner.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
             assertThat(owner.replicator.hasPendingRead()).isFalse();
-            assertThat(other.replicator.poll()).isFalse();
+            assertThat(scheduler.pollWorker(other.worker)).isFalse();
             blocker.close();
             clock.advanceTime(50, TimeUnit.MILLISECONDS);
-            assertThat(owner.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
             io.trigger();
-            assertThat(owner.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
             // Input closes at publication; the slot is not held until the network ACK.
-            assertThat(other.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(other.worker)).isTrue();
             io.trigger();
             acknowledge(buffer, 10L, 0);
-            assertThat(other.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(other.worker)).isTrue();
             acknowledge(buffer, 11L, 0);
             assertThat(owner.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
             assertThat(other.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
@@ -141,7 +140,7 @@ class IndexReplicationSchedulerTest {
                 drain(buffer);
             }
             assertThat(firstA.reads).hasValue(6);
-            assertThat(secondA.reads.get()).isGreaterThanOrEqualTo(2);
+            assertThat(secondA.reads.get()).isEqualTo(firstB.reads.get() + secondB.reads.get());
             assertThat(firstB.reads.get()).isPositive();
             assertThat(secondB.reads.get()).isPositive();
         }
@@ -188,13 +187,10 @@ class IndexReplicationSchedulerTest {
         AtomicBoolean broken = new AtomicBoolean(true);
         IndexReplicationEncoder delegate = encoder("recovering", 11L);
         IndexReplicationEncoder recovering =
-                new IndexReplicationEncoder(
+                encoder(
                         "recovering",
-                        IndexVisibility.ASYNC,
                         11L,
-                        1,
-                        KvFormat.COMPACTED,
-                        new int[] {0},
+                        IndexVisibility.ASYNC,
                         row -> {
                             if (broken.get()) {
                                 throw new IllegalStateException("index needs repair");
@@ -255,35 +251,35 @@ class IndexReplicationSchedulerTest {
                                 fanout("a0", 10L),
                                 fanout("a1", 11L),
                                 fanout("a2", 12L));
-                Source sameTable = new Source(0, new TableBucket(1L, 1), io, fanout("a3", 14L));
+                Source sameTable = new Source(2, new TableBucket(1L, 1), io, fanout("a3", 14L));
                 Source second = new Source(1, new TableBucket(2L, 0), io, fanout("b", 13L))) {
             first.highWatermark.set(2);
             sameTable.highWatermark.set(2);
             second.highWatermark.set(2);
             blocker.allocatePage(4096);
             submitAndComplete(first, io);
-            assertThat(first.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
             submitAndComplete(sameTable, io);
-            assertThat(sameTable.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(sameTable.worker)).isTrue();
             submitAndComplete(second, io);
-            assertThat(second.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(second.worker)).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(4096L);
             clock.advanceTime(50, TimeUnit.MILLISECONDS);
             submitAndComplete(first, io);
             submitAndComplete(sameTable, io);
             submitAndComplete(second, io);
             blocker.close();
-            assertThat(first.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(8192L);
             int sameTableReads = sameTable.reads.get();
             int secondReads = second.reads.get();
-            assertThat(second.replicator.poll()).isFalse();
+            assertThat(scheduler.pollWorker(second.worker)).isFalse();
             assertThat(second.replicator.hasPendingRead()).isTrue();
             drain(buffer);
-            assertThat(sameTable.replicator.poll()).isFalse();
+            assertThat(scheduler.pollWorker(sameTable.worker)).isFalse();
             assertThat(sameTable.replicator.hasPendingRead()).isTrue();
             assertThat(sameTable.reads).hasValue(sameTableReads);
-            assertThat(second.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(second.worker)).isTrue();
             assertThat(second.reads).hasValue(secondReads);
             assertThat(buffer.buckets())
                     .containsExactlyInAnyOrder(new TableBucket(13L, 1), new TableBucket(13L, 2));
@@ -313,17 +309,15 @@ class IndexReplicationSchedulerTest {
                                 0,
                                 new TableBucket(1L, 0),
                                 io,
-                                new IndexReplicationEncoder(
+                                encoder(
                                         "a0",
-                                        IndexVisibility.SYNC,
                                         10L,
-                                        1,
-                                        KvFormat.COMPACTED,
-                                        new int[] {0},
+                                        IndexVisibility.SYNC,
                                         delegate::encodeDataEntry,
                                         (target, end) -> {
                                             if (activateOwner.compareAndSet(true, false)) {
-                                                assertThat(owner.replicator.poll()).isFalse();
+                                                assertThat(scheduler.pollWorker(owner.worker))
+                                                        .isFalse();
                                                 assertThat(owner.replicator.hasPendingRead())
                                                         .isTrue();
                                             }
@@ -337,35 +331,35 @@ class IndexReplicationSchedulerTest {
             second.highWatermark.set(2);
             owner.highWatermark.set(2);
             idle.highWatermark.set(0);
-            assertThat(first.replicator.poll()).isTrue();
-            assertThat(sameTable.replicator.poll()).isTrue();
-            assertThat(second.replicator.poll()).isTrue();
-            assertThat(owner.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
+            assertThat(scheduler.pollWorker(sameTable.worker)).isTrue();
+            assertThat(scheduler.pollWorker(second.worker)).isTrue();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
             blocker.allocatePage(4096);
             for (Source source : Arrays.asList(first, sameTable, second, owner)) {
                 io.trigger();
-                assertThat(source.replicator.poll()).isTrue();
+                assertThat(scheduler.pollWorker(source.worker)).isTrue();
             }
             assertThat(buffer.pendingBytes()).isEqualTo(4096L);
             blocker.close();
             clock.advanceTime(50, TimeUnit.MILLISECONDS);
-            assertThat(owner.replicator.poll()).isTrue();
-            assertThat(first.replicator.poll()).isTrue();
-            assertThat(sameTable.replicator.poll()).isTrue();
-            assertThat(second.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
+            assertThat(scheduler.pollWorker(sameTable.worker)).isTrue();
+            assertThat(scheduler.pollWorker(second.worker)).isTrue();
             io.trigger();
             assertThat(scheduler.pollWorker(3)).isFalse();
             io.trigger();
             io.trigger();
             io.trigger();
-            assertThat(first.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
             assertThat(activateOwner).isFalse();
             acknowledge(buffer, 10L, 0);
-            assertThat(owner.replicator.poll()).isTrue();
-            assertThat(sameTable.replicator.poll()).isFalse();
+            assertThat(scheduler.pollWorker(owner.worker)).isTrue();
+            assertThat(scheduler.pollWorker(sameTable.worker)).isFalse();
             assertThat(sameTable.replicator.hasPendingRead()).isTrue();
             acknowledge(buffer, 13L, 0);
-            assertThat(sameTable.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(sameTable.worker)).isTrue();
             acknowledge(buffer, 11L, 0);
             assertThat(first.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
             assertThat(owner.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
@@ -385,13 +379,10 @@ class IndexReplicationSchedulerTest {
         AtomicBoolean fail = new AtomicBoolean();
         IndexReplicationEncoder delegate = fanout("owner", 10L);
         IndexReplicationEncoder owner =
-                new IndexReplicationEncoder(
+                encoder(
                         "owner",
-                        IndexVisibility.SYNC,
                         10L,
-                        1,
-                        KvFormat.COMPACTED,
-                        new int[] {0},
+                        IndexVisibility.SYNC,
                         delegate::encodeDataEntry,
                         (target, end) -> {
                             if (fail.get()) {
@@ -406,18 +397,18 @@ class IndexReplicationSchedulerTest {
             other.highWatermark.set(4);
             blocker.allocatePage(4096);
             submitAndComplete(first, io);
-            assertThat(first.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
             clock.advanceTime(50, TimeUnit.MILLISECONDS);
-            assertThat(first.replicator.poll()).isTrue();
-            assertThat(first.replicator.poll()).isFalse();
-            assertThat(other.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isTrue();
+            assertThat(scheduler.pollWorker(first.worker)).isFalse();
+            assertThat(scheduler.pollWorker(other.worker)).isTrue();
             acknowledge(buffer, 11L, 0);
             blocker.close();
             io.trigger();
             fail.set(true);
             assertThat(scheduler.pollWorker(0)).isTrue();
             assertThat(buffer.pendingBytes()).isZero();
-            assertThat(other.replicator.poll()).isTrue();
+            assertThat(scheduler.pollWorker(other.worker)).isTrue();
             acknowledge(buffer, 11L, 0);
             assertThat(other.replicator.getAllIndexPushedOffset()).isEqualTo(4L);
         }
@@ -441,50 +432,9 @@ class IndexReplicationSchedulerTest {
         }
     }
 
-    private static void submitAndComplete(
-            Source source, ManuallyTriggeredScheduledExecutorService io) {
-        assertThat(source.replicator.poll()).isTrue();
+    private void submitAndComplete(Source source, ManuallyTriggeredScheduledExecutorService io) {
+        assertThat(scheduler.pollWorker(source.worker)).isTrue();
         io.trigger();
-    }
-
-    private static IndexReplicationEncoder encoder(String name, long tableId) {
-        return encoder(name, tableId, IndexVisibility.SYNC);
-    }
-
-    private static IndexReplicationEncoder encoder(
-            String name, long tableId, IndexVisibility visibility) {
-        CompactedRowWriter writer = new CompactedRowWriter(1);
-        writer.writeByte((byte) 1);
-        CompactedRow value = new CompactedRow(new DataType[] {DataTypes.TINYINT()});
-        value.pointTo(writer.segment(), 0, writer.position());
-        return new IndexReplicationEncoder(
-                name,
-                visibility,
-                tableId,
-                1,
-                KvFormat.COMPACTED,
-                new int[] {0},
-                row -> new IndexReplicationEncoder.IndexEntry(name.getBytes(), value, 0),
-                (target, end) ->
-                        new IndexReplicationEncoder.IndexEntry(
-                                (name + "-progress").getBytes(), value, target));
-    }
-
-    private static IndexReplicationEncoder fanout(String name, long tableId) {
-        IndexReplicationEncoder delegate = encoder(name, tableId);
-        return new IndexReplicationEncoder(
-                name,
-                IndexVisibility.SYNC,
-                tableId,
-                1,
-                KvFormat.COMPACTED,
-                new int[] {0},
-                row -> {
-                    IndexReplicationEncoder.IndexEntry entry = delegate.encodeDataEntry(row);
-                    return new IndexReplicationEncoder.IndexEntry(
-                            entry.key(), entry.value(), row.getInt(0));
-                },
-                delegate::encodeProgress);
     }
 
     private static void acknowledge(IndexSendBuffer buffer, long table, int bucket) {
@@ -538,19 +488,12 @@ class IndexReplicationSchedulerTest {
                             reads);
             Supplier<IndexSourceReader.RemoteFetcher> remoteFactory =
                     remote == null
-                            ? null
-                            : () ->
-                                    new IndexSourceReader.RemoteFetcher() {
-                                        @Override
-                                        public Iterable<LogRecordBatch> fetch(
-                                                long start, long localStart) {
-                                            reads.incrementAndGet();
-                                            return records.batches();
-                                        }
-
-                                        @Override
-                                        public void close() {}
-                                    };
+                            ? LOCAL_WAL_ONLY
+                            : new RemoteSessions(
+                                    offset -> {
+                                        reads.incrementAndGet();
+                                        return records.batches();
+                                    });
             LogRecordReadContext context =
                     LogRecordReadContext.createIndexedReadContext(
                             RowType.of(DataTypes.INT()), 1, null);

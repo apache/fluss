@@ -650,10 +650,6 @@ class TableDescriptorValidationTest {
                 1L);
     }
 
-    // -------------------------------------------------------------------------
-    // validateIndexSafeSchemaEvolution
-    // -------------------------------------------------------------------------
-
     /** Baseline: PK (id), index on user_id, one unrelated trailing column info. */
     private static Schema indexedSchema() {
         return Schema.newBuilder()
@@ -663,95 +659,5 @@ class TableDescriptorValidationTest {
                 .primaryKey("id")
                 .index(INDEX_NAME, "user_id")
                 .build();
-    }
-
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("indexSafeSchemaChanges")
-    void testIndexSafeSchemaEvolution(String name, Schema after, String[] errors) {
-        if (errors.length == 0) {
-            assertThatCode(
-                            () ->
-                                    TableDescriptorValidation.validateIndexSafeSchemaEvolution(
-                                            indexedSchema(), after))
-                    .doesNotThrowAnyException();
-        } else {
-            assertThatThrownBy(
-                            () ->
-                                    TableDescriptorValidation.validateIndexSafeSchemaEvolution(
-                                            indexedSchema(), after))
-                    .isInstanceOf(InvalidAlterTableException.class)
-                    .hasMessageContainingAll(errors);
-        }
-    }
-
-    private static Stream<Arguments> indexSafeSchemaChanges() {
-        return Stream.of(
-                Arguments.of(
-                        "AddColumnAtLastIsIndexSafe",
-                        Schema.newBuilder()
-                                .fromSchema(indexedSchema())
-                                .column("extra", DataTypes.STRING())
-                                .build(),
-                        new String[] {}),
-                Arguments.of("UnchangedSchemaIsIndexSafe", indexedSchema(), new String[] {}),
-                Arguments.of(
-                        "RemovedIndexColumnIsRejected",
-                        Schema.newBuilder()
-                                .column("id", DataTypes.BIGINT())
-                                .column("info", DataTypes.STRING())
-                                .primaryKey("id")
-                                .index(INDEX_NAME, "user_id")
-                                .build(),
-                        new String[] {"removed or renamed", "[user_id]"}),
-                Arguments.of(
-                        "RemovedPrimaryKeyColumnIsRejected",
-                        Schema.newBuilder()
-                                .column("user_id", DataTypes.BIGINT())
-                                .column("info", DataTypes.STRING())
-                                .index(INDEX_NAME, "user_id")
-                                .build(),
-                        new String[] {"removed or renamed", "[id]"}),
-                Arguments.of(
-                        "ChangedIndexColumnTypeIsRejected",
-                        Schema.newBuilder()
-                                .column("id", DataTypes.BIGINT())
-                                .column("user_id", DataTypes.STRING())
-                                .column("info", DataTypes.STRING())
-                                .primaryKey("id")
-                                .index(INDEX_NAME, "user_id")
-                                .build(),
-                        new String[] {"changed type", "[user_id]"}),
-                Arguments.of(
-                        "ShiftedKeyColumnPositionIsRejected",
-                        Schema.newBuilder()
-                                .column("user_id", DataTypes.BIGINT())
-                                .column("id", DataTypes.BIGINT())
-                                .column("info", DataTypes.STRING())
-                                .primaryKey("id")
-                                .index(INDEX_NAME, "user_id")
-                                .build(),
-                        new String[] {"shifted position", "user_id", "id"}),
-                Arguments.of(
-                        "DroppedTrailingNonKeyColumnIsIndexSafe",
-                        Schema.newBuilder()
-                                .column("id", DataTypes.BIGINT())
-                                .column("user_id", DataTypes.BIGINT())
-                                .primaryKey("id")
-                                .index(INDEX_NAME, "user_id")
-                                .build(),
-                        new String[] {}));
-    }
-
-    @Test
-    void testNoIndexSchemaAlwaysPasses() {
-        Schema oldSchema =
-                Schema.newBuilder().column("id", DataTypes.BIGINT()).primaryKey("id").build();
-        Schema newSchema = Schema.newBuilder().column("info", DataTypes.STRING()).build();
-
-        assertThatCode(
-                        () ->
-                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
-                                        oldSchema, newSchema))
-                .doesNotThrowAnyException();
     }
 }

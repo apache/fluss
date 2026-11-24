@@ -35,6 +35,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,17 +76,12 @@ public class Flink22CatalogITCase extends FlinkCatalogITCase {
                         .containsExactly("a", "b", "c");
                 CatalogTable table =
                         (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
-                assertThat(table.getUnresolvedSchema())
-                        .isEqualTo(
-                                Schema.newBuilder()
-                                        .column("a", DataTypes.INT().notNull())
-                                        .column("b", DataTypes.STRING().notNull())
-                                        .column("c", DataTypes.BIGINT())
-                                        .primaryKey("a", "b")
-                                        .index("a", "b")
-                                        .index("a")
-                                        .index("c")
-                                        .build());
+                assertThat(table.getUnresolvedSchema().getIndexes())
+                        .extracting(Schema.UnresolvedIndex::getColumnNames)
+                        .containsExactly(
+                                Arrays.asList("a", "b"),
+                                Collections.singletonList("a"),
+                                Collections.singletonList("c"));
             } finally {
                 conn.getAdmin().dropTable(TablePath.of(DEFAULT_DB, tableName), true).get();
             }

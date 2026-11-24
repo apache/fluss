@@ -60,17 +60,6 @@ public class TabletState {
         return flushedLogOffset;
     }
 
-    /**
-     * Returns the lowest WAL offset that must be retained to recover all state represented by this
-     * tablet snapshot. Data recovery starts from {@link #getFlushedLogOffset()}, but secondary
-     * index recovery may need to replay from an earlier index-pushed watermark.
-     */
-    public long getMinRetainLogOffset() {
-        return allIndexPushedOffset == null
-                ? flushedLogOffset
-                : Math.min(flushedLogOffset, allIndexPushedOffset);
-    }
-
     @Nullable
     public Long getRowCount() {
         return rowCount;
@@ -81,7 +70,7 @@ public class TabletState {
      * captured for replay and WAL retention. Null when index progress is not applicable.
      */
     @Nullable
-    public Long getIndexPushedOffset() {
+    public Long getAllIndexPushedOffset() {
         return allIndexPushedOffset;
     }
 

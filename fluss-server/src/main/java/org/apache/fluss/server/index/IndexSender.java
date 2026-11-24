@@ -18,8 +18,6 @@
 package org.apache.fluss.server.index;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbPutIndexRespForBucket;
@@ -74,8 +72,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 @ThreadSafe
 final class IndexSender implements AutoCloseable {
 
-    @VisibleForTesting
-    enum LifecyclePhase {
+    private enum LifecyclePhase {
         OPEN,
         CLOSING,
         CLOSED
@@ -149,7 +146,7 @@ final class IndexSender implements AutoCloseable {
         this.requestTimeoutMs = requestTimeoutMs;
         this.workers = new SenderWorker[numWorkers];
         for (int i = 0; i < numWorkers; i++) {
-            this.workers[i] = new SenderWorker("index-sender-" + i, i, backoffMs);
+            this.workers[i] = new SenderWorker("index-sender-" + i, backoffMs);
         }
         sendBuffer.setReadyBucketListener(this::notifyReadyBucket);
         for (TableBucket bucket : sendBuffer.buckets()) {
@@ -165,7 +162,7 @@ final class IndexSender implements AutoCloseable {
         if (lifecyclePhase != LifecyclePhase.OPEN) {
             return;
         }
-        workers[ownerOf(bucket)].enqueueReadyBucket(bucket);
+        workers[Math.floorMod(bucket.hashCode(), workers.length)].enqueueReadyBucket(bucket);
     }
 
     private void notifyReadyBucket(TableBucket bucket) {
@@ -180,20 +177,12 @@ final class IndexSender implements AutoCloseable {
         }
     }
 
-    private int ownerOf(TableBucket bucket) {
-        return Math.floorMod(bucket.hashCode(), workers.length);
-    }
-
     @Override
-    public void close() {
+    public synchronized void close() {
         LOG.info("IndexSender closing");
         lifecycleLock.lock();
         try {
             if (lifecyclePhase == LifecyclePhase.CLOSED) {
-                return;
-            }
-            if (lifecyclePhase == LifecyclePhase.CLOSING) {
-                awaitClosedLocked();
                 return;
             }
             lifecyclePhase = LifecyclePhase.CLOSING;
@@ -218,23 +207,15 @@ final class IndexSender implements AutoCloseable {
         lifecycleLock.lock();
         try {
             while (outstandingAsyncOperations > 0) {
-                try {
-                    lifecycleDrained.await();
-                } catch (InterruptedException e) {
-                    interrupted = true;
-                }
+                lifecycleDrained.awaitUninterruptibly();
             }
         } finally {
             lifecycleLock.unlock();
         }
-        sendBuffer.discardClaims();
-
-        lifecycleLock.lock();
         try {
+            sendBuffer.discardClaims();
             lifecyclePhase = LifecyclePhase.CLOSED;
-            lifecycleDrained.signalAll();
         } finally {
-            lifecycleLock.unlock();
             if (interrupted) {
                 Thread.currentThread().interrupt();
             }
@@ -248,29 +229,27 @@ final class IndexSender implements AutoCloseable {
         }
     }
 
-    private void awaitClosedLocked() {
-        while (lifecyclePhase != LifecyclePhase.CLOSED) {
-            lifecycleDrained.awaitUninterruptibly();
-        }
-    }
-
     /** A single sender worker that owns the buckets hashing to its index. */
     private final class SenderWorker extends ShutdownableThread {
 
-        private final int workerId;
         private final long backoffMs;
         private final ReentrantLock lock = new ReentrantLock();
         private final Condition condition = lock.newCondition();
+        private boolean wakeupPending;
         private final Set<TableBucket> readyBuckets = new LinkedHashSet<>();
 
-        SenderWorker(String name, int workerId, long backoffMs) {
+        SenderWorker(String name, long backoffMs) {
             super(name, false);
-            this.workerId = workerId;
             this.backoffMs = backoffMs;
         }
 
         void wakeup() {
-            inLock(lock, condition::signalAll);
+            inLock(lock, this::signalWork);
+        }
+
+        private void signalWork() {
+            wakeupPending = true;
+            condition.signal();
         }
 
         void enqueueReadyBucket(TableBucket bucket) {
@@ -278,7 +257,7 @@ final class IndexSender implements AutoCloseable {
                     lock,
                     () -> {
                         if (readyBuckets.add(bucket)) {
-                            condition.signalAll();
+                            signalWork();
                         }
                     });
         }
@@ -310,7 +289,10 @@ final class IndexSender implements AutoCloseable {
                         lock,
                         () -> {
                             try {
-                                condition.await(backoffMs, TimeUnit.MILLISECONDS);
+                                if (!wakeupPending) {
+                                    condition.await(backoffMs, TimeUnit.MILLISECONDS);
+                                }
+                                wakeupPending = false;
                             } catch (InterruptedException e) {
                                 Thread.currentThread().interrupt();
                             }
@@ -349,7 +331,7 @@ final class IndexSender implements AutoCloseable {
                     if (lifecyclePhase != LifecyclePhase.OPEN) {
                         break;
                     }
-                    if (ownerOf(bucket) != workerId || sendBuffer.hasClaim(bucket)) {
+                    if (sendBuffer.hasClaim(bucket)) {
                         continue;
                     }
                     IndexBatch batch = sendBuffer.claimFirstReady(bucket);
@@ -364,31 +346,13 @@ final class IndexSender implements AutoCloseable {
                     lifecycleLock.unlock();
                 }
             }
-            for (TableBucket deferredBucket : deferredBuckets) {
-                enqueueReadyBucket(deferredBucket);
+            if (!deferredBuckets.isEmpty()) {
+                // These buckets remain in backoff. Only new work should wake the worker.
+                inLock(lock, () -> readyBuckets.addAll(deferredBuckets));
             }
             if (claimed.isEmpty()) {
                 return false;
             }
-
-            claimed.removeIf(
-                    batch -> {
-                        if (!batch.window().acceptsBatches()) {
-                            discardClaimedBatch(batch);
-                            return true;
-                        }
-                        SizeAccumulator singleton =
-                                new SizeAccumulator(
-                                        batch.targetBucket().getTableId(),
-                                        batch.sourceBucket().getTableId(),
-                                        requestTimeoutMs);
-                        singleton.addBucket(batch);
-                        if (singleton.exceedsLimit(maxTransportRequestBytes)) {
-                            retryOversizedBatch(batch, singleton);
-                            return true;
-                        }
-                        return !batch.window().acceptsBatches();
-                    });
 
             // Group claimed batches by target leader server.
             Map<Integer, List<IndexBatch>> byServer = new HashMap<>();
@@ -403,7 +367,7 @@ final class IndexSender implements AutoCloseable {
                 if (leaderOpt.isPresent()) {
                     int leader = leaderOpt.getAsInt();
                     byServer.computeIfAbsent(leader, k -> new ArrayList<>()).add(batch);
-                } else if (retryClaimedBatch(batch) && batch.attempts() == 1) {
+                } else if (retryClaimedBatch(batch) && batch.requeueCount() == 1) {
                     // Reuse the batch's retry history to avoid logging every metadata retry.
                     LOG.warn(
                             "No leader available for index target {} from source {} at source "
@@ -481,28 +445,19 @@ final class IndexSender implements AutoCloseable {
 
             for (Map.Entry<Long, List<IndexBatch>> tableEntry : byTable.entrySet()) {
                 long tableId = tableEntry.getKey();
-                for (RequestChunk chunk : splitByRequestBytes(tableId, tableEntry.getValue())) {
+                for (List<IndexBatch> chunk : splitByRequestBytes(tableId, tableEntry.getValue())) {
                     sendOneRequest(target, tableId, chunk);
                 }
             }
         }
 
-        private void sendOneRequest(TargetContext target, long tableId, RequestChunk chunk) {
-            RequestChunk requestChunk = activeChunk(tableId, chunk);
-            if (requestChunk == null) {
+        private void sendOneRequest(
+                TargetContext target, long tableId, List<IndexBatch> requestBatches) {
+            // Retiring a batch only shrinks a chunk already bounded by splitByRequestBytes.
+            removeInactiveBatches(requestBatches);
+            if (requestBatches.isEmpty()) {
                 return;
             }
-            if (requestChunk.size.exceedsLimit(maxTransportRequestBytes)) {
-                for (IndexBatch batch : requestChunk.batches) {
-                    retryOversizedBatch(batch, requestChunk.size);
-                }
-                return;
-            }
-            requestChunk = activeChunk(tableId, requestChunk);
-            if (requestChunk == null) {
-                return;
-            }
-            List<IndexBatch> requestBatches = requestChunk.batches;
             PutIndexRequest request =
                     IndexRequestFactory.build(tableId, requestBatches, requestTimeoutMs);
             boolean leadersCurrent = leadersMatch(target.serverId, requestBatches);
@@ -512,7 +467,7 @@ final class IndexSender implements AutoCloseable {
                 if (!targetIsCurrentLocked(target) || !leadersCurrent) {
                     invalidateTargetLocked(target);
                 } else if (batchesActiveAndClaimed(requestBatches)) {
-                    registerAsyncOperationLocked();
+                    outstandingAsyncOperations++;
                     registered = true;
                 }
             } finally {
@@ -546,28 +501,8 @@ final class IndexSender implements AutoCloseable {
             }
         }
 
-        @Nullable
-        private RequestChunk activeChunk(long tableId, RequestChunk chunk) {
-            boolean changed = removeInactiveBatches(chunk.batches);
-            if (chunk.batches.isEmpty()) {
-                return null;
-            }
-            if (!changed) {
-                return chunk;
-            }
-            SizeAccumulator activeSize =
-                    new SizeAccumulator(
-                            tableId,
-                            chunk.batches.get(0).sourceBucket().getTableId(),
-                            requestTimeoutMs);
-            for (IndexBatch batch : chunk.batches) {
-                activeSize.addBucket(batch);
-            }
-            return new RequestChunk(chunk.batches, activeSize);
-        }
-
-        private boolean removeInactiveBatches(List<IndexBatch> batches) {
-            return batches.removeIf(
+        private void removeInactiveBatches(List<IndexBatch> batches) {
+            batches.removeIf(
                     batch -> {
                         if (batch.window().acceptsBatches()) {
                             return false;
@@ -584,31 +519,31 @@ final class IndexSender implements AutoCloseable {
                 long requestStartNs,
                 @Nullable PutIndexResponse response,
                 @Nullable Throwable error) {
+            long elapsedNs = System.nanoTime() - requestStartNs;
             boolean leadersCurrent = leadersMatch(target.serverId, chunk);
             boolean accepted;
             lifecycleLock.lock();
             try {
                 accepted = targetIsCurrentLocked(target) && leadersCurrent;
-                if (!accepted) {
+                if (!accepted || error != null) {
                     invalidateTargetLocked(target);
-                } else if (error != null) {
-                    invalidateTargetLocked(target);
-                    for (IndexBatch batch : chunk) {
-                        LOG.error(
-                                "PutIndex RPC failed for index table {} from {} to {} at source "
-                                        + "end offset {}. Retrying with backoff",
-                                tableId,
-                                batch.sourceBucket(),
-                                batch.targetBucket(),
-                                batch.sourceEndOffset(),
-                                error);
-                    }
                 }
             } finally {
                 lifecycleLock.unlock();
             }
-            metrics.indexReplicationRequestLatencyHistogram()
-                    .update((System.nanoTime() - requestStartNs) / 1_000_000L);
+            if (accepted && error != null) {
+                for (IndexBatch batch : chunk) {
+                    LOG.error(
+                            "PutIndex RPC failed for index table {} from {} to {} at source "
+                                    + "end offset {}. Retrying with backoff",
+                            tableId,
+                            batch.sourceBucket(),
+                            batch.targetBucket(),
+                            batch.sourceEndOffset(),
+                            error);
+                }
+            }
+            metrics.indexReplicationRequestLatencyHistogram().update(elapsedNs / 1_000_000L);
             try {
                 if (accepted && error == null) {
                     completeResponse(chunk, response);
@@ -655,13 +590,6 @@ final class IndexSender implements AutoCloseable {
         targetsByServer.remove(target.serverId, target);
     }
 
-    private void registerAsyncOperationLocked() {
-        if (lifecyclePhase != LifecyclePhase.OPEN) {
-            throw new IllegalStateException("Cannot register an async operation after close");
-        }
-        outstandingAsyncOperations++;
-    }
-
     private void completeAsyncOperation() {
         lifecycleLock.lock();
         try {
@@ -684,47 +612,33 @@ final class IndexSender implements AutoCloseable {
         }
     }
 
-    private static final class RequestChunk {
-        // Worker-owned until RPC registration; callbacks retain the list unchanged afterward.
-        private final List<IndexBatch> batches;
-        private final SizeAccumulator size;
-
-        private RequestChunk(List<IndexBatch> batches, SizeAccumulator size) {
-            this.batches = batches;
-            this.size = size;
-        }
-    }
-
     /**
      * Consolidates whole target batches up to the preferred payload bound and exact hard transport
-     * bound. A singleton above the transport bound remains intact and is retried after backoff.
+     * bound. The source validates each singleton against the same transport limit before admission.
      */
-    private List<RequestChunk> splitByRequestBytes(long tableId, List<IndexBatch> batches) {
-        List<RequestChunk> chunks = new ArrayList<>();
+    private List<List<IndexBatch>> splitByRequestBytes(long tableId, List<IndexBatch> batches) {
+        List<List<IndexBatch>> chunks = new ArrayList<>();
         List<IndexBatch> current = new ArrayList<>();
         long currentPayloadBytes = 0L;
         long sourceTableId = batches.get(0).sourceBucket().getTableId();
         SizeAccumulator currentSize = new SizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
         for (IndexBatch batch : batches) {
             long batchBytes = batch.encoded().getBytesLength();
-            SizeAccumulator candidate = currentSize.copy();
-            candidate.addBucket(batch);
+            currentSize.addBucket(batch);
             boolean exceedsPreferred = currentPayloadBytes + batchBytes > maxRequestBytes;
             if (!current.isEmpty()
-                    && (exceedsPreferred || candidate.exceedsLimit(maxTransportRequestBytes))) {
-                chunks.add(new RequestChunk(current, currentSize));
+                    && (exceedsPreferred || currentSize.exceedsLimit(maxTransportRequestBytes))) {
+                chunks.add(current);
                 current = new ArrayList<>();
                 currentSize = new SizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
                 currentPayloadBytes = 0L;
                 currentSize.addBucket(batch);
-            } else {
-                currentSize = candidate;
             }
             current.add(batch);
             currentPayloadBytes += batchBytes;
         }
         if (!current.isEmpty()) {
-            chunks.add(new RequestChunk(current, currentSize));
+            chunks.add(current);
         }
         return chunks;
     }
@@ -774,11 +688,8 @@ final class IndexSender implements AutoCloseable {
                                     : error.message());
                 }
                 retryOrDiscardClaim(batch);
-            } else {
-                boolean canAcknowledge = isOpenAndActive(batch);
-                if (sendBuffer.completeClaim(batch) && canAcknowledge) {
-                    acknowledged.add(batch);
-                }
+            } else if (sendBuffer.completeClaim(batch)) {
+                acknowledged.add(batch);
             }
         }
         // Resolve every claim before a window callback can publish more work.
@@ -788,19 +699,6 @@ final class IndexSender implements AutoCloseable {
                 batch.window().onBatchAcked();
             }
         }
-    }
-
-    private void retryOversizedBatch(IndexBatch batch, SizeAccumulator size) {
-        RecordTooLargeException failure = size.oversizedFailure(batch, maxTransportRequestBytes);
-        if (batch.attempts() == 0) {
-            LOG.error(
-                    "Cannot send index batch from {} to {}; retrying with backoff until "
-                            + "the cluster request limit is adjusted",
-                    batch.sourceBucket(),
-                    batch.targetBucket(),
-                    failure);
-        }
-        retryClaimedBatch(batch);
     }
 
     private void discardClaimedBatch(IndexBatch batch) {

@@ -95,8 +95,8 @@ public final class KvSnapshotFileMetadataJsonSerde
         if (metadata.getRowCount() != null) {
             generator.writeNumberField(ROW_COUNT, metadata.getRowCount());
         }
-        if (metadata.getIndexPushedOffset() != null) {
-            generator.writeNumberField(INDEX_PUSHED_OFFSET, metadata.getIndexPushedOffset());
+        if (metadata.getAllIndexPushedOffset() != null) {
+            generator.writeNumberField(INDEX_PUSHED_OFFSET, metadata.getAllIndexPushedOffset());
         }
         if (metadata.getSyncIndexPushedOffset() != null) {
             generator.writeNumberField(

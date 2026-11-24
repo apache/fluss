@@ -84,13 +84,12 @@ public class CompactedKeyEncoder implements KeyEncoder {
                 new KeyEncodingRecycler<>(
                         CompactedKeyWriter::new,
                         CompactedKeyWriter::reset,
-                        CompactedKeyWriter::capacity);
+                        writer -> writer.segment().size());
     }
 
     @Override
     public byte[] encodeKey(InternalRow row) {
         CompactedKeyWriter compactedEncoder = keyWriterRecycler.borrow();
-        compactedEncoder.reset();
         try {
             // iterate all the fields of the row, and encode each field
             for (int i = 0; i < fieldGetters.length; i++) {

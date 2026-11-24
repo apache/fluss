@@ -108,8 +108,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
@@ -389,11 +387,9 @@ public class FlinkTableSource
     private static int[][] parseSecondaryIndexes(
             Map<String, String> tableOptions,
             org.apache.flink.table.types.logical.RowType tableOutputType) {
-        Pattern pattern = Pattern.compile("secondary-index\\.([A-Za-z0-9_]+)\\.columns");
         List<int[]> indexList = new ArrayList<>();
         for (Map.Entry<String, String> entry : tableOptions.entrySet()) {
-            Matcher matcher = pattern.matcher(entry.getKey());
-            if (matcher.matches()) {
+            if (FlinkConversions.isSecondaryIndexColumnsOption(entry.getKey())) {
                 List<String> columnList = SecondaryIndexColumnNames.decode(entry.getValue());
                 int[] columnIndexes = new int[columnList.size()];
                 for (int i = 0; i < columnList.size(); i++) {

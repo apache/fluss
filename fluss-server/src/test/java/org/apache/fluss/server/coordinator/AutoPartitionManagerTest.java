@@ -35,7 +35,6 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.testutils.TestingServerMetadataCache;
 import org.apache.fluss.server.zk.NOPErrorHandler;
-import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
@@ -133,7 +132,7 @@ class AutoPartitionManagerTest {
                     @Override
                     public void createPartition(
                             TablePath tablePath,
-                            long tableId,
+                            Schema tableSchema,
                             String remoteDir,
                             PartitionAssignment assignment,
                             ResolvedPartitionSpec partition,
@@ -154,7 +153,7 @@ class AutoPartitionManagerTest {
                         }
                         super.createPartition(
                                 tablePath,
-                                tableId,
+                                tableSchema,
                                 remoteDir,
                                 assignment,
                                 partition,
@@ -405,7 +404,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(params.startTimeMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -453,7 +451,7 @@ class AutoPartitionManagerTest {
         for (String partitionName : params.manualCreatedPartitions) {
             metadataManager.createPartition(
                     tablePath,
-                    tableId,
+                    table.getSchema(),
                     remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), partitionName),
@@ -500,7 +498,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -542,7 +539,7 @@ class AutoPartitionManagerTest {
                 new PartitionAssignment(table.getTableId(), bucketAssignments);
         metadataManager.createPartition(
                 tablePath,
-                table.getTableId(),
+                table.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2024-09-15"),
@@ -599,7 +596,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -644,7 +640,7 @@ class AutoPartitionManagerTest {
         for (int i = 20250101; i <= 20250104; i++) {
             metadataManager.createPartition(
                     tablePath,
-                    tableId,
+                    table.getSchema(),
                     remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), i + ""),
@@ -682,7 +678,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
@@ -733,7 +728,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
@@ -836,7 +830,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -941,7 +934,6 @@ class AutoPartitionManagerTest {
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
         ReplicaCapacityController capacityController = capacityControllerWithCapacity(16);
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
@@ -974,7 +966,6 @@ class AutoPartitionManagerTest {
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
         ReplicaCapacityController capacityController = capacityControllerWithCapacity(64);
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
@@ -992,7 +983,7 @@ class AutoPartitionManagerTest {
         PartitionAssignment partitionAssignment = partitionAssignment(table);
         metadataManager.createPartition(
                 tablePath,
-                table.getTableId(),
+                table.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2025042600"),
@@ -1000,7 +991,7 @@ class AutoPartitionManagerTest {
                 table.getNumBuckets());
         metadataManager.createPartition(
                 tablePath,
-                table.getTableId(),
+                table.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(table.getPartitionKeys(), "2025042601"),
@@ -1029,7 +1020,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -1078,7 +1068,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -1140,7 +1129,6 @@ class AutoPartitionManagerTest {
         ManualClock clock = new ManualClock(startMs);
         ManuallyTriggeredScheduledExecutorService periodicExecutor =
                 new ManuallyTriggeredScheduledExecutorService();
-        ZkEpoch zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("coordinator");
 
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
@@ -1420,7 +1408,7 @@ class AutoPartitionManagerTest {
                 new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
         metadataManager.createPartition(
                 tableInfo.getTablePath(),
-                tableInfo.getTableId(),
+                tableInfo.getSchema(),
                 remoteDataDir,
                 partitionAssignment,
                 fromPartitionName(tableInfo.getPartitionKeys(), partitionName),
