@@ -82,6 +82,7 @@ impl FlussConnection {
             connections = connections.with_sasl(
                 arg.security_sasl_username.clone(),
                 arg.security_sasl_password.clone(),
+                arg.security_sasl_authorization_id.clone(),
             );
         }
         let connections = Arc::new(connections);

@@ -694,7 +694,7 @@ impl Metadata {
 
     pub(crate) fn with_sasl(mut self, username: &str, password: &str) -> Self {
         self.connections =
-            Arc::new(RpcClient::new().with_sasl(username.to_string(), password.to_string()));
+            Arc::new(RpcClient::new().with_sasl(username.to_string(), password.to_string(), None));
         self
     }
 }
