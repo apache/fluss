@@ -46,7 +46,10 @@ pub use reader::FlussLakeReader;
 pub use source::{LakePlannerContext, LakeReadSemantics, LakeReaderContext, LakeSource, LakeSplit};
 pub use split::FlussLakeReadSplit;
 pub use split_descriptor::FlussLakeSplitDescriptor;
-pub use streaming::{FlussLakeStreamScan, UnionReadEvent, UnionReadStream};
+pub use streaming::{
+    FlussLakeStreamReader, UnionReadChangeBatch, UnionReadCheckpoint, UnionReadEvent,
+    UnionReadStream,
+};
 pub use table::{FlussLakeScan, FlussLakeTable};
 
 /// A finite stream of Arrow record batches returned by a lake source.

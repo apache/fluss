@@ -418,7 +418,7 @@ impl FlussLakeScan {
         &self.table_path
     }
 
-    pub(crate) fn resolve_projection(&self, row_type: &RowType) -> Result<Option<Vec<usize>>> {
+    fn resolve_projection(&self, row_type: &RowType) -> Result<Option<Vec<usize>>> {
         let projection = match &self.projection {
             Some(FlussLakeProjection::Indices(projection)) => projection.clone(),
             Some(FlussLakeProjection::Names(names)) => {
@@ -552,13 +552,20 @@ pub(crate) fn validate_pk_union_merge_engine(table_info: &TableInfo) -> Result<(
                 table_info.table_path
             ))
         })?;
-    if let Some(merge_engine) = merge_engine {
+    if let Some(engine) = merge_engine
+        && !full_changelog(table_info)
+    {
         return Err(FlussLakeError::UnsupportedMergeEngine(format!(
-            "primary-key UnionRead only supports the default deduplicate semantics, but table {} uses table.merge-engine={merge_engine}",
-            table_info.table_path
+            "UnionRead with table.merge-engine={engine} requires a FULL changelog"
         )));
     }
     Ok(())
+}
+
+pub(crate) fn full_changelog(info: &TableInfo) -> bool {
+    info.properties
+        .get("table.changelog.image")
+        .is_none_or(|s| s.eq_ignore_ascii_case("full"))
 }
 
 pub(crate) fn physical_primary_key_indexes(table_info: &TableInfo) -> Result<Vec<usize>> {

@@ -823,7 +823,7 @@ async fn kv_snapshot_and_retained_tail_recover_the_frozen_pk_view() {
 
 #[tokio::test]
 async fn stream_append_reads_writes_made_during_bootstrap() {
-    use fluss::row::DataGetters;
+    use arrow::array::AsArray;
     use fluss_lake::UnionReadEvent::*;
 
     let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
@@ -849,41 +849,54 @@ async fn stream_append_reads_writes_made_during_bootstrap() {
     writer.flush().await.unwrap();
     let source = FlussLakeTable::new(conn.clone(), &path);
     let context = source.capture_read_context().await.unwrap();
-    let mut events = source
-        .new_stream_scan()
+    let narrow = source
+        .new_scan()
+        .with_filter(col("name").eq("west"))
+        .new_stream();
+    let mut narrow = narrow.start(&context).await.unwrap();
+    let Some(SnapshotFinished(cp)) = narrow.try_next().await.unwrap() else {
+        panic!("empty west partition")
+    };
+    assert_eq!(cp.next_offsets.len(), 1);
+    drop(narrow);
+    let reader = source
+        .new_scan()
         .with_projection_by_names(vec!["id".into()])
         .with_filter(col("name").is_in(["east", "west"]))
         .with_filter(col("id").gt(0_i32))
-        .start(&context)
-        .await
-        .unwrap();
+        .new_stream();
+    let mut events = reader.start(&context).await.unwrap();
     writer
         .append_arrow_batch(append_batch(vec![2, 3], vec!["east", "west"]))
         .unwrap();
     writer.flush().await.unwrap();
     let mut baseline = vec![];
-    loop {
+    let mut checkpoint = loop {
         match events.try_next().await.unwrap().unwrap() {
             Snapshot(batch) => baseline.extend(sorted_ids(&[batch])),
-            SnapshotFinished(_) => break,
-            Changes(_) => panic!("change before initial import"),
+            SnapshotFinished(cp) => break cp,
+            _ => panic!("change before initial import"),
         }
-    }
+    };
     assert_eq!(baseline, [1]);
     tokio::time::timeout(Duration::from_secs(15), async {
         let mut ids = vec![];
         while ids.len() < 2 {
-            let Changes(batch) = events.try_next().await.unwrap().unwrap() else {
-                panic!("unexpected bootstrap")
+            let Changes {
+                batches,
+                next_offsets,
+            } = events.try_next().await.unwrap().unwrap()
+            else {
+                panic!()
             };
-            ids.extend(
-                batch
-                    .into_iter()
-                    .map(|r| (r.offset(), r.row().get_int(0).unwrap())),
-            );
+            checkpoint.next_offsets.extend(next_offsets);
+            for b in batches {
+                assert!(b.change_types.is_none());
+                ids.extend(sorted_ids(&[b.batch]));
+            }
         }
         ids.sort_unstable();
-        assert_eq!(ids, [(0, 3), (1, 2)]);
+        assert_eq!(ids, [2, 3]);
     })
     .await
     .unwrap();
@@ -894,15 +907,17 @@ async fn stream_append_reads_writes_made_during_bootstrap() {
     writer.flush().await.unwrap();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let Changes(poll) = events.try_next().await.unwrap().unwrap() else {
-                panic!("unexpected bootstrap")
+            let Changes {
+                batches,
+                next_offsets,
+            } = events.try_next().await.unwrap().unwrap()
+            else {
+                panic!()
             };
-            assert_eq!(poll.count(), 0);
-            if poll
-                .records_by_buckets()
-                .keys()
-                .any(|b| poll.consumed_up_to_offset(b) == Some(3))
-            {
+            assert!(batches.is_empty());
+            let reached = next_offsets.values().any(|o| *o == 3);
+            checkpoint.next_offsets.extend(next_offsets);
+            if reached {
                 break;
             }
         }
@@ -915,13 +930,42 @@ async fn stream_append_reads_writes_made_during_bootstrap() {
     let result = tokio::time::timeout(Duration::from_secs(15), events.try_next())
         .await
         .unwrap();
-    assert!(matches!(result, Err(FlussLakeError::DataUnavailable(_))));
+    let Some(PartitionsDropped(dropped)) = result.unwrap() else {
+        panic!("expected a partition drop")
+    };
+    assert_eq!(dropped.len(), 1);
+    for (b, o) in dropped {
+        assert_eq!(o, 3);
+        assert_eq!(checkpoint.next_offsets.remove(&b), Some(o));
+    }
+    writer
+        .append_arrow_batch(append_batch(vec![4], vec!["west"]))
+        .unwrap();
+    writer.flush().await.unwrap();
+    for mut stream in [events, reader.resume(&context, checkpoint).await.unwrap()] {
+        let Some(Changes { batches, .. }) =
+            tokio::time::timeout(Duration::from_secs(15), stream.try_next())
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            batches[0]
+                .batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int32Type>()
+                .value(0),
+            4
+        );
+    }
 }
 
 #[tokio::test]
 async fn stream_pk_lake_handoff_and_checkpoint_resume() {
+    use arrow::array::AsArray;
     use fluss::record::ChangeType;
-    use fluss::row::DataGetters;
     use fluss_lake::UnionReadEvent::*;
 
     let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
@@ -947,18 +991,19 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
     let source = FlussLakeTable::new(conn.clone(), &path);
     let scan = || {
         source
-            .new_stream_scan()
+            .new_scan()
             .with_lake_source(Arc::new(Baseline(append_batch(vec![1], vec!["baseline"]))))
     };
-    let limited =
-        scan().with_memory_budget(Arc::new(fluss::client::LimitedReadMemoryBudget::new(0)));
+    let limited = scan()
+        .new_stream()
+        .with_memory_budget(Arc::new(fluss::client::LimitedReadMemoryBudget::new(0)));
     let mut failed = limited.start(&ctx).await.unwrap();
     assert!(matches!(
         failed.try_next().await,
         Err(FlussLakeError::MemoryLimitExceeded(_))
     ));
     assert!(failed.try_next().await.unwrap().is_none());
-    let source = scan();
+    let source = scan().new_stream();
     let mut events = source.start(&ctx).await.unwrap();
     writer.upsert(&pk_row(1, "updated")).unwrap().await.unwrap();
     writer.delete(&pk_row(2, "tail")).unwrap().await.unwrap();
@@ -975,12 +1020,12 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
         match events.try_next().await.unwrap().unwrap() {
             Snapshot(batch) => ids.extend(sorted_ids(&[batch])),
             SnapshotFinished(cp) => break cp,
-            Changes(_) => panic!("change before initial import"),
+            _ => panic!("change before initial import"),
         }
     };
     ids.sort();
     assert_eq!(ids, [1, 2]);
-    assert_eq!(checkpoint[&bucket], 2);
+    assert_eq!(checkpoint.next_offsets[&bucket], 2);
     // A missing-key delete advances the log without emitting a CDC row.
     writer.delete(&pk_row(99, "")).unwrap().await.unwrap();
     let stop = admin
@@ -988,32 +1033,34 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
         .await
         .unwrap()[&0];
     let mut changes = Vec::new();
-    let mut last_visible = None;
+
     tokio::time::timeout(Duration::from_secs(15), async {
-        while checkpoint[&bucket] < stop {
-            let Changes(batch) = events.try_next().await.unwrap().unwrap() else {
-                panic!("repeated bootstrap")
+        while checkpoint.next_offsets[&bucket] < stop {
+            let Changes {
+                batches,
+                next_offsets,
+            } = events.try_next().await.unwrap().unwrap()
+            else {
+                panic!()
             };
-            for record in batch.records(&bucket) {
-                last_visible = Some(record.offset());
-                changes.push((
-                    *record.change_type(),
-                    record.row().get_int(0).unwrap(),
-                    record.row().get_string(1).unwrap().to_string(),
-                ));
+            for b in batches {
+                for (i, k) in b.change_types.unwrap().into_iter().enumerate() {
+                    changes.push((
+                        k,
+                        b.batch
+                            .column(0)
+                            .as_primitive::<arrow::datatypes::Int32Type>()
+                            .value(i),
+                        b.batch.column(1).as_string::<i32>().value(i).to_owned(),
+                    ));
+                }
             }
-            checkpoint.insert(
-                bucket.clone(),
-                batch.consumed_up_to_offset(&bucket).unwrap(),
-            );
+            checkpoint.next_offsets.extend(next_offsets);
         }
     })
     .await
     .unwrap();
-    assert!(
-        checkpoint[&bucket] > last_visible.unwrap() + 1,
-        "empty CDC batch must advance the checkpoint"
-    );
+    assert_eq!(checkpoint.next_offsets[&bucket], stop);
     if changes
         .first()
         .is_some_and(|change| change.0 == ChangeType::UpdateBefore)
@@ -1036,26 +1083,44 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
         .unwrap()
         .await
         .unwrap();
+    for changed_view in [
+        scan().with_projection(vec![0]),
+        scan().with_filter(fluss::predicate::col("id").gt(1_i32)),
+    ] {
+        assert!(matches!(
+            changed_view
+                .new_stream()
+                .resume(&ctx, checkpoint.clone())
+                .await,
+            Err(FlussLakeError::InvalidReadContext(_))
+        ));
+    }
     let mut resumed = source.resume(&ctx, checkpoint.clone()).await.unwrap();
-    let Changes(batch) = tokio::time::timeout(Duration::from_secs(15), resumed.try_next())
+    let Some(Changes {
+        batches,
+        next_offsets,
+    }) = tokio::time::timeout(Duration::from_secs(15), resumed.try_next())
         .await
         .unwrap()
         .unwrap()
-        .unwrap()
     else {
-        panic!("repeated bootstrap")
+        panic!()
     };
-    let records = batch.records(&bucket);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].offset(), checkpoint[&bucket]);
-    assert_eq!(*records[0].change_type(), ChangeType::Insert);
-    assert_eq!(records[0].row().get_int(0).unwrap(), 3);
+    assert_eq!(next_offsets[&bucket], checkpoint.next_offsets[&bucket] + 1);
+    assert_eq!(
+        batches[0].change_types.as_deref(),
+        Some(&[ChangeType::Insert][..])
+    );
+    assert_eq!(
+        sorted_ids(&[batches.into_iter().next().unwrap().batch]),
+        [3]
+    );
 }
 
 #[tokio::test]
 async fn stream_filtered_pk_changes_after_restart() {
+    use arrow::array::AsArray;
     use fluss::record::ChangeType::*;
-    use fluss::row::DataGetters;
     use fluss_lake::UnionReadEvent::*;
 
     let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
@@ -1093,22 +1158,35 @@ async fn stream_filtered_pk_changes_after_restart() {
         )
         .unwrap();
         let source = FlussLakeTable::new(conn.clone(), &path)
-            .new_stream_scan()
-            .with_projection(vec![])
-            .with_filter(col("name").eq("yes"));
+            .new_scan()
+            .with_projection(vec![1])
+            .with_filter(col("name").eq("yes"))
+            .new_stream();
+        if image == "WAL" {
+            assert!(matches!(
+                source.start(&ctx).await,
+                Err(FlussLakeError::PlanningFailed(_))
+            ));
+            continue;
+        }
         let mut stream = source.start(&ctx).await.unwrap();
         let mut snapshot = vec![];
         let checkpoint = loop {
             match stream.try_next().await.unwrap().unwrap() {
                 Snapshot(b) => {
                     assert_eq!(b.num_columns(), 1);
-                    snapshot.extend(sorted_ids(&[b]));
+                    snapshot.extend(
+                        b.column(0)
+                            .as_string::<i32>()
+                            .iter()
+                            .map(|v| v.unwrap().to_owned()),
+                    );
                 }
                 SnapshotFinished(offsets) => break offsets,
-                Changes(_) => panic!("unexpected live rows"),
+                _ => panic!("unexpected live rows"),
             }
         };
-        assert_eq!(snapshot, [1]);
+        assert_eq!(snapshot, ["yes"]);
         drop(stream);
         for (id, name) in [(1, "no"), (2, "no-again"), (2, "yes")] {
             writer.upsert(&pk_row(id, name)).unwrap().await.unwrap();
@@ -1122,27 +1200,33 @@ async fn stream_filtered_pk_changes_after_restart() {
         let mut actual = vec![];
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
-                let Changes(poll) = stream.try_next().await.unwrap().unwrap() else {
-                    panic!("repeated bootstrap")
+                let Changes {
+                    batches,
+                    next_offsets,
+                } = stream.try_next().await.unwrap().unwrap()
+                else {
+                    panic!()
                 };
-                for r in poll.records(&bucket) {
-                    assert_eq!(r.row().get_record_batch().unwrap().num_columns(), 1);
-                    actual.push((r.row().get_int(0).unwrap(), *r.change_type()));
+                for b in batches {
+                    assert_eq!(b.batch.num_columns(), 1);
+                    let kinds = b.change_types.unwrap();
+                    assert_eq!(kinds.len(), b.batch.num_rows());
+                    assert!(
+                        b.batch
+                            .column(0)
+                            .as_string::<i32>()
+                            .iter()
+                            .all(|v| v == Some("yes"))
+                    );
+                    actual.extend(kinds);
                 }
-                if poll.consumed_up_to_offset(&bucket) == Some(end) {
+                if next_offsets.get(&bucket) == Some(&end) {
                     break;
                 }
             }
         })
         .await
         .unwrap();
-        if image == "WAL" {
-            assert_eq!(
-                actual,
-                [(1, Delete), (2, Delete), (2, UpdateAfter), (2, Delete)]
-            );
-        } else {
-            assert_eq!(actual, [(1, UpdateBefore), (2, UpdateAfter), (2, Delete)]);
-        }
+        assert_eq!(actual, [UpdateBefore, UpdateAfter, Delete]);
     }
 }

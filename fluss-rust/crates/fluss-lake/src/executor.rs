@@ -519,34 +519,41 @@ fn apply_filter_and_projection(
     };
     let projection = output_column_count.map(|count| (0..count).collect::<Vec<_>>());
     let process = move |batch: RecordBatch| {
-        let batch = if let Some(filter) = &evaluator {
-            let mask = filter
-                .evaluate_batch(&batch)
-                .map_err(predicate_evaluation_error)?;
-            match mask.true_count() {
-                0 => return Ok(None),
-                count if count == batch.num_rows() => batch,
-                _ => filter_record_batch(&batch, &mask).map_err(|error| {
-                    FlussLakeError::Internal(format!(
-                        "failed to apply filter to record batch: {error}"
-                    ))
-                })?,
-            }
-        } else {
-            batch
-        };
-        if let Some(indices) = &projection
-            && indices.len() != batch.num_columns()
-        {
-            return batch.project(indices).map(Some).map_err(|error| {
-                FlussLakeError::Internal(format!(
-                    "failed to strip hidden UnionRead columns after filtering: {error}"
-                ))
-            });
-        }
-        Ok(Some(batch))
+        let mask = evaluator
+            .as_ref()
+            .map(|f| f.evaluate_batch(&batch))
+            .transpose()
+            .map_err(predicate_evaluation_error)?;
+        select_output_rows(batch, mask.as_ref(), projection.as_deref())
     };
     Box::pin(stream.try_filter_map(move |batch| futures::future::ready(process(batch))))
+}
+
+/// Filter physical rows before removing any predicate-only columns.
+pub(crate) fn select_output_rows(
+    mut batch: RecordBatch,
+    mask: Option<&arrow::array::BooleanArray>,
+    projection: Option<&[usize]>,
+) -> Result<Option<RecordBatch>> {
+    if let Some(mask) = mask {
+        match mask.true_count() {
+            0 => return Ok(None),
+            n if n == batch.num_rows() => (),
+            _ => {
+                batch = filter_record_batch(&batch, mask).map_err(|e| {
+                    FlussLakeError::Internal(format!("failed to filter UnionRead batch: {e}"))
+                })?
+            }
+        }
+    }
+    if let Some(indices) = projection
+        && indices.len() != batch.num_columns()
+    {
+        batch = batch.project(indices).map_err(|e| {
+            FlussLakeError::Internal(format!("failed to project UnionRead batch: {e}"))
+        })?;
+    }
+    Ok(Some(batch))
 }
 
 /// Slices oversized batches so every emitted batch contains at most

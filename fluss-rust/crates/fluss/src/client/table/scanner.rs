@@ -442,6 +442,16 @@ impl<'a> TableScan<'a> {
         RecordBatchLogReader::new_from_ranges(self.batch_log_scanner(true)?, ranges).await
     }
 
+    /// Follow a fixed set of buckets from exclusive checkpoint positions, retaining
+    /// batch change types and progress even when the source has no visible rows.
+    pub fn create_follow_log_reader(
+        self,
+        offsets: HashMap<TableBucket, i64>,
+    ) -> Result<super::FollowLogReader> {
+        let admin = self.conn.get_admin()?;
+        super::FollowLogReader::new(self.batch_log_scanner(true)?, admin, offsets)
+    }
+
     fn batch_log_scanner(self, allow_primary_key: bool) -> Result<RecordBatchLogScanner> {
         self.reject_limit("RecordBatchLogScanner")?;
         validate_scan_support_inner(
@@ -740,11 +750,7 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_records(
-        &self,
-        timeout: Duration,
-        frozen_table: Option<TableId>,
-    ) -> Result<ScanRecords> {
+    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
         // Pairs record_poll_start (now) with record_poll_end
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
@@ -754,14 +760,12 @@ impl LogScannerInner {
 
         loop {
             // Try to collect fetches
-            let fetch_result = self.poll_for_fetches(frozen_table).await?;
+            let fetch_result = self.poll_for_fetches().await?;
 
             if !fetch_result.is_empty() {
                 // We have data, send next round of fetches and return
                 // This enables pipelining while user processes the data
-                if frozen_table.is_none() {
-                    self.log_fetcher.refresh_metadata_in_background();
-                }
+                self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
                 return Ok(fetch_result);
             }
@@ -1088,13 +1092,7 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_for_fetches(&self, frozen_table: Option<TableId>) -> Result<ScanRecords> {
-        if frozen_table.is_some() {
-            // Refresh missing leaders even when another bucket keeps the buffer full.
-            // A confirmed source loss must reach the caller, not a background log.
-            self.log_fetcher.send_fetches(frozen_table).await?;
-            return self.log_fetcher.collect_fetches().await;
-        }
+    async fn poll_for_fetches(&self) -> Result<ScanRecords> {
         let result = self.log_fetcher.collect_fetches().await?;
         if !result.is_empty() {
             return Ok(result);
@@ -1160,15 +1158,7 @@ impl LogScanner {
     /// Poll for records, returning collected records before a later fetch error.
     /// Deferred errors are discarded if the bucket is unsubscribed or its offset changes.
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
-        self.inner.poll_records(timeout, None).await
-    }
-
-    /// Poll a fixed bucket assignment. A metadata refresh confirming loss of an
-    /// assigned partition or replacement of its table fails the read.
-    pub async fn poll_frozen(&self, timeout: Duration) -> Result<ScanRecords> {
-        self.inner
-            .poll_records(timeout, Some(self.inner.table_id))
-            .await
+        self.inner.poll_records(timeout).await
     }
 
     pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
@@ -1220,6 +1210,15 @@ impl RecordBatchLogScanner {
     /// or its offset is changed before that poll.
     pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         Ok(self.poll_with_progress(timeout).await?.batches)
+    }
+
+    pub(super) async fn poll_follow(&self) -> Result<PolledBatches> {
+        // Surface missing leaders even when another bucket keeps the fetch buffer full.
+        let fetcher = &self.inner.log_fetcher;
+        fetcher
+            .check_and_update_metadata(&fetcher.fetchable_buckets(), Some(self.table_id()))
+            .await?;
+        self.poll_with_progress(DEFAULT_POLL_TIMEOUT).await
     }
 
     pub(super) async fn poll_with_progress(&self, timeout: Duration) -> Result<PolledBatches> {
@@ -4674,7 +4673,7 @@ mod tests {
                 assert!(polled.batches.is_empty());
                 assert_eq!(polled.consumed_up_to_offsets.get(&bucket), Some(&11));
             } else {
-                let polled = inner.poll_records(Duration::ZERO, None).await?;
+                let polled = inner.poll_records(Duration::ZERO).await?;
                 assert_eq!(polled.count(), 0);
                 assert_eq!(polled.consumed_up_to_offset(&bucket), Some(11));
             }

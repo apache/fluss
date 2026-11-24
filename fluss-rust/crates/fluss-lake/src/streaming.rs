@@ -18,95 +18,92 @@
 
 use crate::error::execution_client_error;
 use crate::executor::{PhysicalProjection, predicate_evaluation_error};
-use crate::table::validate_pk_union_merge_engine;
-use crate::{
-    FlussLakeError, FlussLakeReadContext, FlussLakeScan, FlussLakeTable, LakeSource, Result,
-};
-use arrow::array::Array;
+use crate::table::full_changelog;
+use crate::{FlussLakeError, FlussLakeReadContext, FlussLakeScan, Result};
 use arrow::record_batch::RecordBatch;
-use fluss::client::{FlussTable, ReadMemoryBudget};
-use fluss::metadata::{RowType, TableBucket};
-use fluss::predicate::{BoundPredicate, Predicate, PredicateEvaluator};
-use fluss::record::{ChangeType, ScanRecord, ScanRecords};
-use fluss::row::ColumnarRow;
+use fluss::client::{FlussTable, FollowLogEvent, ReadMemoryBudget};
+use fluss::metadata::TableBucket;
+use fluss::predicate::{BoundPredicate, PredicateEvaluator};
+use fluss::record::{ChangeType, ScanBatch};
 use futures::stream::{self, BoxStream};
 use futures::{StreamExt, TryStreamExt};
+use prost::Message;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+
+/// Progress after a committed bootstrap. Persist both fields with the sink output.
+#[derive(Clone, Debug)]
+pub struct UnionReadCheckpoint {
+    /// Identity of the frozen boundary, exact filter, and ordered output columns.
+    pub view_digest: [u8; 32],
+    /// Next unread offset per bucket, including advances from empty output batches.
+    pub next_offsets: HashMap<TableBucket, i64>,
+}
 
 /// Initial import and subsequent changes for the captured buckets.
 pub enum UnionReadEvent {
     /// Rows in the bounded view. Stage these until the bootstrap is complete.
     Snapshot(RecordBatch),
     /// All snapshot rows have been emitted. Commit them with these next offsets.
-    SnapshotFinished(HashMap<TableBucket, i64>),
-    /// Ordered within each bucket. Commit each poll's [`ScanRecords::consumed_up_to_offset`] with
-    /// its output, including progress for buckets with no visible rows.
-    Changes(ScanRecords),
+    SnapshotFinished(UnionReadCheckpoint),
+    /// Commit all batches and their exclusive source offsets together. Progress can
+    /// advance even when no row passes the predicate.
+    Changes {
+        batches: Vec<UnionReadChangeBatch>,
+        next_offsets: HashMap<TableBucket, i64>,
+    },
+    /// Remove these buckets from the checkpoint. The positions are the next unread
+    /// offsets, not proof that the dropped partitions were fully consumed.
+    PartitionsDropped(HashMap<TableBucket, i64>),
+}
+
+/// A physically filtered and projected Arrow batch from one bucket.
+pub struct UnionReadChangeBatch {
+    pub bucket: TableBucket,
+    pub batch: RecordBatch,
+    /// One kind per output row for PK tables; absent for append tables.
+    pub change_types: Option<Vec<ChangeType>>,
 }
 
 /// Dropping the stream releases its scanner and pending bootstrap work.
 pub type UnionReadStream = BoxStream<'static, Result<UnionReadEvent>>;
 
 /// A fixed-schema, fixed-scope snapshot followed by changes to the same view.
-pub struct FlussLakeStreamScan {
+pub struct FlussLakeStreamReader {
     scan: FlussLakeScan,
     memory_budget: Option<Arc<dyn ReadMemoryBudget>>,
 }
 
-impl FlussLakeTable {
-    /// Start or resume a fixed-scope streaming import.
-    pub fn new_stream_scan(&self) -> FlussLakeStreamScan {
-        FlussLakeStreamScan {
-            scan: self.new_scan(),
+impl FlussLakeScan {
+    /// Open a snapshot-and-follow reader using this scan's configuration.
+    pub fn new_stream(&self) -> FlussLakeStreamReader {
+        FlussLakeStreamReader {
+            scan: self.clone(),
             memory_budget: None,
         }
     }
 }
 
-impl FlussLakeStreamScan {
-    /// Use the same lake source as the corresponding bounded scan.
-    pub fn with_lake_source(mut self, source: Arc<dyn LakeSource>) -> Self {
-        self.scan = self.scan.with_lake_source(source);
-        self
-    }
-
-    /// Project output columns in order. Missing primary-key columns follow the
-    /// requested columns so both snapshot rows and deletes identify their key.
-    pub fn with_projection(mut self, fields: Vec<usize>) -> Self {
-        self.scan = self.scan.with_projection(fields);
-        self
-    }
-
-    /// Select output columns by name, with the same key retention as `with_projection`.
-    pub fn with_projection_by_names(mut self, names: Vec<String>) -> Self {
-        self.scan = self.scan.with_projection_by_names(names);
-        self
-    }
-
-    /// Filter the snapshot and subsequent changes. With a mutable-field filter on
-    /// a WAL PK table, apply positives as upserts and deletes by key, even if the
-    /// key is absent. A delete does not carry a previous row image.
-    pub fn with_filter(mut self, predicate: Predicate) -> Self {
-        self.scan = self.scan.with_filter(predicate);
-        self
-    }
-
-    fn keyed_scan(&self, context: &FlussLakeReadContext) -> Result<FlussLakeScan> {
+impl FlussLakeStreamReader {
+    fn view_digest(&self, context: &FlussLakeReadContext) -> Result<[u8; 32]> {
+        let mut boundary = context.to_protobuf()?;
+        boundary
+            .log_ranges
+            .sort_by_key(|r| (r.partition_id, r.bucket_id));
         let schema = context.table_schema();
-        let scan = self.scan.clone();
-        Ok(match scan.resolve_projection(schema.row_type())? {
-            Some(mut projection) => {
-                for key in schema.primary_key_indexes() {
-                    if !projection.contains(&key) {
-                        projection.push(key);
-                    }
-                }
-                scan.with_projection(projection)
-            }
-            None => scan,
-        })
+        let bound = self.scan.bind(schema.row_type())?;
+        let mut digest = Sha256::new();
+        digest.update(Sha256::digest(boundary.encode_to_vec()));
+        digest.update(bound.filter_digest);
+        for index in bound
+            .projection
+            .unwrap_or_else(|| (0..schema.columns().len()).collect())
+        {
+            digest.update(schema.columns()[index].id().to_be_bytes());
+            digest.update((index as u64).to_be_bytes());
+        }
+        Ok(digest.finalize().into())
     }
 
     /// Limit retained PK state during bootstrap, as on the bounded reader.
@@ -117,20 +114,19 @@ impl FlussLakeStreamScan {
 
     /// Bootstrap from a captured boundary; then follow from each exclusive stop.
     pub async fn start(&self, context: &FlussLakeReadContext) -> Result<UnionReadStream> {
-        let scan = self.keyed_scan(context)?;
+        let scan = &self.scan;
+        let (changes, offsets) = self.follow(context, None).await?;
         let plan = scan.plan_with_context(context).await?;
         let mut reader = scan.new_reader();
         if let Some(budget) = &self.memory_budget {
             reader = reader.with_memory_budget(budget.clone());
         }
         let snapshot = reader.read_splits(plan.splits())?;
-        let offsets: HashMap<_, _> = context
-            .log_ranges()
-            .iter()
-            .map(|r| (r.table_bucket().clone(), r.stop_offset()))
-            .collect();
-        let changes = Self::follow(&scan, context, offsets.clone()).await?;
-        let marker = stream::iter([Ok(UnionReadEvent::SnapshotFinished(offsets))]);
+        let checkpoint = UnionReadCheckpoint {
+            view_digest: self.view_digest(context)?,
+            next_offsets: offsets,
+        };
+        let marker = stream::iter([Ok(UnionReadEvent::SnapshotFinished(checkpoint))]);
         Ok(crate::reader::stop_after_first_error(
             snapshot
                 .map_ok(UnionReadEvent::Snapshot)
@@ -141,83 +137,116 @@ impl FlussLakeStreamScan {
     }
 
     /// Resume only after the bootstrap was committed. Offsets are the next unread
-    /// positions for exactly the buckets in the original context. Restore the original
+    /// positions for the selected buckets, excluding confirmed partition drops. Restore the original
     /// projection and predicate; changing the view requires a fresh bootstrap.
     pub async fn resume(
         &self,
         context: &FlussLakeReadContext,
-        offsets: HashMap<TableBucket, i64>,
+        checkpoint: UnionReadCheckpoint,
     ) -> Result<UnionReadStream> {
-        Self::follow(&self.keyed_scan(context)?, context, offsets).await
+        if self.view_digest(context)? != checkpoint.view_digest {
+            return Err(FlussLakeError::InvalidReadContext(
+                "stream checkpoint belongs to a different boundary, filter or projection".into(),
+            ));
+        }
+        Ok(self.follow(context, Some(checkpoint.next_offsets)).await?.0)
     }
 
     async fn follow(
-        scan: &FlussLakeScan,
+        &self,
         context: &FlussLakeReadContext,
-        offsets: HashMap<TableBucket, i64>,
-    ) -> Result<UnionReadStream> {
-        let ranges = context.log_ranges();
-        if context.is_lake_only()
-            || offsets.len() != ranges.len()
-            || ranges.iter().any(|r| {
-                offsets
-                    .get(r.table_bucket())
-                    .is_none_or(|o| *o < r.stop_offset())
-            })
-        {
+        resume: Option<HashMap<TableBucket, i64>>,
+    ) -> Result<(UnionReadStream, HashMap<TableBucket, i64>)> {
+        let scan = &self.scan;
+        scan.validate_configuration()?;
+        if scan.lake_only() || context.is_lake_only() || scan.table_path() != context.table_path() {
             return Err(FlussLakeError::InvalidReadContext(
-                "follow offsets must cover the captured buckets at or after their stops".into(),
+                "follow requires a union boundary for the same table".into(),
             ));
         }
         let connection = scan.connection();
-        let live = connection
-            .get_table(scan.table_path())
-            .await
-            .map_err(|e| execution_client_error("open follow table", e))?;
-        let info = context.table_info(live.get_table_info())?;
-        if info.has_primary_key() {
-            validate_pk_union_merge_engine(&info)?;
+        let admin = connection
+            .get_admin()
+            .map_err(|e| execution_client_error("open admin", e))?;
+        let info = context.table_info(
+            &admin
+                .get_table_info(scan.table_path())
+                .await
+                .map_err(|e| execution_client_error("open follow table", e))?,
+        )?;
+        if info.has_primary_key() && !full_changelog(&info) {
+            return Err(FlussLakeError::PlanningFailed(
+                "streaming UnionRead on a primary-key table requires table.changelog.image=FULL"
+                    .into(),
+            ));
         }
         let row_type = info.row_type();
         let bound = scan.bind(row_type)?;
+        let offsets: HashMap<_, _> = {
+            let mut select = crate::planner::bucket_selector(context, &info, &bound.filter)?;
+            let partitions = crate::pruning::PartitionPruner::new(
+                row_type,
+                context.partition_keys(),
+                &bound.filter,
+            );
+            context
+                .log_ranges()
+                .iter()
+                .filter(|r| {
+                    let crate::FlussLakeLogPartition::Ordinary(p) = r.partition();
+                    select(r.table_bucket().bucket_id(), r.bucket_count())
+                        && partitions.partition_identity_may_match(p)
+                })
+                .map(|r| (r.table_bucket().clone(), r.stop_offset()))
+                .collect()
+        };
+        let offsets = if let Some(restored) = resume {
+            if restored
+                .iter()
+                .any(|(b, o)| offsets.get(b).is_none_or(|min| o < min))
+            {
+                return Err(FlussLakeError::InvalidReadContext(
+                    "invalid follow checkpoint bucket or offset".into(),
+                ));
+            }
+            if restored.len() != offsets.len() {
+                if !info.is_partitioned() {
+                    return Err(FlussLakeError::InvalidReadContext(
+                        "follow checkpoint omits a live bucket".into(),
+                    ));
+                }
+                // An omitted bucket is valid only if its original partition ID is gone.
+                let live = admin
+                    .list_partition_infos(scan.table_path())
+                    .await
+                    .map_err(|e| execution_client_error("check retired partitions", e))?;
+                context.validate_table(
+                    &admin
+                        .get_table_info(scan.table_path())
+                        .await
+                        .map_err(|e| execution_client_error("recheck follow table", e))?,
+                )?;
+                let ids: std::collections::HashSet<_> =
+                    live.iter().map(|p| p.get_partition_id()).collect();
+                if offsets.keys().any(|b| {
+                    !restored.contains_key(b) && b.partition_id().is_none_or(|id| ids.contains(&id))
+                }) {
+                    return Err(FlussLakeError::InvalidReadContext(
+                        "follow checkpoint omits a live bucket".into(),
+                    ));
+                }
+            }
+            restored
+        } else {
+            offsets
+        };
         let physical =
             PhysicalProjection::resolve(row_type, bound.projection.as_deref(), &bound.filter, &[])?;
-        let is_pk = info.has_primary_key();
-        let wal = is_pk
-            && info
-                .properties
-                .get("table.changelog.image")
-                .is_some_and(|s| s.eq_ignore_ascii_case("wal"));
-        let keys = info.schema.primary_key_indexes();
-        let mutable_wal_filter = wal
-            && bound
-                .filter
-                .referenced_field_indexes()
-                .iter()
-                .any(|i| !keys.contains(i));
-        let pushdown = if is_pk {
-            None
-        } else {
-            bound.filter.to_pushdown_predicate()
-        };
-        let output = bound
+        let projection = bound
             .projection
             .as_ref()
-            .filter(|p| p.len() < physical.field_indexes.len())
-            .map(|p| {
-                row_type
-                    .project(p)
-                    .map(|r| (Arc::new(r), (0..p.len()).collect::<Vec<_>>()))
-            })
-            .transpose()
-            .map_err(predicate_evaluation_error)?;
-        let filter = match bound.filter {
-            BoundPredicate::AlwaysTrue => None,
-            f => Some(f.into_evaluator().map_err(predicate_evaluation_error)?),
-        };
-        if offsets.is_empty() {
-            return Ok(stream::empty().boxed());
-        }
+            .filter(|p| p.len() != physical.field_indexes.len())
+            .map(|p| (0..p.len()).collect());
         let table = FlussTable::new(connection, connection.get_metadata(), info);
         let mut log = table.new_scan();
         if bound.projection.is_some() {
@@ -225,129 +254,104 @@ impl FlussLakeStreamScan {
                 .project(&physical.field_indexes)
                 .map_err(predicate_evaluation_error)?;
         }
-        if let Some(prune) = pushdown {
-            log = log.filter(prune).map_err(predicate_evaluation_error)?;
+        if !table.get_table_info().has_primary_key()
+            && let Some(filter) = bound.filter.to_pushdown_predicate()
+        {
+            log = log.filter(filter).map_err(predicate_evaluation_error)?;
         }
-        let transform = FollowRows {
-            filter,
-            output,
-            mutable_wal_filter,
+        let reader = log
+            .create_follow_log_reader(offsets.clone())
+            .map_err(|e| execution_client_error("open follow reader", e))?;
+        let transform = FollowBatches {
+            filter: match bound.filter {
+                BoundPredicate::AlwaysTrue => None,
+                f => Some(f.into_evaluator().map_err(predicate_evaluation_error)?),
+            },
+            projection,
+            max_size: scan.max_batch_size(),
         };
-        let scanner = log
-            .create_log_scanner()
-            .map_err(|e| execution_client_error("create follow scanner", e))?;
-        if live.get_table_info().is_partitioned() {
-            let assignments = offsets
-                .iter()
-                .map(|(b, o)| {
-                    let id = b.partition_id().ok_or_else(|| {
-                        FlussLakeError::InvalidReadContext("missing follow partition ID".into())
-                    })?;
-                    Ok(((id, b.bucket_id()), *o))
-                })
-                .collect::<Result<_>>()?;
-            scanner.subscribe_partition_buckets(&assignments).await
-        } else {
-            scanner
-                .subscribe_buckets(&offsets.iter().map(|(b, o)| (b.bucket_id(), *o)).collect())
-                .await
-        }
-        .map_err(|e| execution_client_error("subscribe follow buckets", e))?;
-        Ok(
-            stream::try_unfold((scanner, transform), |(scanner, transform)| async move {
-                loop {
-                    let changes = scanner
-                        .poll_frozen(Duration::from_millis(500))
-                        .await
-                        .map_err(|e| execution_client_error("read live changelog", e))?;
-                    if !changes.is_empty() {
-                        let changes = if transform.filter.is_some() || transform.output.is_some() {
-                            changes.try_map_bucket_records(|rows| transform.apply(rows))?
-                        } else {
-                            changes
-                        };
-                        return Ok(Some((
-                            UnionReadEvent::Changes(changes),
-                            (scanner, transform),
-                        )));
+        let changes =
+            stream::try_unfold((reader, transform), |(mut reader, transform)| async move {
+                let event = match reader
+                    .next_event()
+                    .await
+                    .map_err(|e| execution_client_error("read live changelog", e))?
+                {
+                    None => return Ok(None),
+                    Some(FollowLogEvent::PartitionsDropped(d)) => {
+                        UnionReadEvent::PartitionsDropped(d)
                     }
-                }
+                    Some(FollowLogEvent::Data {
+                        batches,
+                        next_offsets,
+                    }) => {
+                        let mut output = Vec::new();
+                        for batch in batches {
+                            transform.apply(batch, &mut output)?;
+                        }
+                        UnionReadEvent::Changes {
+                            batches: output,
+                            next_offsets,
+                        }
+                    }
+                };
+                Ok(Some((event, (reader, transform))))
             })
-            .boxed(),
-        )
+            .boxed();
+        Ok((changes, offsets))
     }
 }
 
-struct FollowRows {
+struct FollowBatches {
     filter: Option<PredicateEvaluator>,
-    output: Option<(Arc<RowType>, Vec<usize>)>,
-    mutable_wal_filter: bool,
+    projection: Option<Vec<usize>>,
+    max_size: Option<usize>,
 }
 
-impl FollowRows {
-    fn apply(&self, rows: &[ScanRecord]) -> Result<Vec<ScanRecord>> {
-        let mut result = Vec::with_capacity(rows.len());
-        // Rows from one decoded Arrow batch share its predicate mask and projected cursor.
-        for group in rows.chunk_by(|a, b| {
-            a.row()
-                .get_record_batch()
-                .zip(b.row().get_record_batch())
-                .is_some_and(|(a, b)| std::ptr::eq(a, b))
-        }) {
-            let batch = group[0].row().get_record_batch().ok_or_else(|| {
-                FlussLakeError::Internal("follow record has no backing batch".into())
-            })?;
-            let mask = self
-                .filter
-                .as_ref()
-                .map(|f| f.evaluate_batch(batch))
-                .transpose()
-                .map_err(predicate_evaluation_error)?;
-            let cursor = self
-                .output
-                .as_ref()
-                .map(|(row_type, columns)| {
-                    let batch = batch
-                        .project(columns)
-                        .map_err(|e| FlussLakeError::SchemaIncompatible(e.to_string()))?;
-                    ColumnarRow::new(Arc::new(batch), row_type.clone(), 0, None)
-                        .map_err(predicate_evaluation_error)
-                })
-                .transpose()?;
-            for record in group {
-                let index = record.row().get_row_id();
-                let matches = mask
-                    .as_ref()
-                    .is_none_or(|m| m.is_valid(index) && m.value(index));
-                let kind = if self.mutable_wal_filter {
-                    match record.change_type() {
-                        ChangeType::Insert | ChangeType::UpdateAfter if matches => {
-                            ChangeType::UpdateAfter
-                        }
-                        ChangeType::Insert | ChangeType::UpdateAfter | ChangeType::Delete => {
-                            ChangeType::Delete
-                        }
-                        other => {
-                            return Err(FlussLakeError::SchemaIncompatible(format!(
-                                "unexpected WAL change type: {other}"
-                            )));
-                        }
-                    }
-                } else if matches {
-                    *record.change_type()
-                } else {
-                    continue;
-                };
-                let mut row = cursor.as_ref().unwrap_or(record.row()).clone();
-                row.set_row_id(index);
-                result.push(ScanRecord::new(
-                    row,
-                    record.offset(),
-                    record.timestamp(),
-                    kind,
-                ));
+impl FollowBatches {
+    fn apply(&self, source: ScanBatch, out: &mut Vec<UnionReadChangeBatch>) -> Result<()> {
+        let bucket = source.bucket().clone();
+        let mask = self
+            .filter
+            .as_ref()
+            .map(|f| f.evaluate_batch(source.batch()))
+            .transpose()
+            .map_err(predicate_evaluation_error)?;
+        let types = source.change_types().map(|kinds| match &mask {
+            Some(m) => kinds
+                .iter()
+                .zip(m.iter())
+                .filter_map(|(k, pass)| (pass == Some(true)).then_some(*k))
+                .collect::<Vec<_>>(),
+            None => kinds.to_vec(),
+        });
+        let Some(batch) = crate::executor::select_output_rows(
+            source.into_batch(),
+            mask.as_ref(),
+            self.projection.as_deref(),
+        )?
+        else {
+            return Ok(());
+        };
+        let limit = self.max_size.unwrap_or(usize::MAX);
+        if batch.num_rows() <= limit {
+            if batch.num_rows() > 0 {
+                out.push(UnionReadChangeBatch {
+                    bucket,
+                    batch,
+                    change_types: types,
+                });
+            }
+        } else {
+            for i in (0..batch.num_rows()).step_by(limit) {
+                let n = limit.min(batch.num_rows() - i);
+                out.push(UnionReadChangeBatch {
+                    bucket: bucket.clone(),
+                    batch: batch.slice(i, n),
+                    change_types: types.as_ref().map(|v| v[i..i + n].to_vec()),
+                });
             }
         }
-        Ok(result)
+        Ok(())
     }
 }

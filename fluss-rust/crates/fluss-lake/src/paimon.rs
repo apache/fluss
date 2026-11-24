@@ -799,7 +799,7 @@ fn ensure_last_write_wins(
     let sequence_fields = core_options.sequence_fields();
     if !sequence_fields.is_empty() {
         return Err(FlussLakeError::NotLakeReadable(format!(
-            "the Paimon table for {table_path} orders versions of a key by sequence.field '{}'; matching Fluss needs the VERSIONED merge engine on that column, which UnionRead does not support yet",
+            "the Paimon table for {table_path} orders versions of a key by sequence.field '{}'; UnionRead does not verify equivalence between Paimon sequence ordering and Fluss VERSIONED ordering",
             sequence_fields.join(",")
         )));
     }
