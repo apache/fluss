@@ -20,6 +20,7 @@ package org.apache.fluss.flink.lake;
 
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -173,6 +174,188 @@ class LakeSplitSerializerTest {
         assertThat(result.getCurrentLakeSplitIndex()).isEqualTo(1);
         assertThat(result.getRecordsToSkip()).isEqualTo(2);
         assertThat(result.isLakeSplitFinished()).isEqualTo(true);
+    }
+
+    @Test
+    void testUnfinishedStreamingHybridSplitKeepsLakeMetadata() throws IOException {
+        LakeSnapshotAndFlussLogSplit original =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        "2025-08-18",
+                        Collections.singletonList(LAKE_SPLIT),
+                        EARLIEST_OFFSET,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        2L,
+                        0,
+                        false);
+
+        DataOutputSerializer output = new DataOutputSerializer(64);
+        serializer.serialize(output, original);
+
+        SourceSplitBase decoded =
+                serializer.deserialize(
+                        LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                        tableBucket,
+                        "2025-08-18",
+                        new DataInputDeserializer(output.getCopyOfBuffer()),
+                        true);
+
+        LakeSnapshotAndFlussLogSplit restored = (LakeSnapshotAndFlussLogSplit) decoded;
+        assertThat(restored.isStreaming()).isTrue();
+        assertThat(restored.isLakeSplitFinished()).isFalse();
+        assertThat(restored.getLakeSplits()).containsExactly(LAKE_SPLIT);
+        assertThat(restored.getRecordsToSkip()).isEqualTo(2L);
+    }
+
+    @Test
+    void testDeserializeLegacyCompletedStreamingHybridSplit() throws IOException {
+        // Reproduce the existing serialized layout containing completed lake metadata.
+        byte[] lakeBytes = sourceSplitSerializer.serialize(LAKE_SPLIT);
+        DataOutputSerializer legacy = new DataOutputSerializer(64);
+        legacy.writeInt(sourceSplitSerializer.getVersion());
+        legacy.writeBoolean(true);
+        legacy.writeInt(1);
+        legacy.writeInt(lakeBytes.length);
+        legacy.write(lakeBytes);
+        legacy.writeLong(EARLIEST_OFFSET);
+        legacy.writeLong(LogSplit.NO_STOPPING_OFFSET);
+        legacy.writeLong(2L);
+        legacy.writeInt(0);
+        legacy.writeBoolean(true);
+
+        SourceSplitBase decoded =
+                serializer.deserialize(
+                        LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                        tableBucket,
+                        "2025-08-18",
+                        new DataInputDeserializer(legacy.getCopyOfBuffer()),
+                        true);
+
+        LakeSnapshotAndFlussLogSplit restored = (LakeSnapshotAndFlussLogSplit) decoded;
+        assertThat(restored.isStreaming()).isTrue();
+        assertThat(restored.isLakeSplitFinished()).isTrue();
+        assertThat(restored.getLakeSplits()).containsExactly(LAKE_SPLIT);
+        assertThat(restored.getStartingOffset()).isEqualTo(EARLIEST_OFFSET);
+        assertThat(restored.getRecordsToSkip()).isEqualTo(2L);
+        assertThat(restored.getCurrentLakeSplitIndex()).isZero();
+
+        // The next checkpoint must discard obsolete metadata from the legacy split.
+        DataOutputSerializer compact = new DataOutputSerializer(64);
+        serializer.serialize(compact, restored);
+        assertThat(compact.getCopyOfBuffer().length).isLessThan(legacy.getCopyOfBuffer().length);
+
+        LakeSnapshotAndFlussLogSplit compactRestored =
+                (LakeSnapshotAndFlussLogSplit)
+                        serializer.deserialize(
+                                LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                                tableBucket,
+                                "2025-08-18",
+                                new DataInputDeserializer(compact.getCopyOfBuffer()),
+                                true);
+
+        assertThat(compactRestored.getLakeSplits()).isNull();
+        assertThat(compactRestored.isLakeSplitFinished()).isTrue();
+        assertThat(compactRestored.getStartingOffset()).isEqualTo(EARLIEST_OFFSET);
+    }
+
+    @Test
+    void testStreamingHybridWithoutLakeSnapshotRoundTrips() throws IOException {
+        LakeSnapshotAndFlussLogSplit original =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        "2025-08-18",
+                        null,
+                        EARLIEST_OFFSET,
+                        LogSplit.NO_STOPPING_OFFSET);
+
+        DataOutputSerializer output = new DataOutputSerializer(64);
+        serializer.serialize(output, original);
+
+        SourceSplitBase decoded =
+                serializer.deserialize(
+                        LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                        tableBucket,
+                        "2025-08-18",
+                        new DataInputDeserializer(output.getCopyOfBuffer()),
+                        true);
+
+        LakeSnapshotAndFlussLogSplit restored = (LakeSnapshotAndFlussLogSplit) decoded;
+        assertThat(restored.isStreaming()).isTrue();
+        assertThat(restored.isLakeSplitFinished()).isTrue();
+        assertThat(restored.getLakeSplits()).isNull();
+        assertThat(restored.getStartingOffset()).isEqualTo(EARLIEST_OFFSET);
+    }
+
+    @Test
+    void testCompletedStreamingCheckpointRemainsCompactWithManyLakeSplits() throws IOException {
+        LakeSnapshotAndFlussLogSplit active =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        "2025-08-18",
+                        Collections.nCopies(1_000, LAKE_SPLIT),
+                        42L,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        7L,
+                        0,
+                        false);
+
+        LakeSnapshotAndFlussLogSplit finished =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        "2025-08-18",
+                        Collections.nCopies(1_000, LAKE_SPLIT),
+                        42L,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        7L,
+                        1_000,
+                        true);
+
+        DataOutputSerializer activeOutput = new DataOutputSerializer(64);
+        serializer.serialize(activeOutput, active);
+
+        DataOutputSerializer finishedOutput = new DataOutputSerializer(64);
+        serializer.serialize(finishedOutput, finished);
+        byte[] finishedBytes = finishedOutput.getCopyOfBuffer();
+
+        assertThat(finishedBytes.length).isLessThan(128);
+        assertThat(activeOutput.getCopyOfBuffer().length).isGreaterThan(finishedBytes.length * 10);
+
+        LakeSnapshotAndFlussLogSplit restored =
+                (LakeSnapshotAndFlussLogSplit)
+                        serializer.deserialize(
+                                LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                                tableBucket,
+                                "2025-08-18",
+                                new DataInputDeserializer(finishedBytes),
+                                true);
+
+        assertThat(restored.isStreaming()).isTrue();
+        assertThat(restored.isLakeSplitFinished()).isTrue();
+        assertThat(restored.getLakeSplits()).isNull();
+        assertThat(restored.getStartingOffset()).isEqualTo(42L);
+        assertThat(restored.getRecordsToSkip()).isEqualTo(7L);
+        assertThat(restored.getCurrentLakeSplitIndex()).isEqualTo(1_000);
+
+        DataOutputSerializer repeatedOutput = new DataOutputSerializer(64);
+        serializer.serialize(repeatedOutput, restored);
+        assertThat(repeatedOutput.getCopyOfBuffer()).containsExactly(finishedBytes);
+
+        restored.updateWithStartingOffset(43L);
+        DataOutputSerializer nextOutput = new DataOutputSerializer(64);
+        serializer.serialize(nextOutput, restored);
+        assertThat(nextOutput.getCopyOfBuffer().length).isEqualTo(finishedBytes.length);
+
+        LakeSnapshotAndFlussLogSplit nextRestored =
+                (LakeSnapshotAndFlussLogSplit)
+                        serializer.deserialize(
+                                LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                                tableBucket,
+                                "2025-08-18",
+                                new DataInputDeserializer(nextOutput.getCopyOfBuffer()),
+                                true);
+
+        assertThat(nextRestored.getStartingOffset()).isEqualTo(43L);
+        assertThat(nextRestored.getLakeSplits()).isNull();
     }
 
     @Test

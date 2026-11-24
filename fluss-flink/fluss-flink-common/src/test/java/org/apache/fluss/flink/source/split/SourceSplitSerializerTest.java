@@ -17,12 +17,14 @@
 
 package org.apache.fluss.flink.source.split;
 
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.lake.source.TestingLakeSource;
 import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.core.memory.DataOutputSerializer;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -235,6 +237,49 @@ class SourceSplitSerializerTest {
         assertThat(deserializedSplit).isEqualTo(split);
         assertThat(deserializedSplit.isKvBatchSplit()).isTrue();
         assertThat(deserializedSplit.asKvBatchSplit().splitId()).isEqualTo(split.splitId());
+    }
+
+    @Test
+    void testCompletedStreamingHybridLakeSplitOmitsObsoleteMetadata() throws Exception {
+        TestingLakeSplit lakeSplit = new TestingLakeSplit(tableBucket.getBucket(), null);
+
+        LakeSnapshotAndFlussLogSplit activeSplit =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        null,
+                        Collections.singletonList(lakeSplit),
+                        42L,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        7L,
+                        0,
+                        false);
+
+        LakeSnapshotAndFlussLogSplit finishedSplit =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        null,
+                        Collections.singletonList(lakeSplit),
+                        42L,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        7L,
+                        0,
+                        true);
+
+        byte[] activeBytes = lakeSerializer.serialize(activeSplit);
+        byte[] finishedBytes = lakeSerializer.serialize(finishedSplit);
+
+        // Finished streaming checkpoints should omit obsolete lake metadata.
+        assertThat(finishedBytes.length).isLessThan(activeBytes.length);
+
+        LakeSnapshotAndFlussLogSplit restored =
+                (LakeSnapshotAndFlussLogSplit)
+                        lakeSerializer.deserialize(lakeSerializer.getVersion(), finishedBytes);
+
+        assertThat(restored.isStreaming()).isTrue();
+        assertThat(restored.isLakeSplitFinished()).isTrue();
+        assertThat(restored.getStartingOffset()).isEqualTo(42L);
+        assertThat(restored.getRecordsToSkip()).isEqualTo(7L);
+        assertThat(restored.getCurrentLakeSplitIndex()).isZero();
     }
 
     private static void assertLakeSnapshotSplit(
