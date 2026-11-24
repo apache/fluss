@@ -18,6 +18,7 @@
 //! Classification of native `fluss-rs` failures.
 
 use crate::backend::context::RequestContext;
+use crate::config::IdentityMode;
 use crate::error::{ErrorKind, GatewayError, Resource};
 use fluss::error::{Error as FlussClientError, FlussError};
 
@@ -26,8 +27,9 @@ pub(crate) fn map_fluss_error(
     what: &str,
     error: FlussClientError,
     ctx: Option<&RequestContext>,
+    identity_mode: IdentityMode,
 ) -> GatewayError {
-    let mapped = classify_fluss_error(what, &error);
+    let mapped = classify_fluss_error(what, &error, identity_mode);
     let level = match mapped.kind() {
         ErrorKind::Backend | ErrorKind::Internal => log::Level::Error,
         ErrorKind::Unavailable | ErrorKind::Unsupported => log::Level::Warn,
@@ -43,10 +45,14 @@ pub(crate) fn map_fluss_error(
 }
 
 /// Classifies a native failure without logging or exposing its detail.
-pub(crate) fn classify_fluss_error(what: &str, error: &FlussClientError) -> GatewayError {
+pub(crate) fn classify_fluss_error(
+    what: &str,
+    error: &FlussClientError,
+    identity_mode: IdentityMode,
+) -> GatewayError {
     error
         .api_error()
-        .and_then(|api_error| map_api_error(what, api_error))
+        .and_then(|api_error| map_api_error(what, api_error, identity_mode))
         .unwrap_or_else(|| match error {
             FlussClientError::UnsupportedOperation { .. }
             | FlussClientError::UnsupportedVersion { .. } => GatewayError::unsupported(format!(
@@ -74,7 +80,11 @@ pub(crate) fn classify_fluss_error(what: &str, error: &FlussClientError) -> Gate
 
 /// Maps the protocol error codes that carry a meaning of their own. `None` falls through to the
 /// transport-level classification.
-fn map_api_error(what: &str, api_error: FlussError) -> Option<GatewayError> {
+fn map_api_error(
+    what: &str,
+    api_error: FlussError,
+    identity_mode: IdentityMode,
+) -> Option<GatewayError> {
     Some(match api_error {
         FlussError::DatabaseNotExist => GatewayError::not_found(format!(
             "the database does not exist while trying to {what}"
@@ -158,7 +168,9 @@ fn map_api_error(what: &str, api_error: FlussError) -> Option<GatewayError> {
         FlussError::UnsupportedVersion => GatewayError::unsupported(format!(
             "Fluss does not support the request while trying to {what}"
         )),
-        // TODO: Map caller authorization failures to 403 when fluss-rs supports user mode.
+        FlussError::AuthorizationException if identity_mode == IdentityMode::User => {
+            GatewayError::unauthorized(format!("Fluss denied the user permission to {what}"))
+        }
         FlussError::AuthenticateException => {
             GatewayError::backend(format!("Fluss rejected the gateway while trying to {what}"))
         }
@@ -334,7 +346,7 @@ pub(crate) mod tests {
         for (native, expected_kind, expected_code) in cases {
             let api_error = native.api_error();
             let rendered = native.to_string();
-            let mapped = map_fluss_error(operation, native, Some(&ctx));
+            let mapped = map_fluss_error(operation, native, Some(&ctx), IdentityMode::Service);
             assert_eq!(mapped.kind(), expected_kind, "{rendered}");
             assert_eq!(mapped.code(), expected_code, "{rendered}");
             assert!(mapped.message().contains(operation), "{}", mapped.message());

@@ -43,6 +43,7 @@ Complete API reference for the Fluss Rust client.
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
 | `security_sasl_username`              | `String`        | (empty)            | SASL username (required when protocol is `sasl`)                                     |
 | `security_sasl_password`              | `String`        | (empty)            | SASL password (required when protocol is `sasl`)                                     |
+| `security_sasl_authorization_id`       | `Option<String>` | `None`            | SASL/PLAIN effective user; requires a server-side proxy grant. Unset or empty uses the authenticated user |
 
 ## `FlussConnection`
 

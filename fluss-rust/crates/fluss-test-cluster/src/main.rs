@@ -19,6 +19,7 @@ use clap::{Parser, Subcommand};
 use fluss::ServerType;
 use fluss::config::Config;
 use fluss_test_cluster::FlussTestingClusterBuilder;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -36,6 +37,9 @@ enum Command {
         name: String,
         #[arg(long)]
         sasl: bool,
+        /// Additional Fluss server properties as a JSON object.
+        #[arg(long, default_value = "{}", value_parser = |value: &str| serde_json::from_str::<HashMap<String, String>>(value))]
+        cluster_config: HashMap<String, String>,
         #[arg(long, default_value_t = 9123)]
         port: u16,
     },
@@ -51,10 +55,17 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Start { name, sasl, port } => {
+        Command::Start {
+            name,
+            sasl,
+            port,
+            cluster_config,
+        } => {
             eprintln!("Starting Fluss test cluster '{}'...", name);
 
-            let mut builder = FlussTestingClusterBuilder::new(&name).with_port(port);
+            let mut builder =
+                FlussTestingClusterBuilder::new_with_cluster_conf(&name, &cluster_config)
+                    .with_port(port);
 
             if sasl {
                 builder = builder.with_sasl(vec![

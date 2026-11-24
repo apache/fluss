@@ -23,7 +23,7 @@ use crate::backend::errors::{classify_fluss_error, map_fluss_error};
 use crate::backend::types::ClusterId;
 use crate::backend::unknown_cluster;
 use crate::backend::{FlussBackend, RowWriteError, WriteRequest, WriteResult};
-use crate::config::GatewayConfig;
+use crate::config::{GatewayConfig, IdentityMode};
 use crate::error::{ErrorKind, GatewayError, GatewayResult, Resource};
 use crate::observability;
 use async_trait::async_trait;
@@ -108,13 +108,14 @@ impl NativeFlussBackend {
                 Ok(admin) => operation(admin).await,
                 Err(error) => Err(error),
             };
-            result.map_err(|native| map_fluss_error(what, native, Some(ctx)))
+            result.map_err(|native| map_fluss_error(what, native, Some(ctx), cache.identity_mode))
         })
         .await
     }
 
     async fn submit_write(
         connection: &Arc<FlussConnection>,
+        identity_mode: IdentityMode,
         ctx: &RequestContext,
         request: WriteRequest,
     ) -> GatewayResult<WriteResult> {
@@ -123,7 +124,8 @@ impl NativeFlussBackend {
         let (table_info, rows, change_types, partial_update_columns) = request.into_parts();
         let table = FlussTable::new(connection.as_ref(), metadata, table_info);
         let row_count = rows.len() as u64;
-        let writer_error = |error| map_fluss_error("prepare the table writer", error, Some(ctx));
+        let writer_error =
+            |error| map_fluss_error("prepare the table writer", error, Some(ctx), identity_mode);
         let writer = if is_append {
             Writer::Append(
                 table
@@ -146,16 +148,17 @@ impl NativeFlussBackend {
             Writer::Upsert(upsert.create_writer().map_err(writer_error)?)
         };
 
-        let (mut failures, pending) =
-            tokio::task::spawn_blocking(move || submit_in_order(&writer, rows, change_types))
-                .await
-                .map_err(map_submit_join_error)?;
+        let (mut failures, pending) = tokio::task::spawn_blocking(move || {
+            submit_in_order(&writer, rows, change_types, identity_mode)
+        })
+        .await
+        .map_err(map_submit_join_error)?;
 
         let deadline = ctx.deadline();
         for (index, future) in pending {
             let error = match tokio::time::timeout_at(deadline.into(), future).await {
                 Ok(Ok(())) => continue,
-                Ok(Err(error)) => classify_unknown(error),
+                Ok(Err(error)) => classify_unknown(error, identity_mode),
                 Err(_) => GatewayError::new(ErrorKind::DeadlineExceeded, UNKNOWN_COMPLETION),
             };
             failures.push(RowWriteError { index, error });
@@ -310,7 +313,8 @@ impl FlussBackend for NativeFlussBackend {
         ctx: &RequestContext,
         request: WriteRequest,
     ) -> GatewayResult<WriteResult> {
-        let connection = ctx.run(self.cache_for(ctx)?.connection(ctx)).await?;
+        let cache = self.cache_for(ctx)?;
+        let connection = ctx.run(cache.connection(ctx)).await?;
         let row_count = request.rows().len() as u64;
         let table = request.table().clone();
         let current = connection
@@ -332,7 +336,7 @@ impl FlussBackend for NativeFlussBackend {
             .with_resource(Resource::Table));
         }
 
-        let result = Self::submit_write(&connection, ctx, request).await;
+        let result = Self::submit_write(&connection, cache.identity_mode, ctx, request).await;
         let stale = match &result {
             Err(error) => error.resource() == Some(Resource::Table),
             Ok(result) => result
@@ -358,6 +362,7 @@ fn submit_in_order(
     writer: &Writer,
     rows: Vec<GenericRow<'static>>,
     change_types: Vec<ChangeType>,
+    identity_mode: IdentityMode,
 ) -> (Vec<RowWriteError>, Vec<(usize, WriteResultFuture)>) {
     let mut failures = Vec::new();
     let mut pending = Vec::with_capacity(rows.len());
@@ -374,20 +379,20 @@ fn submit_in_order(
             Ok(future) => pending.push((index, future)),
             Err(error) => failures.push(RowWriteError {
                 index,
-                error: classify_rejected(error),
+                error: classify_rejected(error, identity_mode),
             }),
         }
     }
     (failures, pending)
 }
 
-fn classify_rejected(error: FlussClientError) -> GatewayError {
-    let failure = classify_fluss_error("write the row", &error);
+fn classify_rejected(error: FlussClientError, identity_mode: IdentityMode) -> GatewayError {
+    let failure = classify_fluss_error("write the row", &error, identity_mode);
     log::debug!("a write row was refused before submission: {error}");
     failure
 }
 
-fn classify_unknown(error: FlussClientError) -> GatewayError {
+fn classify_unknown(error: FlussClientError, identity_mode: IdentityMode) -> GatewayError {
     if matches!(
         error.api_error(),
         Some(
@@ -396,9 +401,9 @@ fn classify_unknown(error: FlussClientError) -> GatewayError {
                 | FlussError::TableNotExist
         )
     ) {
-        return classify_rejected(error);
+        return classify_rejected(error, identity_mode);
     }
-    let classified = classify_fluss_error("write the row", &error);
+    let classified = classify_fluss_error("write the row", &error, identity_mode);
     log::debug!("a submitted write row ended indeterminately: {error}");
     let failure = GatewayError::new(classified.kind(), UNKNOWN_COMPLETION);
     match classified.resource() {
@@ -455,8 +460,14 @@ mod tests {
 
     #[test]
     fn failures_after_submission_report_an_unknown_outcome() {
-        let rejected = classify_rejected(api_failure(FlussError::RequestTimeOut));
-        let unknown = classify_unknown(api_failure(FlussError::RequestTimeOut));
+        let rejected = classify_rejected(
+            api_failure(FlussError::RequestTimeOut),
+            IdentityMode::Service,
+        );
+        let unknown = classify_unknown(
+            api_failure(FlussError::RequestTimeOut),
+            IdentityMode::Service,
+        );
 
         assert_eq!(rejected.kind(), ErrorKind::DeadlineExceeded);
         assert!(!rejected.message().contains("unknown"));
@@ -472,11 +483,24 @@ mod tests {
             FlussError::TableNotExist,
         ] {
             assert!(
-                !classify_unknown(api_failure(error))
+                !classify_unknown(api_failure(error), IdentityMode::User)
                     .message()
                     .contains("unknown")
             );
         }
+    }
+
+    #[test]
+    fn user_acl_failures_reach_the_caller_as_forbidden() {
+        let denied = || api_failure(FlussError::AuthorizationException);
+        assert_eq!(
+            classify_unknown(denied(), IdentityMode::User).kind(),
+            ErrorKind::Unauthorized
+        );
+        assert_eq!(
+            classify_unknown(denied(), IdentityMode::Service).kind(),
+            ErrorKind::Backend
+        );
     }
 
     #[tokio::test]

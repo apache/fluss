@@ -280,6 +280,8 @@ async fn start_internal(
     for warning in config.warnings() {
         log::warn!("{warning}");
     }
+    let authenticator = crate::auth::build(&config.security)?;
+    let authentication = rest::auth::HttpAuthentication::new(&config.security, authenticator)?;
     observability::init_metrics(&config.server)?;
 
     let listener = bind_listener(config.server.rest.bind_address, "REST").await?;
@@ -300,11 +302,11 @@ async fn start_internal(
 
     let readiness = Arc::new(Readiness::new());
     let router = rest::build(
-        &config.server.rest,
-        &config.request_limits,
+        &config,
         backend.clone(),
         &readiness,
         local_addr,
+        authentication,
     );
     let header_read_timeout = config.server.rest.header_read_timeout.get();
     let connection_drain = connection_drain_budget(config.shutdown.drain_timeout.get());
@@ -431,7 +433,7 @@ async fn serve(
     let graceful = hyper_util::server::graceful::GracefulShutdown::new();
     let mut connections = JoinSet::new();
     loop {
-        let socket = tokio::select! {
+        let (socket, remote) = tokio::select! {
             biased;
             _ = shutdown.cancelled() => break,
             socket = accept_with_retry(&listener) => socket,
@@ -443,7 +445,13 @@ async fn serve(
         builder
             .timer(TokioTimer::new())
             .header_read_timeout(header_read_timeout);
-        let service = TowerToHyperService::new(router.clone());
+        let router_service = TowerToHyperService::new(router.clone());
+        let service = hyper::service::service_fn(
+            move |mut request: hyper::Request<hyper::body::Incoming>| {
+                request.extensions_mut().insert(remote);
+                hyper::service::Service::call(&router_service, request)
+            },
+        );
         // The non-upgradeable connection is what `graceful.watch` accepts; the gateway has no
         // upgrade-based protocol.
         let connection = graceful.watch(builder.serve_connection(TokioIo::new(socket), service));
@@ -483,10 +491,12 @@ async fn serve(
 /// The retry loop lives inside this future, as it does in `axum::serve`'s `Listener::accept`, so a
 /// signal arriving during the backoff cancels the wait rather than having to outlast it; both
 /// awaited operations are cancellation-safe.
-async fn accept_with_retry(listener: &tokio::net::TcpListener) -> tokio::net::TcpStream {
+async fn accept_with_retry(
+    listener: &tokio::net::TcpListener,
+) -> (tokio::net::TcpStream, std::net::SocketAddr) {
     loop {
         match listener.accept().await {
-            Ok((socket, _remote)) => return socket,
+            Ok(connection) => return connection,
             Err(error) => handle_accept_error(error).await,
         }
     }

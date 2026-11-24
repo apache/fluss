@@ -23,16 +23,27 @@ use crate::{impl_read_type, impl_write_type};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthenticateRequest {
     pub(crate) inner_request: ProtoAuthenticateRequest,
 }
 
+impl std::fmt::Debug for AuthenticateRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthenticateRequest")
+            .field("protocol", &self.inner_request.protocol)
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl AuthenticateRequest {
-    /// Build a SASL/PLAIN authenticate request.
-    /// Token format: `\0<username>\0<password>` (NUL-separated UTF-8).
-    pub fn new_plain(username: &str, password: &str) -> Self {
-        let mut token = Vec::with_capacity(1 + username.len() + 1 + password.len());
+    /// Build a SASL/PLAIN token: `[authorization_id]\0<username>\0<password>`.
+    pub fn new_plain(username: &str, password: &str, authorization_id: Option<&str>) -> Self {
+        let authorization_id = authorization_id.unwrap_or_default();
+        let mut token =
+            Vec::with_capacity(authorization_id.len() + 1 + username.len() + 1 + password.len());
+        token.extend_from_slice(authorization_id.as_bytes());
         token.push(0u8);
         token.extend_from_slice(username.as_bytes());
         token.push(0u8);
@@ -71,14 +82,43 @@ mod tests {
 
     #[test]
     fn test_new_plain_token_format() {
-        let req = AuthenticateRequest::new_plain("admin", "secret");
-        assert_eq!(req.inner_request.protocol, "PLAIN");
-        assert_eq!(req.inner_request.token, b"\0admin\0secret");
+        for (authorization_id, expected) in [
+            (None, "\0gateway\0secret"),
+            (Some(""), "\0gateway\0secret"),
+            (Some("alice"), "alice\0gateway\0secret"),
+            (Some("用户"), "用户\0gateway\0secret"),
+        ] {
+            let req = AuthenticateRequest::new_plain("gateway", "secret", authorization_id);
+            assert_eq!(req.inner_request.protocol, "PLAIN");
+            assert_eq!(req.inner_request.token, expected.as_bytes());
+            let mut encoded = Vec::new();
+            req.write(&mut encoded).unwrap();
+            let decoded = ProtoAuthenticateRequest::decode(encoded.as_slice()).unwrap();
+            assert_eq!(decoded.token, expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_debug_redacts_token() {
+        let req = AuthenticateRequest::new_plain(
+            "gateway-private",
+            "password-private",
+            Some("user-private"),
+        );
+        let challenge =
+            AuthenticateRequest::from_challenge("PLAIN", req.inner_request.token.clone());
+        for request in [req, challenge] {
+            let debug = format!("{request:?}");
+            for secret in ["gateway-private", "password-private", "user-private"] {
+                assert!(!debug.contains(secret));
+            }
+            assert!(!debug.contains(&format!("{:?}", request.inner_request.token)));
+        }
     }
 
     #[test]
     fn test_new_plain_empty_credentials() {
-        let req = AuthenticateRequest::new_plain("", "");
+        let req = AuthenticateRequest::new_plain("", "", None);
         assert_eq!(req.inner_request.token, b"\0\0");
     }
 }

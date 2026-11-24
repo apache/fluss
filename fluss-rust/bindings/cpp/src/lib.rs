@@ -1263,6 +1263,7 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
         security_sasl_username: config.security_sasl_username.to_string(),
         security_sasl_password: config.security_sasl_password.to_string(),
+        security_sasl_authorization_id: None,
         lookup_queue_size: config.lookup_queue_size,
         lookup_max_batch_size: config.lookup_max_batch_size,
         lookup_batch_timeout_ms: config.lookup_batch_timeout_ms,

@@ -46,20 +46,31 @@ currently supports:
   `POST /v1/clusters/{cluster}/databases/{database}/tables/{table}/records`,
   with per-entry outcomes.
 
-The backend runtime owns one shared service connection per configured cluster. A
-connection is opened lazily on the first request that needs it, shared by every
-request to that cluster, released after the configured
-`connection.idle-timeout`, and drained during shutdown. Concurrent cold requests
-serialize behind one connection attempt. Cancelling that request cancels its
-attempt and lets the next waiter retry; bootstrap timeout and retry behavior
-remain owned by `fluss-rust`.
-Connections use Fluss's default plaintext protocol unless
-`connection.security.protocol: sasl` selects the configured service account. A
-broken transport is left to the native client, which reconnects the affected
-server on its own.
-`connection.identity-mode: user` is refused at startup until Fluss supports
-act-as. Lookup and prefix-lookup APIs, HTTP caller authentication, and user
-identity propagation remain follow-up work.
+By default, the Gateway shares one native connection per configured cluster.
+Setting `connection.identity-mode: user` opens a connection for each verified
+HTTP principal. The Gateway uses the SASL/PLAIN service credentials and sends
+the principal's name as the authorization ID. Configure proxy grants on the
+Fluss listener and ACLs for the end users. User mode requires `password`,
+`token`, or `trusted-header` authentication and caps connections per cluster
+with `connection.max` (default 512).
+
+Connections open on demand, share concurrent dials for the same identity, and
+close on idle expiry or shutdown. Plaintext is the default in service mode.
+Lookup and prefix-lookup APIs remain follow-up work.
+
+HTTP caller authentication supports `trust` (anonymous or an optional Basic
+username), `password` (Basic with plaintext/bcrypt records), `token` (static
+Bearer tokens or SHA-256 digests), and `trusted-header` (a proxy identity checked
+against the real peer IP allowlist). See `conf/gateway.yaml` and the Gateway
+security documentation for configuration and deployment requirements. Native
+TLS termination is tracked separately in #4470.
+
+The `auth` module exposes a protocol-neutral `Authenticator` trait that resolves
+credentials to the existing `Principal`. The REST adapter owns HTTP credential
+extraction, challenges, proxy source policy, and OpenAPI declarations. Built-in
+authenticators are selected explicitly at startup; future frontends can use the
+same trait with their own credential exchange. This is an internal Rust API,
+not a dynamic plugin ABI.
 
 ## Distribution and container
 
@@ -107,7 +118,13 @@ helper from the `fluss-rust` workspace, creates catalog objects in a real Fluss
 cluster, then verifies the cluster, database, and table REST APIs through both
 its plaintext and SASL endpoints. Set `FLUSS_IMAGE` and `FLUSS_VERSION` to
 select the Fluss image; CI builds and uses `fluss:dev` from the same source
-revision.
+revision. To exercise per-user HTTP authorization against a local Fluss image
+that includes #3857, build the same helper and run from `fluss-gateway`:
+
+```sh
+FLUSS_IMAGE=fluss FLUSS_VERSION=c2448838dd2cb3999fcbec29d6b28d9bae2fb649 \
+  cargo test --locked --features integration_tests --test e2e_cluster user_mode_enforces_fluss_acls_for_each_http_caller -- --ignored
+```
 
 Plaintext is the default and must not carry service credentials. To use
 SASL/PLAIN, configure all three options explicitly:
