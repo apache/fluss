@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 /// Starting-position strategy for manually assigned log buckets.
 /// Fallbacks apply only to missing commits, never to authorization or RPC errors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OffsetsInitializer(Initializer);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Initializer {
     Earliest,
     Offset(i64),
@@ -71,8 +71,7 @@ impl OffsetsInitializer {
     }
 }
 
-/// Failure from a poll-triggered automatic commit. Poll returns no new records when this
-/// occurs. The source of `Error::UnexpectedError` retains these per-bucket outcomes.
+/// Failure while persisting the final offset snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum AutoCommitError {
     /// Request failure. A possibly late write restricts rewinds on its buckets.
@@ -99,44 +98,149 @@ impl AutoCommit {
         })
     }
 
-    pub(super) async fn before_poll(&self, group: &Arc<ConsumerGroup>) -> Result<()> {
-        if tokio::time::Instant::now() < *self.next.lock() {
-            return Ok(());
+    pub(super) fn before_poll(&self, group: &Arc<ConsumerGroup>) {
+        let now = tokio::time::Instant::now();
+        let mut next = self.next.lock();
+        if now < *next {
+            return;
         }
-        let offsets = group.delivered.lock().clone();
-        let result = async {
-            if !offsets.is_empty() {
-                let result = group
-                    .enqueue(offsets)
-                    .map_err(OffsetCommitError::Rejected)?
-                    .await
-                    .map_err(OffsetCommitError::from)??;
-                if result.values().any(|outcome| {
-                    !matches!(outcome, crate::client::OffsetCommitOutcome::Committed)
-                }) {
-                    return Err(AutoCommitError::Buckets(result));
-                }
+        *next = now + self.interval;
+        let offsets = group.delivered.lock();
+        if offsets.is_empty() {
+            return;
+        }
+        match group.enqueue(offsets.clone()) {
+            Ok(handle) => {
+                tokio::spawn(async move {
+                    if let Err(error) = Self::check(handle).await {
+                        log::warn!("Periodic offset commit failed: {error}");
+                    }
+                });
             }
+            Err(error) => log::warn!("Periodic offset commit not queued: {error}"),
+        }
+    }
+
+    async fn check(handle: OffsetCommitHandle) -> std::result::Result<(), AutoCommitError> {
+        let result = handle.await.map_err(OffsetCommitError::from)??;
+        if result
+            .values()
+            .any(|v| !matches!(v, crate::client::OffsetCommitOutcome::Committed))
+        {
+            Err(AutoCommitError::Buckets(result))
+        } else {
             Ok(())
         }
-        .await;
-        result.map_err(
-            |error: AutoCommitError| crate::error::Error::UnexpectedError {
-                message: error.to_string(),
-                source: Some(Box::new(error)),
-            },
-        )?;
-        *self.next.lock() = tokio::time::Instant::now() + self.interval;
-        Ok(())
+    }
+
+    pub(super) async fn finish(
+        group: &Arc<ConsumerGroup>,
+    ) -> std::result::Result<(), AutoCommitError> {
+        let snapshot = group.delivered.lock().clone();
+        Self::check(
+            group
+                .enqueue(snapshot)
+                .map_err(OffsetCommitError::Rejected)?,
+        )
+        .await
+    }
+}
+
+/// In-flight lookup survives short poll deadlines. A seek or unsubscribe invalidates
+/// its snapshot before it can change the scanner position.
+#[derive(Default)]
+pub(super) struct PendingStarts {
+    pub(super) buckets: HashMap<TableBucket, OffsetsInitializer>,
+    lookup: Option<tokio::task::JoinHandle<Result<HashMap<TableBucket, i64>>>>,
+}
+
+impl PendingStarts {
+    pub(super) fn forget(&mut self, bucket: &TableBucket) {
+        if self.buckets.remove(bucket).is_some()
+            && let Some(task) = self.lookup.take()
+        {
+            task.abort();
+        }
     }
 }
 
 impl LogScannerInner {
-    pub(super) async fn maybe_auto_commit(&self) -> Result<()> {
-        if let Some(auto) = &self.auto_commit {
-            auto.before_poll(self.group()?).await?;
+    pub(super) fn maybe_auto_commit(&self) {
+        if let (Some(auto), Some(group)) = (&self.auto_commit, &self.consumer_group) {
+            auto.before_poll(group);
+        }
+    }
+
+    pub(super) fn defer_committed(
+        &self,
+        buckets: &[TableBucket],
+        fallback: &OffsetsInitializer,
+    ) -> Result<()> {
+        self.check_no_active_reader()?;
+        self.validate_group_buckets(buckets)?;
+        self.group()?;
+        for bucket in buckets {
+            self.unassign_bucket(bucket);
+            self.pending_starts
+                .lock()
+                .buckets
+                .insert(bucket.clone(), fallback.clone());
+        }
+        // Previously pending buckets may share a lookup that did not include the additions.
+        if let Some(task) = self.pending_starts.lock().lookup.take() {
+            task.abort();
         }
         Ok(())
+    }
+
+    pub(super) async fn prepare_positions(
+        self: &Arc<Self>,
+        budget: std::time::Duration,
+    ) -> Result<bool> {
+        if self.consumer_group.is_none() || self.pending_starts.lock().buckets.is_empty() {
+            return Ok(true);
+        }
+        let wait = std::future::poll_fn(|cx| {
+            use std::task::{Poll, ready};
+            let mut pending = self.pending_starts.lock();
+            if pending.lookup.is_none() {
+                let buckets = pending.buckets.clone();
+                let scanner = self.clone();
+                pending.lookup = Some(tokio::spawn(async move {
+                    let group = scanner.group()?;
+                    let ids: Vec<_> = buckets.keys().cloned().collect();
+                    let saved = group.fetch_positions(&ids).await?;
+                    let mut offsets = HashMap::new();
+                    // Resolve fallbacks together for buckets registered by the same subscription.
+                    let mut missing: Vec<(OffsetsInitializer, Vec<TableBucket>)> = Vec::new();
+                    for (bucket, fallback) in buckets {
+                        if let Some(value) = &saved[&bucket] {
+                            offsets.insert(bucket, value.offset);
+                        } else if let Some((_, ids)) =
+                            missing.iter_mut().find(|(f, _)| *f == fallback)
+                        {
+                            ids.push(bucket);
+                        } else {
+                            missing.push((fallback, vec![bucket]));
+                        }
+                    }
+                    for (fallback, ids) in missing {
+                        offsets.extend(scanner.resolve_initializer(&ids, &fallback).await?);
+                    }
+                    scanner.prepare_bucket_metadata(&offsets).await?;
+                    Ok(offsets)
+                }));
+            }
+            let result = ready!(std::pin::Pin::new(pending.lookup.as_mut().unwrap()).poll(cx));
+            pending.lookup = None;
+            Poll::Ready(result)
+        });
+        let Ok(result) = tokio::time::timeout(budget, wait).await else {
+            return Ok(false);
+        };
+        let offsets = result.map_err(|e| invalid(&e.to_string()))??;
+        self.assign_buckets(offsets);
+        Ok(true)
     }
 
     fn group(&self) -> Result<&Arc<ConsumerGroup>> {
@@ -291,7 +395,17 @@ macro_rules! group_methods {
                     .await
             }
 
-            /// Commits progress from completed polls, including ranges skipped by the filter.
+            /// Registers buckets for restore from this scanner's group on the next poll.
+            /// The lookup shares the poll timeout. Only missing offsets use the fallback.
+            pub fn subscribe_from_committed(
+                &self,
+                buckets: &[TableBucket],
+                fallback: &OffsetsInitializer,
+            ) -> Result<()> {
+                self.inner.defer_committed(buckets, fallback)
+            }
+
+            /// Commits current positions, including seeks and ranges skipped by the filter.
             /// Process all returned records first; use `commit_offsets_async` for partial batches.
             /// Subscriptions, seeks and polls must be driven by one consumer task.
             pub fn commit_async(&self) -> Result<OffsetCommitHandle> {
@@ -311,11 +425,21 @@ macro_rules! group_methods {
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
             ) -> Result<OffsetCommitHandle> {
                 self.inner.check_no_active_reader()?;
-                self.inner.validate_group_buckets(offsets.keys())?;
                 self.inner.group()?.enqueue(offsets)
             }
 
-            /// Awaits persistence of the positions delivered by completed polls.
+            /// Closes the scanner, waiting for a final snapshot if automatic commits are enabled.
+            /// Dropping the scanner without closing it does not commit.
+            pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
+                if let (Some(_), Some(group)) =
+                    (&self.inner.auto_commit, &self.inner.consumer_group)
+                {
+                    AutoCommit::finish(group).await?;
+                }
+                Ok(())
+            }
+
+            /// Awaits persistence of the current scanner positions.
             /// Inspect every bucket result even when the request succeeds.
             pub async fn commit_sync(
                 &self,

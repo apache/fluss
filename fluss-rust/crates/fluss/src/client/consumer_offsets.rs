@@ -182,6 +182,13 @@ impl ConsumerGroup {
         }
     }
 
+    pub(crate) async fn fetch_positions(
+        &self,
+        buckets: &[TableBucket],
+    ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
+        self.client.fetch(buckets).await
+    }
+
     pub(crate) fn client_for(&self, group_id: &str) -> Option<&ConsumerGroupClient> {
         (self.client.options.group_id == group_id).then_some(&self.client)
     }
