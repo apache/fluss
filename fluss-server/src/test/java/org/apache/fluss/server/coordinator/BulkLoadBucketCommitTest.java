@@ -63,6 +63,7 @@ import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -82,6 +83,7 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData.BulkLoadTargetZNode;
 import org.apache.fluss.server.zk.data.ZkData.BulkLoadTransactionZNode;
+import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
@@ -91,6 +93,7 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.retry.RetryNTimes;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Op;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.OpResult;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs.OpCode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -747,14 +750,9 @@ class BulkLoadBucketCommitTest {
         assertThat(adjustIsr(initial).getBucketEpoch()).isEqualTo(initial.bucketEpoch() + 1);
         LeaderAndIsr beforeCommit = client.getLeaderAndIsr(bucket).get();
         try (CuratorFramework curator =
-                losePublicationResponse(client, persisted, verificationAvailable, failedChecks)) {
-            curator.start();
-            assertThat(curator.blockUntilConnected(30, TimeUnit.SECONDS)).isTrue();
-            ZooKeeperClient publisher =
-                    new ZooKeeperClient(
-                            new CuratorFrameworkWithUnhandledErrorListener(
-                                    curator, (message, error) -> {}),
-                            new Configuration().set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir));
+                losePublicationResponse(
+                        client, persisted, verificationAvailable, failedChecks, null)) {
+            ZooKeeperClient publisher = startPublisher(curator);
             CoordinatorEventProcessor processor =
                     startPublicationProcessor(publisher, ForkJoinPool.commonPool());
             AccessContextEvent<Void> populateAssignment =
@@ -825,6 +823,90 @@ class BulkLoadBucketCommitTest {
             assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
             assertThat(adjustPublicationIsr(published).hasErrorCode()).isFalse();
         }
+    }
+
+    @Test
+    void testRetryDeferredLeaderElectionAfterFailedRoleWrite() throws Exception {
+        start(
+                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
+                null,
+                2);
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
+        allocate();
+        Tuple2<byte[], byte[]> imported =
+                uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
+        LeaderAndIsr initial = client.getLeaderAndIsr(bucket).get();
+        int follower =
+                initial.isr().stream().filter(id -> id != initial.leader()).findFirst().get();
+        TableInfo table = cluster.waitAndGetLeaderReplica(bucket).getTableInfo();
+        AtomicBoolean verificationAvailable = new AtomicBoolean(false);
+        try (CuratorFramework curator =
+                losePublicationResponse(
+                        client,
+                        true,
+                        verificationAvailable,
+                        new CountDownLatch(0),
+                        LeaderAndIsrZNode.path(bucket))) {
+            ZooKeeperClient publisher = startPublisher(curator);
+            CoordinatorEventManager events =
+                    startPublicationProcessor(publisher, ForkJoinPool.commonPool())
+                            .getCoordinatorEventManager();
+            leader = cluster.newTabletServerClientForNode(follower);
+            publicationChannel.setGateways(Collections.singletonMap(follower, leader));
+            AccessContextEvent<Void> initialize =
+                    new AccessContextEvent<>(
+                            context -> {
+                                context.putTableInfo(table);
+                                context.setCoordinatorServerInfo(
+                                        cluster.getCoordinatorServerInfo());
+                                context.setLiveTabletServers(cluster.getTabletServerInfos());
+                                context.updateBucketReplicaAssignment(bucket, initial.isr());
+                                context.putBucketState(bucket, BucketState.OnlineBucket);
+                                for (int id : initial.isr()) {
+                                    context.putReplicaState(
+                                            new TableBucketReplica(bucket, id),
+                                            ReplicaState.OnlineReplica);
+                                }
+                                return null;
+                            });
+            events.put(initialize);
+            initialize.getResultFuture().get(30, TimeUnit.SECONDS);
+            BulkLoadManager publishingManager =
+                    new BulkLoadManager(
+                            publisher, client.getCurrentEpoch().getCoordinatorEpochZkVersion());
+            assertThatThrownBy(
+                            () ->
+                                    publishingManager
+                                            .commitBucketSnapshot(
+                                                    LOAD_ID, bucket, snapshots, events)
+                                            .get(30, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NetworkException.class);
+            events.put(new DeadTabletServerEvent(initial.leader()));
+            AccessContextEvent<BucketState> state =
+                    new AccessContextEvent<>(context -> context.getBucketState(bucket));
+            events.put(state);
+            assertThat(state.getResultFuture().get(30, TimeUnit.SECONDS))
+                    .isEqualTo(BucketState.OfflineBucket);
+            // The first deferred election fails before its role write reaches ZooKeeper.
+            verificationAvailable.set(true);
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        assertThat(client.getLeaderAndIsr(bucket).get().leader())
+                                .isEqualTo(follower);
+                        assertLookupRow(imported);
+                    });
+        }
+    }
+
+    private ZooKeeperClient startPublisher(CuratorFramework curator) throws Exception {
+        curator.start();
+        assertThat(curator.blockUntilConnected(30, TimeUnit.SECONDS)).isTrue();
+        return new ZooKeeperClient(
+                new CuratorFrameworkWithUnhandledErrorListener(curator, (message, error) -> {}),
+                new Configuration().set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir));
     }
 
     private void verifyMixedIsrBatchAndFollowerLoss(LeaderAndIsr beforeCommit) throws Exception {
@@ -1090,7 +1172,8 @@ class BulkLoadBucketCommitTest {
             ZooKeeperClient client,
             boolean persisted,
             AtomicBoolean verificationAvailable,
-            CountDownLatch failedChecks) {
+            CountDownLatch failedChecks,
+            @Nullable String failFirstRoleWritePath) {
         CuratorFramework existing = client.getCuratorClient();
         return CuratorFrameworkFactory.builder()
                 .connectString(existing.getZookeeperClient().getCurrentConnectionString())
@@ -1100,10 +1183,24 @@ class BulkLoadBucketCommitTest {
                         (address, sessionTimeout, watcher, readOnly) ->
                                 new ZooKeeper(address, sessionTimeout, watcher, readOnly) {
                                     private boolean attempted;
+                                    private boolean rejectedRoleWrite;
 
                                     @Override
                                     public List<OpResult> multi(Iterable<Op> operations)
                                             throws InterruptedException, KeeperException {
+                                        if (verificationAvailable.get()
+                                                && failFirstRoleWritePath != null
+                                                && !rejectedRoleWrite) {
+                                            for (Op op : operations) {
+                                                if (op.getType() == OpCode.setData
+                                                        && op.getPath()
+                                                                .endsWith(failFirstRoleWritePath)) {
+                                                    rejectedRoleWrite = true;
+                                                    throw new KeeperException
+                                                            .ConnectionLossException();
+                                                }
+                                            }
+                                        }
                                         if (attempted) {
                                             if (verificationAvailable.get()
                                                     || !operations

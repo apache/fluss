@@ -449,6 +449,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     new ControlledShutdownLeaderElection());
         } else if (coordinatorContext.getBucketState(bucket) == OfflineBucket) {
             tableBucketStateMachine.handleStateChange(Collections.singleton(bucket), OnlineBucket);
+            // Finish a deferred election before removing the offline leader from the ISR.
+            if (coordinatorContext.getBucketState(bucket) == OfflineBucket
+                    && coordinatorContext.getAssignment(bucket).stream()
+                            .anyMatch(id -> isTargetReplicaReadyToLead(bucket, role, id))) {
+                coordinatorContext.setBulkLoadPublicationPending(bucket, true);
+                scheduleBulkLoadVerification(commit);
+                return;
+            }
         }
         LeaderAndIsr beforeRemoval = coordinatorContext.getBucketLeaderAndIsr(bucket).get();
         List<TableBucketReplica> offline =
