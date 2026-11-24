@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Objects;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -47,6 +49,17 @@ public final class KvFileHandleAndLocalPath {
 
     public String getLocalPath() {
         return localPath;
+    }
+
+    /** Whether the file name is a canonical relative path inside a snapshot. */
+    public boolean hasSafeLocalPath() {
+        if (localPath.isEmpty() || localPath.indexOf('\\') >= 0) {
+            return false;
+        }
+        Path normalized = Paths.get(localPath).normalize();
+        return normalized.getRoot() == null
+                && !normalized.startsWith("..")
+                && localPath.equals(normalized.toString().replace('\\', '/'));
     }
 
     @Override

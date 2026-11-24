@@ -460,6 +460,9 @@ public class ReplicaStateMachine {
         for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
             TableBucket tableBucket = tableBucketReplica.getTableBucket();
             int replicaId = tableBucketReplica.getReplica();
+            if (coordinatorContext.isBulkLoadPublicationPending(tableBucket)) {
+                continue;
+            }
 
             LeaderAndIsr leaderAndIsr;
             if (toUpdateLeaderAndIsrList.get(tableBucket) != null) {

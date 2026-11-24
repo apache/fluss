@@ -30,6 +30,8 @@ import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
@@ -40,6 +42,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -553,5 +557,17 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     public void setNetworkIssueEnable(boolean networkIssueEnable) {
         this.networkIssueEnable = networkIssueEnable;
+    }
+
+    @Override
+    public CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
+            AllocateBulkLoadBucketSnapshotRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
+            CommitBulkLoadBucketSnapshotRequest request) {
+        throw new UnsupportedOperationException();
     }
 }

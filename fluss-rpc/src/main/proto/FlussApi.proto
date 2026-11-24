@@ -976,6 +976,30 @@ message GetClusterHealthResponse {
 }
 
 
+message PbBulkLoadHandle {
+  required int64 table_id = 1;
+  required string bulk_load_id = 2;
+}
+
+message AllocateBulkLoadBucketSnapshotRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+}
+
+message AllocateBulkLoadBucketSnapshotResponse {
+  required int64 snapshot_id = 1;
+  // 0 = ALLOCATED, 1 = COMMITTED.
+  required int32 state = 2;
+  required int64 log_offset = 3;
+}
+message CommitBulkLoadBucketSnapshotRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+}
+
+message CommitBulkLoadBucketSnapshotResponse {}
 // --------------- Inner classes ----------------
 message PbTabletServerLoad {
   required int32 server_id = 1;
