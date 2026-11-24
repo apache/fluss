@@ -99,6 +99,9 @@ public class CoordinatorContext {
     private final Map<TablePath, Long> tableIdByPath = new HashMap<>();
     private final Map<Long, TableInfo> tableInfoById = new HashMap<>();
 
+    // A lost multi reply also loses its zxid. Even a role read on reconnect can precede the
+    // publication until the server-side version check confirms its outcome.
+    private final Set<TableBucket> unverifiedBulkLoadBuckets = new HashSet<>();
     private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr = new HashMap<>();
     private final Set<TableBucket> kvBuckets = new HashSet<>();
     private final Set<Long> tablesToBeDeleted = new HashSet<>();
@@ -737,6 +740,19 @@ public class CoordinatorContext {
         return bucketLeaderAndIsr;
     }
 
+    /** Whether role changes must wait for an uncertain publication on this bucket. */
+    public boolean isBulkLoadPublicationPending(TableBucket bucket) {
+        return unverifiedBulkLoadBuckets.contains(bucket);
+    }
+
+    void setBulkLoadPublicationPending(TableBucket bucket, boolean pending) {
+        if (pending) {
+            unverifiedBulkLoadBuckets.add(bucket);
+        } else {
+            unverifiedBulkLoadBuckets.remove(bucket);
+        }
+    }
+
     public void putBucketLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
         bucketLeaderAndIsr.put(tableBucket, leaderAndIsr);
     }
@@ -876,6 +892,7 @@ public class CoordinatorContext {
         partitionAssignments.clear();
         partitionBucketCounts.clear();
         bucketLeaderAndIsr.clear();
+        unverifiedBulkLoadBuckets.clear();
         replicasOnOffline.clear();
         pendingLeaderActivationBuckets.clear();
         bucketStates.clear();

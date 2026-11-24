@@ -1535,25 +1535,32 @@ public class ZooKeeperClient implements AutoCloseable {
             return Optional.of(nextRole);
         } catch (KeeperException | InterruptedException failure) {
             try {
-                // A lost reply also loses its zxid. A server-side version check confirms the
-                // allocation's sole transition (0 -> 1) before we read the selected role.
-                zkClient.transaction()
-                        .forOperations(
-                                zkOp.checkOp(
-                                        BulkLoadBucketZNode.path(transaction.data(), bucket), 1));
-                return getSelectedRecoverySnapshotId(bucket)
-                                .filter(id -> id == snapshot.getSnapshotId())
-                                .isPresent()
-                        ? getLeaderAndIsr(bucket)
-                        : Optional.empty();
-            } catch (KeeperException.BadVersionException
-                    | KeeperException.NoNodeException uncommitted) {
-                throw failure;
+                if (checkBulkLoadBucketCommitted(transaction.data(), bucket)) {
+                    return getSelectedRecoverySnapshotId(bucket)
+                                    .filter(id -> id == snapshot.getSnapshotId())
+                                    .isPresent()
+                            ? getLeaderAndIsr(bucket)
+                            : Optional.empty();
+                }
             } catch (Exception verificationFailure) {
                 failure.addSuppressed(verificationFailure);
                 throw new NetworkException(
                         "Could not confirm BulkLoad publication for " + bucket, failure);
             }
+            throw failure;
+        }
+    }
+
+    /** Checks the allocation's sole transition on the server, even after a lost write reply. */
+    public boolean checkBulkLoadBucketCommitted(BulkLoadTransaction transaction, TableBucket bucket)
+            throws Exception {
+        try {
+            zkClient.transaction()
+                    .forOperations(zkOp.checkOp(BulkLoadBucketZNode.path(transaction, bucket), 1));
+            return true;
+        } catch (KeeperException.BadVersionException
+                | KeeperException.NoNodeException uncommitted) {
+            return false;
         }
     }
 

@@ -209,6 +209,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
+    private final long zkRetryDelayMs;
     private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
@@ -306,6 +307,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             offlineLeaderRetryDelayMs));
         }
         this.scheduler = scheduler;
+        this.zkRetryDelayMs = conf.get(ConfigOptions.ZOOKEEPER_RETRY_WAIT).toMillis();
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
     }
@@ -326,6 +328,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         CompletedSnapshot snapshot = event.snapshot;
         TableBucket bucket = snapshot.getTableBucket();
         try {
+            requireVerifiedBulkLoadRole(bucket);
             Optional<LeaderAndIsr> published;
             try {
                 published =
@@ -341,8 +344,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                 event.partitionVersion,
                                 event.coordinatorEpochVersion);
             } catch (NetworkException unconfirmed) {
-                // ISR updates must not reuse an epoch we could not confirm.
-                coordinatorContext.bucketLeaderAndIsr().remove(bucket);
+                coordinatorContext.setBulkLoadPublicationPending(bucket, true);
+                scheduleBulkLoadVerification(event);
                 throw unconfirmed;
             }
             if (!published.isPresent()) {
@@ -356,6 +359,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             return;
         }
 
+        registerImportedSnapshot(event);
+    }
+
+    private void registerImportedSnapshot(CommitBulkLoadBucketEvent event) {
+        CompletedSnapshot snapshot = event.snapshot;
+        TableBucket bucket = snapshot.getTableBucket();
         final String registrationFailure =
                 "BulkLoad snapshot "
                         + snapshot.getSnapshotID()
@@ -369,13 +378,114 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             event.snapshotStore.registerImportedSnapshot(snapshot);
                             event.result.complete(null);
                         } catch (Throwable failure) {
-                            event.result.completeExceptionally(
-                                    new UnknownServerException(registrationFailure, failure));
+                            if (!event.result.completeExceptionally(
+                                    new UnknownServerException(registrationFailure, failure))) {
+                                LOG.warn(registrationFailure, failure);
+                            }
                         }
                     });
         } catch (RejectedExecutionException rejected) {
             event.result.completeExceptionally(
                     new UnknownServerException(registrationFailure, rejected));
+        }
+    }
+
+    private void requireVerifiedBulkLoadRole(TableBucket bucket) {
+        if (coordinatorContext.isBulkLoadPublicationPending(bucket)) {
+            throw new NetworkException("Verifying BulkLoad publication for " + bucket);
+        }
+    }
+
+    private void scheduleBulkLoadVerification(CommitBulkLoadBucketEvent commit) {
+        scheduler.scheduleOnce(
+                "verify-bulk-load-publication",
+                () -> ioExecutor.execute(() -> verifyBulkLoadPublication(commit)),
+                zkRetryDelayMs);
+    }
+
+    private void verifyBulkLoadPublication(CommitBulkLoadBucketEvent commit) {
+        TableBucket bucket = commit.snapshot.getTableBucket();
+        BulkLoadVerificationResult verification = new BulkLoadVerificationResult(commit);
+        try {
+            verification.committed =
+                    zooKeeperClient.checkBulkLoadBucketCommitted(commit.transaction.data(), bucket);
+            verification.activate =
+                    verification.committed
+                            && zooKeeperClient
+                                    .getSelectedRecoverySnapshotId(bucket)
+                                    .filter(id -> id == commit.snapshot.getSnapshotID())
+                                    .isPresent();
+            verification.role = zooKeeperClient.getLeaderAndIsr(bucket).orElse(null);
+        } catch (Exception failure) {
+            verification.failure = failure;
+        }
+        coordinatorEventManager.put(verification);
+    }
+
+    private void processBulkLoadVerification(BulkLoadVerificationResult verification) {
+        CommitBulkLoadBucketEvent commit = verification.commit;
+        TableBucket bucket = commit.snapshot.getTableBucket();
+        if (coordinatorContext.isToBeDeleted(bucket)
+                || coordinatorContext.getAssignment(bucket).isEmpty()) {
+            coordinatorContext.setBulkLoadPublicationPending(bucket, false);
+            return;
+        }
+        LeaderAndIsr role = verification.role;
+        if (verification.failure != null || role == null) {
+            LOG.debug(
+                    "BulkLoad publication for {} is still unconfirmed.",
+                    bucket,
+                    verification.failure);
+            scheduleBulkLoadVerification(commit);
+            return;
+        }
+        coordinatorContext.setBulkLoadPublicationPending(bucket, false);
+        coordinatorContext.putBucketLeaderAndIsr(bucket, role);
+        // Replica and bucket states retain offline transitions even while role writes are paused.
+        if (coordinatorContext.shuttingDownTabletServers().contains(role.leader())) {
+            tableBucketStateMachine.handleStateChange(
+                    Collections.singleton(bucket),
+                    OnlineBucket,
+                    new ControlledShutdownLeaderElection());
+        } else if (coordinatorContext.getBucketState(bucket) == OfflineBucket) {
+            tableBucketStateMachine.handleStateChange(Collections.singleton(bucket), OnlineBucket);
+        }
+        LeaderAndIsr beforeRemoval = coordinatorContext.getBucketLeaderAndIsr(bucket).get();
+        List<TableBucketReplica> offline =
+                beforeRemoval.isr().stream()
+                        .map(id -> new TableBucketReplica(bucket, id))
+                        .filter(
+                                replica ->
+                                        coordinatorContext.getReplicaState(replica)
+                                                == OfflineReplica)
+                        .collect(Collectors.toList());
+        if (!offline.isEmpty()) {
+            replicaStateMachine.handleStateChanges(offline, OfflineReplica);
+            if (coordinatorContext.getBucketLeaderAndIsr(bucket).get().bucketEpoch()
+                    == beforeRemoval.bucketEpoch()) {
+                // The state machine updates its cache only after the ISR write succeeds.
+                coordinatorContext.setBulkLoadPublicationPending(bucket, true);
+                scheduleBulkLoadVerification(commit);
+                return;
+            }
+        }
+        if (verification.activate) {
+            notifyOnlineReplicas(bucket);
+        }
+        if (verification.committed) {
+            registerImportedSnapshot(commit);
+        }
+    }
+
+    private static final class BulkLoadVerificationResult implements CoordinatorEvent {
+        final CommitBulkLoadBucketEvent commit;
+        boolean committed;
+        boolean activate;
+        @Nullable LeaderAndIsr role;
+        @Nullable Exception failure;
+
+        BulkLoadVerificationResult(CommitBulkLoadBucketEvent commit) {
+            this.commit = commit;
         }
     }
 
@@ -788,6 +898,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     public void process(CoordinatorEvent event) {
         if (event instanceof CommitBulkLoadBucketEvent) {
             processCommitBulkLoadBucket((CommitBulkLoadBucketEvent) event);
+        } else if (event instanceof BulkLoadVerificationResult) {
+            processBulkLoadVerification((BulkLoadVerificationResult) event);
         } else if (event instanceof CreateTableEvent) {
             processCreateTable((CreateTableEvent) event);
         } else if (event instanceof CreatePartitionEvent) {
@@ -2028,6 +2140,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private @Nullable LeaderAndIsr advanceReassignment(
             TableBucket tableBucket, ReplicaReassignment reassignment, boolean reconcile)
             throws Exception {
+        if (coordinatorContext.isBulkLoadPublicationPending(tableBucket)) {
+            return null;
+        }
         List<Integer> targetReplicas = reassignment.getTargetReplicas();
         LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
         boolean targetsCaughtUp = isReassignmentComplete(tableBucket, leaderAndIsr, targetReplicas);
@@ -2399,6 +2514,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             LeaderAndIsr tryAdjustLeaderAndIsr = entry.getValue();
 
             try {
+                requireVerifiedBulkLoadRole(tableBucket);
                 validateLeaderAndIsr(tableBucket, tryAdjustLeaderAndIsr);
             } catch (Exception e) {
                 result.add(new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));

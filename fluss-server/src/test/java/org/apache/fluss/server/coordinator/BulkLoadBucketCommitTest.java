@@ -34,6 +34,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -60,7 +61,9 @@ import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -94,6 +97,7 @@ import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorServi
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.types.Tuple2;
 
 import io.github.fluss_contrib.rocksdb.Checkpoint;
@@ -119,14 +123,18 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
@@ -166,6 +174,7 @@ class BulkLoadBucketCommitTest {
     private CoordinatorEventProcessor publicationProcessor;
     private KvSnapshotLeaseManager publicationLeases;
     private TestCoordinatorChannelManager publicationChannel;
+    private final FlussScheduler publicationScheduler = new FlussScheduler(1);
     private long leasedSnapshotId = -1;
 
     private FlussClusterExtension cluster;
@@ -449,6 +458,7 @@ class BulkLoadBucketCommitTest {
     void closeCluster() throws Exception {
         if (publicationProcessor != null) {
             publicationProcessor.shutdown();
+            publicationScheduler.shutdown();
             publicationLeases.close();
             publicationChannel.close();
         }
@@ -458,6 +468,11 @@ class BulkLoadBucketCommitTest {
     }
 
     private void start(TableDescriptor descriptor, String partitionName) throws Exception {
+        start(descriptor, partitionName, 1);
+    }
+
+    private void start(TableDescriptor descriptor, String partitionName, int replicas)
+            throws Exception {
         Configuration conf =
                 new Configuration()
                         .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1)
@@ -465,11 +480,11 @@ class BulkLoadBucketCommitTest {
                         .set(ConfigOptions.SERVER_IO_POOL_SIZE, 1);
         cluster =
                 FlussClusterExtension.builder()
-                        .setNumOfTabletServers(1)
+                        .setNumOfTabletServers(replicas)
                         .setClusterConf(conf)
                         .build();
         cluster.start();
-        long tableId = createTable(cluster, TABLE, descriptor.withReplicationFactor(1));
+        long tableId = createTable(cluster, TABLE, descriptor.withReplicationFactor(replicas));
         Long partitionId =
                 partitionName == null
                         ? null
@@ -710,16 +725,29 @@ class BulkLoadBucketCommitTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"false,true", "true,true", "true,false"})
+    @CsvSource({"false,true", "true,true", "true,false", "false,false"})
     void testConnectionLossDuringPublication(boolean persisted, boolean canVerify)
             throws Exception {
-        start();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
+        start(descriptor, null, canVerify ? 1 : 2);
+        if (!canVerify) {
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
+        }
+        List<KvRecord> base = genKvRecords(new Object[] {2, "original"});
+        putRows(base);
         allocate();
-        uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
+        Tuple2<byte[], byte[]> imported =
+                uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
+        AtomicBoolean verificationAvailable = new AtomicBoolean(canVerify);
+        CountDownLatch failedChecks = new CountDownLatch(2);
         LeaderAndIsr initial = client.getLeaderAndIsr(bucket).get();
         assertThat(adjustIsr(initial).getBucketEpoch()).isEqualTo(initial.bucketEpoch() + 1);
         LeaderAndIsr beforeCommit = client.getLeaderAndIsr(bucket).get();
-        try (CuratorFramework curator = losePublicationResponse(client, persisted, canVerify)) {
+        try (CuratorFramework curator =
+                losePublicationResponse(client, persisted, verificationAvailable, failedChecks)) {
             curator.start();
             assertThat(curator.blockUntilConnected(30, TimeUnit.SECONDS)).isTrue();
             ZooKeeperClient publisher =
@@ -753,10 +781,22 @@ class BulkLoadBucketCommitTest {
                                                         processor.getCoordinatorEventManager())
                                                 .get(30, TimeUnit.SECONDS))
                         .hasCauseInstanceOf(NetworkException.class);
-                assertThat(adjustPublicationIsr(beforeCommit).getErrorCode())
-                        .isEqualTo(Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION.code());
-                assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch())
-                        .isEqualTo(expectedLeaderEpoch);
+                verifyMixedIsrBatchAndFollowerLoss(beforeCommit);
+                int expected = persisted ? expectedLeaderEpoch : beforeCommit.leaderEpoch();
+                assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch()).isEqualTo(expected);
+                // Both the inline check and a background check failed before connectivity returned.
+                assertThat(failedChecks.await(30, TimeUnit.SECONDS)).isTrue();
+                verificationAvailable.set(true);
+                retry(
+                        Duration.ofSeconds(30),
+                        () -> {
+                            LeaderAndIsr current = client.getLeaderAndIsr(bucket).get();
+                            assertThat(current.leaderEpoch()).isEqualTo(expected);
+                            assertThat(current.isr()).containsExactly(beforeCommit.leader());
+                            assertThat(cluster.waitAndGetLeaderReplica(bucket).getLeaderEpoch())
+                                    .isEqualTo(expected);
+                            assertLookupRow(persisted ? imported : getKeyValuePairs(base).get(0));
+                        });
                 return;
             }
             if (!persisted) {
@@ -785,6 +825,82 @@ class BulkLoadBucketCommitTest {
             assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
             assertThat(adjustPublicationIsr(published).hasErrorCode()).isFalse();
         }
+    }
+
+    private void verifyMixedIsrBatchAndFollowerLoss(LeaderAndIsr beforeCommit) throws Exception {
+        long otherId =
+                createTable(
+                        cluster,
+                        TablePath.of("db", "other"),
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA_PK)
+                                .distributedBy(2, "a")
+                                .build()
+                                .withReplicationFactor(1));
+        TableBucket first = new TableBucket(otherId, 0);
+        TableBucket other =
+                cluster.waitAndGetLeaderReplica(first).getLeaderId() == beforeCommit.leader()
+                        ? first
+                        : new TableBucket(otherId, 1);
+        cluster.waitAndGetLeaderReplica(other);
+        LeaderAndIsr otherRole = client.getLeaderAndIsr(other).get();
+        assertThat(otherRole.leader()).isEqualTo(beforeCommit.leader());
+        int follower =
+                beforeCommit.isr().stream()
+                        .filter(id -> id != beforeCommit.leader())
+                        .findFirst()
+                        .get();
+        CoordinatorEventManager events = publicationProcessor.getCoordinatorEventManager();
+        AccessContextEvent<Void> live =
+                new AccessContextEvent<>(
+                        context -> {
+                            context.putTablePath(otherId, TablePath.of("db", "other"));
+                            context.putBucketLeaderAndIsr(other, otherRole);
+                            context.updateBucketReplicaAssignment(other, otherRole.isr());
+                            context.setCoordinatorServerInfo(cluster.getCoordinatorServerInfo());
+                            for (int id : beforeCommit.isr()) {
+                                context.putReplicaState(
+                                        new TableBucketReplica(bucket, id),
+                                        ReplicaState.OnlineReplica);
+                            }
+                            return null;
+                        });
+        events.put(live);
+        live.getResultFuture().get(30, TimeUnit.SECONDS);
+        publicationChannel.setGateways(Collections.singletonMap(beforeCommit.leader(), leader));
+        Map<TableBucket, LeaderAndIsr> batch = new HashMap<>();
+        batch.put(bucket, beforeCommit);
+        batch.put(other, otherRole);
+        CompletableFuture<AdjustIsrResponse> adjusted = new CompletableFuture<>();
+        events.put(new AdjustIsrReceivedEvent(batch, adjusted));
+        AdjustIsrResponse response = adjusted.get(30, TimeUnit.SECONDS);
+        assertThat(response.getTablesRespsList())
+                .hasSize(2)
+                .allSatisfy(
+                        table -> {
+                            PbAdjustIsrRespForBucket result = table.getBucketsRespAt(0);
+                            if (table.getTableId() == bucket.getTableId()) {
+                                assertThat(result.getErrorCode())
+                                        .isEqualTo(Errors.NETWORK_EXCEPTION.code());
+                            } else {
+                                assertThat(result.hasErrorCode())
+                                        .as(
+                                                result.hasErrorMessage()
+                                                        ? result.getErrorMessage()
+                                                        : "")
+                                        .isFalse();
+                            }
+                        });
+        assertThat(client.getLeaderAndIsr(other).get().bucketEpoch())
+                .isEqualTo(otherRole.bucketEpoch() + 1);
+        events.put(new DeadTabletServerEvent(follower));
+        AccessContextEvent<ReplicaState> offline =
+                new AccessContextEvent<>(
+                        context ->
+                                context.getReplicaState(new TableBucketReplica(bucket, follower)));
+        events.put(offline);
+        assertThat(offline.getResultFuture().get(30, TimeUnit.SECONDS))
+                .isEqualTo(ReplicaState.OfflineReplica);
     }
 
     private PbAdjustIsrRespForBucket adjustPublicationIsr(LeaderAndIsr role) throws Exception {
@@ -971,7 +1087,10 @@ class BulkLoadBucketCommitTest {
     }
 
     private static CuratorFramework losePublicationResponse(
-            ZooKeeperClient client, boolean persisted, boolean canVerify) {
+            ZooKeeperClient client,
+            boolean persisted,
+            AtomicBoolean verificationAvailable,
+            CountDownLatch failedChecks) {
         CuratorFramework existing = client.getCuratorClient();
         return CuratorFrameworkFactory.builder()
                 .connectString(existing.getZookeeperClient().getCurrentConnectionString())
@@ -985,13 +1104,22 @@ class BulkLoadBucketCommitTest {
                                     @Override
                                     public List<OpResult> multi(Iterable<Op> operations)
                                             throws InterruptedException, KeeperException {
-                                        if (attempted && canVerify) {
-                                            return super.multi(operations);
+                                        if (attempted) {
+                                            if (verificationAvailable.get()
+                                                    || !operations
+                                                            .iterator()
+                                                            .next()
+                                                            .getPath()
+                                                            .contains("/bulk_load/")) {
+                                                return super.multi(operations);
+                                            }
+                                            failedChecks.countDown();
+                                        } else {
+                                            attempted = true;
+                                            if (persisted) {
+                                                super.multi(operations);
+                                            }
                                         }
-                                        if (!attempted && persisted) {
-                                            super.multi(operations);
-                                        }
-                                        attempted = true;
                                         throw new KeeperException.ConnectionLossException();
                                     }
                                 })
@@ -1041,6 +1169,7 @@ class BulkLoadBucketCommitTest {
         context.putBucketLeaderAndIsr(bucket, client.getLeaderAndIsr(bucket).get());
         Configuration conf =
                 new Configuration()
+                        .set(ConfigOptions.ZOOKEEPER_RETRY_WAIT, Duration.ofMillis(100))
                         .set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir)
                         .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
         CoordinatorMetadataCache cache = new CoordinatorMetadataCache();
@@ -1052,6 +1181,7 @@ class BulkLoadBucketCommitTest {
                         SystemClock.getInstance(),
                         TestingMetricGroups.COORDINATOR_METRICS);
         publicationChannel = new TestCoordinatorChannelManager();
+        publicationScheduler.startup();
         publicationProcessor =
                 new CoordinatorEventProcessor(
                         publisher,
@@ -1066,7 +1196,7 @@ class BulkLoadBucketCommitTest {
                         io,
                         null,
                         publicationLeases,
-                        null,
+                        publicationScheduler,
                         SystemClock.getInstance());
         publicationProcessor.getCoordinatorEventManager().start();
         return publicationProcessor;
