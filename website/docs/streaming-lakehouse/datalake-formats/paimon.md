@@ -239,14 +239,13 @@ SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 The schema of a Paimon table managed by Fluss must always be evolved through Fluss. When you add columns to a Fluss table with `ALTER TABLE ... ADD` (see [Add Columns](../../engine-flink/ddl.md#add-columns)), the new columns are appended at the end as nullable columns, and Fluss applies the same change to the Paimon table as part of the `ALTER TABLE` statement, so the two schemas stay in sync.
 
 :::warning External schema changes stall tiering
-Do not change the schema of a Fluss-managed Paimon table through an external engine, for example by adding a column on the Paimon table from Spark or Doris. The tiering service requires the user columns of the Paimon table to match the Fluss table schema. Once the Paimon table contains a column that the Fluss table does not have, tiering the table's records can fail with an error like the following:
+Do not change the schema of a Fluss-managed Paimon table through an external engine, for example by adding a column on the Paimon table from Spark or Doris. If Paimon requests a field that the Fluss record cannot supply, the tiering error identifies both tables and describes the mismatch:
 
 ```
-Caused by: java.io.IOException: Failed to write Fluss record to Paimon.
-Caused by: java.lang.IllegalStateException: Field 18 is NULL because Paimon schema is wider than Fluss record.
+Caused by: java.io.IOException: Failed to tier Fluss table fluss.orders to Paimon table fluss.orders. Cannot read field at position 18 from a Fluss record with 18 fields. The Paimon schema has 19 user columns. Reconcile the schemas if the mismatch persists and apply schema changes through Fluss.
 ```
 
-The tiering job then fails and restarts in a loop until the schemas match again, cycling between the RUNNING and RESTARTING states in the Flink UI. The restart loop also interrupts tiering progress for the other tables served by the same job. Adding a column is the most common trigger, but any external change that makes the schemas diverge stops tiering in the same way, possibly with a different error message.
+If Flink is configured to restart the tiering job, the mismatch can cause repeated failures and interrupt tiering for other tables in the same job. Other schema changes can also stall tiering and may produce a different error message.
 
 No data is lost or corrupted, and the records that could not be tiered remain readable in Fluss. However, Fluss keeps log data until it has been tiered, so log retention for the table is effectively paused and storage usage grows until the schemas match again. Fix the mismatch promptly.
 

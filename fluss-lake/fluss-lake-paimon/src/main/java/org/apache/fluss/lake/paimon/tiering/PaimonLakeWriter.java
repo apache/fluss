@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.batch.RecordBatch;
+import org.apache.fluss.lake.paimon.tiering.FlussRecordAsPaimonRow.MissingFlussFieldException;
 import org.apache.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import org.apache.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
 import org.apache.fluss.lake.paimon.utils.PaimonUtils;
@@ -39,14 +40,18 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /** Implementation of {@link LakeWriter} for Paimon. */
 public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, SupportsRecordBatchWrite {
 
     private final Catalog paimonCatalog;
+    private final TablePath flussTablePath;
+    private final TablePath lakeTablePath;
     private final RecordWriter<?> recordWriter;
 
     public PaimonLakeWriter(
@@ -60,7 +65,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                 !writerInitContext.tableInfo().getBucketKeys().isEmpty()
                         ? writerInitContext.bucketCount()
                         : null;
-        TablePath lakeTablePath = writerInitContext.tableInfo().getLakeTablePath();
+        this.flussTablePath = writerInitContext.tableInfo().getTablePath();
+        this.lakeTablePath = writerInitContext.tableInfo().getLakeTablePath();
         FileStoreTable fileStoreTable =
                 getTable(
                         lakeTablePath,
@@ -103,6 +109,17 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         try {
             recordWriter.write(record);
         } catch (Exception e) {
+            Optional<MissingFlussFieldException> missingField =
+                    findThrowable(e, MissingFlussFieldException.class);
+            if (missingField.isPresent()) {
+                throw new IOException(
+                        String.format(
+                                "Failed to tier Fluss table %s to Paimon table %s. %s "
+                                        + "Reconcile the schemas if the mismatch persists and apply "
+                                        + "schema changes through Fluss.",
+                                flussTablePath, lakeTablePath, missingField.get().getMessage()),
+                        e);
+            }
             throw new IOException("Failed to write Fluss record to Paimon.", e);
         }
     }

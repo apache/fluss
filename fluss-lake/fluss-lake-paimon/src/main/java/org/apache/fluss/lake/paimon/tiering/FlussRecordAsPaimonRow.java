@@ -113,10 +113,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
         }
         checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         if (pos >= originRowFieldCount) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Field %s is NULL because Paimon schema is wider than Fluss record.",
-                            pos));
+            throw new MissingFlussFieldException(pos, originRowFieldCount, businessFieldCount);
         }
         return super.getInt(pos);
     }
@@ -134,10 +131,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
             }
         }
         if (pos >= originRowFieldCount) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Field %s is NULL because Paimon schema is wider than Fluss record.",
-                            pos));
+            throw new MissingFlussFieldException(pos, originRowFieldCount, businessFieldCount);
         }
         //  the origin RowData
         return super.getLong(pos);
@@ -151,11 +145,21 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
             return Timestamp.fromEpochMillis(logRecord.timestamp());
         }
         if (pos >= originRowFieldCount) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Field %s is NULL because Paimon schema is wider than Fluss record.",
-                            pos));
+            throw new MissingFlussFieldException(pos, originRowFieldCount, businessFieldCount);
         }
         return super.getTimestamp(pos, precision);
+    }
+
+    /** A Paimon getter requested a field that the Fluss record cannot supply. */
+    static final class MissingFlussFieldException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        MissingFlussFieldException(int position, int flussFieldCount, int paimonUserFieldCount) {
+            super(
+                    String.format(
+                            "Cannot read field at position %d from a Fluss record with %d fields. "
+                                    + "The Paimon schema has %d user columns.",
+                            position, flussFieldCount, paimonUserFieldCount));
+        }
     }
 }
