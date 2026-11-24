@@ -1381,6 +1381,8 @@ For example, an aggregation table can configure `fields.maximum.ignore-retract=t
 
 `sink.enable-retract` defaults to `false`. In this default mode, Flink keeps the existing upsert changelog negotiation: UPDATE_BEFORE is excluded, and DELETE follows the existing delete path. Existing jobs do not acquire field retract semantics automatically.
 
+For an existing table written through its Fluss Catalog with retract enabled, use SQL `OPTIONS` to set job options such as `sink.enable-retract` and `sink.ignore-delete`. The sink uses the target table's persisted aggregation rules. A statement cannot change the effective value of `table.aggregation.remove-record-on-delete` or `fields.<column>.ignore-retract`. Restating the same effective value is allowed.
+
 For contribution-based aggregation writes, set the following Flink SQL TableConfig before submitting the INSERT statement, matching [Paimon's aggregation recommendation](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/):
 
 ```sql

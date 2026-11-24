@@ -105,6 +105,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -221,7 +222,23 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public Optional<Factory> getFactory() {
-        return Optional.of(new FlinkTableFactory(lakeFlinkCatalog));
+        return Optional.of(new FlinkTableFactory(lakeFlinkCatalog, this::getSinkTableInfo));
+    }
+
+    private @Nullable TableInfo getSinkTableInfo(TablePath tablePath, Configuration clientConfig) {
+        // This Admin can only provide metadata for writers using the Catalog endpoints.
+        if (!new HashSet<>(getFlussConfiguration().get(BOOTSTRAP_SERVERS))
+                .equals(new HashSet<>(clientConfig.get(BOOTSTRAP_SERVERS)))) {
+            return null;
+        }
+        try {
+            return admin.getTableInfo(tablePath).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new CatalogException("Interrupted while reading Fluss table " + tablePath, e);
+        } catch (ExecutionException e) {
+            throw new CatalogException("Failed to read Fluss table " + tablePath, e.getCause());
+        }
     }
 
     @Override

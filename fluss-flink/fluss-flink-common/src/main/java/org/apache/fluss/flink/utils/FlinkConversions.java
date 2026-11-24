@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.adapter.CatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.adapter.IntervalFreshnessAdapter;
@@ -796,6 +797,27 @@ public class FlinkConversions {
             // default to LAST_VALUE_IGNORE_NULLS (see AggregationContext.getAggFunction).
             AggFunctionType effectiveType =
                     aggFunc.map(AggFunction::getType)
+                            .orElse(AggFunctionType.LAST_VALUE_IGNORE_NULLS);
+            if (!effectiveType.supportsRetract()) {
+                nonRetractableColumns.add(columnName);
+            }
+        }
+        return Collections.unmodifiableSet(nonRetractableColumns);
+    }
+
+    /** Returns the value columns that cannot retract under the Fluss table definition. */
+    public static Set<String> computeNonRetractableAggregationColumns(
+            Schema schema, TableConfig tableConfig) {
+        Set<String> nonRetractableColumns = new HashSet<>();
+        Set<String> primaryKeys = new HashSet<>(schema.getPrimaryKeyColumnNames());
+        for (Schema.Column column : schema.getColumns()) {
+            String columnName = column.getName();
+            if (primaryKeys.contains(columnName) || tableConfig.isFieldIgnoreRetract(columnName)) {
+                continue;
+            }
+            AggFunctionType effectiveType =
+                    column.getAggFunction()
+                            .map(AggFunction::getType)
                             .orElse(AggFunctionType.LAST_VALUE_IGNORE_NULLS);
             if (!effectiveType.supportsRetract()) {
                 nonRetractableColumns.add(columnName);

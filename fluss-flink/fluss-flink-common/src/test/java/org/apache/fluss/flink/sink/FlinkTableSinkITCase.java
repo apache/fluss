@@ -54,6 +54,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -1763,6 +1764,63 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         expectedRows = Arrays.asList("+I[2, 77, null]");
 
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "table.aggregation.remove-record-on-delete, false, true, ignore",
+        "table.aggregation.remove-record-on-delete, false, true, allow",
+        "table.aggregation.remove-record-on-delete, true, false, allow",
+        "fields.mx.ignore-retract, false, true, ignore",
+        "fields.mx.ignore-retract, true, false, ignore"
+    })
+    @MultiVersionTest
+    void testRetractHintCannotOverrideTableRule(
+            String option, boolean tableValue, boolean hintValue, String deleteBehavior) {
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE retract_hint_target (k INT NOT NULL, mx INT, "
+                                + "PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                                + "'table.merge-engine' = 'aggregation', "
+                                + "'table.delete.behavior' = '%s', 'fields.mx.agg' = '%s'%s)",
+                        deleteBehavior,
+                        option.startsWith("fields.") ? "max" : "sum",
+                        tableValue ? ", '" + option + "' = 'true'" : ""));
+        String insert =
+                "INSERT INTO retract_hint_target /*+ OPTIONS("
+                        + "'sink.enable-retract' = '%s', 'sink.ignore-delete' = '%s', "
+                        + "'%s' = '%s') */ SELECT 1, 10";
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format(insert, true, false, option, hintValue)))
+                .rootCause()
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("retract_hint_target")
+                .hasMessageContaining(option)
+                .hasMessageContaining("table value " + tableValue)
+                .hasMessageContaining("statement value " + hintValue);
+
+        assertThat(tEnv.explainSql(String.format(insert, true, true, option, tableValue)))
+                .isNotEmpty();
+        assertThat(tEnv.explainSql(String.format(insert, false, false, option, hintValue)))
+                .isNotEmpty();
+    }
+
+    @Test
+    @MultiVersionTest
+    void testRetractPlanningAllowsBootstrapServerOverride() {
+        tEnv.executeSql(
+                "CREATE TABLE retract_hint_target (k INT NOT NULL, total BIGINT, "
+                        + "PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'fields.total.agg' = 'sum')");
+        assertThat(
+                        tEnv.explainSql(
+                                "INSERT INTO retract_hint_target /*+ OPTIONS("
+                                        + "'sink.enable-retract' = 'true', "
+                                        + "'bootstrap.servers' = 'localhost:1') */ SELECT 1, 10"))
+                .isNotEmpty();
     }
 
     /**

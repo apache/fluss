@@ -33,12 +33,14 @@ import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
@@ -61,6 +63,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
@@ -79,10 +82,19 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
     protected final LakeFlinkCatalog lakeFlinkCatalog;
+    private final BiFunction<TablePath, Configuration, TableInfo> sinkTableInfoLoader;
     private volatile LakeTableFactory lakeTableFactory;
 
+    /** Creates a factory without access to a Fluss Catalog's Admin. */
     public FlinkTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
+        this(lakeFlinkCatalog, (tablePath, clientConfig) -> null);
+    }
+
+    FlinkTableFactory(
+            LakeFlinkCatalog lakeFlinkCatalog,
+            BiFunction<TablePath, Configuration, TableInfo> sinkTableInfoLoader) {
         this.lakeFlinkCatalog = lakeFlinkCatalog;
+        this.sinkTableInfoLoader = sinkTableInfoLoader;
     }
 
     @Override
@@ -198,8 +210,49 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
 
+        TablePath tablePath = toFlussTablePath(context.getObjectIdentifier());
+        Configuration clientConfig =
+                toFlussClientConfig(resolvedCatalogTable.getOptions(), context.getConfiguration());
+        boolean enableRetract = tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT);
         MergeEngineType mergeEngineType =
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
+        boolean removeRecordOnDelete =
+                tableOptions.get(
+                        toFlinkOption(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE));
+        Set<String> nonRetractableColumns = Collections.emptySet();
+        if (enableRetract) {
+            TableInfo tableInfo = sinkTableInfoLoader.apply(tablePath, clientConfig);
+            if (tableInfo == null) {
+                nonRetractableColumns =
+                        FlinkConversions.computeNonRetractableAggregationColumns(
+                                resolvedCatalogTable.getResolvedSchema(),
+                                org.apache.flink.configuration.Configuration.fromMap(
+                                        resolvedCatalogTable.getOptions()));
+            } else {
+                TableConfig persisted = tableInfo.getTableConfig();
+                mergeEngineType = persisted.getMergeEngineType().orElse(null);
+                validateRetractOption(
+                        tablePath,
+                        ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                        persisted.isAggregationRemoveRecordOnDelete(),
+                        removeRecordOnDelete);
+                removeRecordOnDelete = persisted.isAggregationRemoveRecordOnDelete();
+                for (String column : tableInfo.getSchema().getColumnNames()) {
+                    String key = "fields." + column + ".ignore-retract";
+                    validateRetractOption(
+                            tablePath,
+                            key,
+                            persisted.isFieldIgnoreRetract(column),
+                            tableOptions.get(
+                                    org.apache.flink.configuration.ConfigOptions.key(key)
+                                            .booleanType()
+                                            .defaultValue(false)));
+                }
+                nonRetractableColumns =
+                        FlinkConversions.computeNonRetractableAggregationColumns(
+                                tableInfo.getSchema(), persisted);
+            }
+        }
 
         // For primary key tables with any merge engine, keyed shuffle must be enabled
         // to ensure correct data routing.
@@ -210,26 +263,14 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             validateDistributionModeForMergeEngine(mergeEngineType, distributionMode);
         }
 
-        org.apache.flink.configuration.Configuration resolvedOptions =
-                org.apache.flink.configuration.Configuration.fromMap(
-                        resolvedCatalogTable.getOptions());
-        // Resolve table field rules only for explicit retract mode. The runtime provider validates
-        // the participating fields once the planner supplies the target columns.
-        Set<String> nonRetractableColumns =
-                tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT)
-                        ? FlinkConversions.computeNonRetractableAggregationColumns(
-                                resolvedCatalogTable.getResolvedSchema(), resolvedOptions)
-                        : Collections.emptySet();
-
         return new FlinkTableSink(
-                toFlussTablePath(context.getObjectIdentifier()),
-                toFlussClientConfig(
-                        context.getCatalogTable().getOptions(), context.getConfiguration()),
+                tablePath,
+                clientConfig,
                 rowType,
                 primaryKeyIndexes,
                 partitionKeys,
                 isStreamingMode,
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                mergeEngineType,
                 tableOptions.get(toFlinkOption(TABLE_DATALAKE_FORMAT)),
                 tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
                 tableOptions.get(toFlinkOption(TABLE_DELETE_BEHAVIOR)),
@@ -238,9 +279,19 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 distributionMode,
                 tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null),
                 nonRetractableColumns,
-                tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT),
-                tableOptions.get(
-                        toFlinkOption(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE)));
+                enableRetract,
+                removeRecordOnDelete);
+    }
+
+    private static void validateRetractOption(
+            TablePath tablePath, String key, boolean tableValue, boolean statementValue) {
+        if (tableValue != statementValue) {
+            throw new ValidationException(
+                    String.format(
+                            "Cannot override Fluss table option '%s' for %s: table value %s, "
+                                    + "statement value %s. Configure this option on the Fluss table.",
+                            key, tablePath, tableValue, statementValue));
+        }
     }
 
     @Override
