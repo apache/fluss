@@ -273,7 +273,7 @@ Configuration can be set programmatically or via CLI flags (using [`clap`](https
 
 `security_sasl_authorization_id` (CLI: `--security-sasl-authorization-id`) does not change the service account's username or password. The server must grant the target user via `security.sasl.listener.name.<listener>.plain.proxy-users`. Use SASL/PLAIN only over a trusted encrypted transport. Serialized configuration includes the username and authorization ID and omits the password. Debug output redacts all three values. Authentication errors retain the server error code and redact the details.
 
-The proxy-authorization integration test is opt-in because the default test image (0.9.1) predates server support. It verifies user-specific ACLs on coordinator and tablet connections, rejected proxy targets, and incorrect service credentials. For example, with a locally loaded image built from the following fixed upstream commit (which includes #3857), run from `fluss-rust`:
+CI runs the proxy-authorization integration test against `fluss:dev`. Local runs opt in because the default test image (0.9.1) predates server support. The test verifies user-specific ACLs on coordinator and tablet connections, rejected proxy targets, and incorrect service credentials. For example, with a locally loaded image built from the following fixed upstream commit (which includes #3857), run from `fluss-rust`:
 
 ```shell
 FLUSS_IMAGE=fluss FLUSS_VERSION=c2448838dd2cb3999fcbec29d6b28d9bae2fb649 \

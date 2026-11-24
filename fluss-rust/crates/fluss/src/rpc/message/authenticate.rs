@@ -38,8 +38,17 @@ impl std::fmt::Debug for AuthenticateRequest {
 }
 
 impl AuthenticateRequest {
+    /// Build a SASL/PLAIN request that acts as the authenticated user.
+    pub fn new_plain(username: &str, password: &str) -> Self {
+        Self::new_plain_with_authorization_id(username, password, None)
+    }
+
     /// Build a SASL/PLAIN token: `[authorization_id]\0<username>\0<password>`.
-    pub fn new_plain(username: &str, password: &str, authorization_id: Option<&str>) -> Self {
+    pub fn new_plain_with_authorization_id(
+        username: &str,
+        password: &str,
+        authorization_id: Option<&str>,
+    ) -> Self {
         let authorization_id = authorization_id.unwrap_or_default();
         let mut token =
             Vec::with_capacity(authorization_id.len() + 1 + username.len() + 1 + password.len());
@@ -88,7 +97,11 @@ mod tests {
             (Some("alice"), "alice\0gateway\0secret"),
             (Some("用户"), "用户\0gateway\0secret"),
         ] {
-            let req = AuthenticateRequest::new_plain("gateway", "secret", authorization_id);
+            let req = AuthenticateRequest::new_plain_with_authorization_id(
+                "gateway",
+                "secret",
+                authorization_id,
+            );
             assert_eq!(req.inner_request.protocol, "PLAIN");
             assert_eq!(req.inner_request.token, expected.as_bytes());
             let mut encoded = Vec::new();
@@ -100,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_debug_redacts_token() {
-        let req = AuthenticateRequest::new_plain(
+        let req = AuthenticateRequest::new_plain_with_authorization_id(
             "gateway-private",
             "password-private",
             Some("user-private"),
@@ -118,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_new_plain_empty_credentials() {
-        let req = AuthenticateRequest::new_plain("", "", None);
+        let req = AuthenticateRequest::new_plain("", "");
         assert_eq!(req.inner_request.token, b"\0\0");
     }
 }

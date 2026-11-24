@@ -320,7 +320,13 @@ impl RpcClient {
         self
     }
 
-    pub fn with_sasl(
+    /// Authenticate with SASL/PLAIN as the supplied user.
+    pub fn with_sasl(self, username: String, password: String) -> Self {
+        self.with_sasl_and_authorization_id(username, password, None)
+    }
+
+    /// Authenticate with SASL/PLAIN and optionally act as the given authorization ID.
+    pub fn with_sasl_and_authorization_id(
         mut self,
         username: String,
         password: String,
@@ -499,7 +505,7 @@ impl RpcClient {
         use crate::rpc::message::AuthenticateRequest;
         use rand::Rng;
 
-        let initial_request = AuthenticateRequest::new_plain(
+        let initial_request = AuthenticateRequest::new_plain_with_authorization_id(
             &sasl.username,
             &sasl.password,
             sasl.authorization_id.as_deref(),
@@ -992,7 +998,7 @@ impl<T: ReadType<Cursor<Vec<u8>>>> PendingResponse<T> {
             if api_key == ApiKey::Authenticate {
                 // Server messages may echo credentials; discard them before errors reach logs.
                 error_response.error_message =
-                    Some("SASL authentication failed (details redacted)".to_string());
+                    Some("Authentication failed (details redacted)".to_string());
             }
             return Err(Error::FlussAPIError {
                 api_error: crate::rpc::ApiError::from(error_response),
@@ -1720,7 +1726,7 @@ mod tests {
             ));
             let conn =
                 ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-            let request = AuthenticateRequest::new_plain(
+            let request = AuthenticateRequest::new_plain_with_authorization_id(
                 "gateway-private",
                 "password-private",
                 Some("user-private"),
@@ -1740,7 +1746,7 @@ mod tests {
 
     #[test]
     fn sasl_config_debug_redacts_credentials() {
-        let client = RpcClient::new().with_sasl(
+        let client = RpcClient::new().with_sasl_and_authorization_id(
             "gateway-private".to_string(),
             "password-private".to_string(),
             Some("user-private".to_string()),
@@ -1992,11 +1998,11 @@ mod tests {
             let connect_timeout = Duration::from_secs(60);
             let negotiation_time = Duration::from_secs(40);
             let listener = bind().await;
-            let client = Arc::new(RpcClient::new().with_timeout(connect_timeout).with_sasl(
-                "user".to_string(),
-                "password".to_string(),
-                None,
-            ));
+            let client = Arc::new(
+                RpcClient::new()
+                    .with_timeout(connect_timeout)
+                    .with_sasl("user".to_string(), "password".to_string()),
+            );
             let server = node(1, port(&listener), ServerType::TabletServer);
             let connecting = {
                 let client = Arc::clone(&client);
