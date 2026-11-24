@@ -136,7 +136,7 @@ async def connection(fluss_cluster):
     plaintext_addr, _sasl_addr = fluss_cluster
     conn = await _connect(plaintext_addr)
     yield conn
-    conn.close()
+    await conn.close()
 
 
 @pytest.fixture(scope="session")

@@ -1294,7 +1294,7 @@ struct OffsetAndMetadata {
 /// Starting positions for manually assigned log buckets. Fallback is used only for missing commits.
 class OffsetsInitializer {
    public:
-    static OffsetsInitializer Earliest() { return Offset(EARLIEST_OFFSET); }
+    static OffsetsInitializer Earliest() { return OffsetsInitializer({5, 0, {}}); }
     static OffsetsInitializer Latest() { return OffsetsInitializer({1, 0, {}}); }
     /// Unix timestamp in milliseconds.
     static OffsetsInitializer Timestamp(int64_t timestamp_ms) {

@@ -139,6 +139,7 @@ impl LogScanner {
                 2 => OffsetsInitializer::timestamp(step.value),
                 3 => OffsetsInitializer::fail(),
                 4 => OffsetsInitializer::committed_with_fallback(step.group_id, strategy),
+                5 => OffsetsInitializer::earliest(),
                 _ => {
                     return err_from_core_error(&fcore::error::Error::IllegalArgument {
                         message: "Unknown offsets initializer".into(),
