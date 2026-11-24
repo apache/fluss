@@ -436,7 +436,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                         "BulkLoad requires the current Coordinator leader.");
                             }
                             try {
-                                return action.apply(new BulkLoadManager(zkClient, epochVersion));
+                                return action.apply(
+                                        new BulkLoadManager(zkClient, epochVersion, ioExecutor));
                             } catch (Exception e) {
                                 throw new CompletionException(e);
                             }

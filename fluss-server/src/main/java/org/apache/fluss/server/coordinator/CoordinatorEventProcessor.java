@@ -179,7 +179,10 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Repl
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
+import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
+import static org.apache.fluss.utils.concurrent.FutureUtils.completedExceptionally;
+import static org.apache.fluss.utils.concurrent.FutureUtils.runAsync;
 
 /** An implementation for {@link EventProcessor}. */
 @NotThreadSafe
@@ -359,34 +362,30 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             return;
         }
 
-        registerImportedSnapshot(event);
+        registerImportedSnapshot(event)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure == null) {
+                                event.result.complete(null);
+                            } else {
+                                event.result.completeExceptionally(
+                                        new UnknownServerException(
+                                                "BulkLoad snapshot "
+                                                        + snapshot.getSnapshotID()
+                                                        + " for "
+                                                        + bucket
+                                                        + " was committed, but local registration failed.",
+                                                stripCompletionException(failure)));
+                            }
+                        });
     }
 
-    private void registerImportedSnapshot(CommitBulkLoadBucketEvent event) {
-        CompletedSnapshot snapshot = event.snapshot;
-        TableBucket bucket = snapshot.getTableBucket();
-        final String registrationFailure =
-                "BulkLoad snapshot "
-                        + snapshot.getSnapshotID()
-                        + " for "
-                        + bucket
-                        + " was committed, but local registration failed.";
+    private CompletableFuture<Void> registerImportedSnapshot(CommitBulkLoadBucketEvent event) {
         try {
-            ioExecutor.execute(
-                    () -> {
-                        try {
-                            event.snapshotStore.registerImportedSnapshot(snapshot);
-                            event.result.complete(null);
-                        } catch (Throwable failure) {
-                            if (!event.result.completeExceptionally(
-                                    new UnknownServerException(registrationFailure, failure))) {
-                                LOG.warn(registrationFailure, failure);
-                            }
-                        }
-                    });
+            return runAsync(
+                    () -> event.snapshotStore.registerImportedSnapshot(event.snapshot), ioExecutor);
         } catch (RejectedExecutionException rejected) {
-            event.result.completeExceptionally(
-                    new UnknownServerException(registrationFailure, rejected));
+            return completedExceptionally(rejected);
         }
     }
 
@@ -405,19 +404,25 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private void verifyBulkLoadPublication(CommitBulkLoadBucketEvent commit) {
         TableBucket bucket = commit.snapshot.getTableBucket();
-        BulkLoadVerificationResult verification = new BulkLoadVerificationResult(commit);
+        BulkLoadVerificationResult verification;
         try {
-            verification.committed =
+            boolean committed =
                     zooKeeperClient.checkBulkLoadBucketCommitted(commit.transaction.data(), bucket);
-            verification.activate =
-                    verification.committed
+            boolean importStillSelected =
+                    committed
                             && zooKeeperClient
                                     .getSelectedRecoverySnapshotId(bucket)
                                     .filter(id -> id == commit.snapshot.getSnapshotID())
                                     .isPresent();
-            verification.role = zooKeeperClient.getLeaderAndIsr(bucket).orElse(null);
+            verification =
+                    new BulkLoadVerificationResult(
+                            commit,
+                            committed,
+                            importStillSelected,
+                            zooKeeperClient.getLeaderAndIsr(bucket).orElse(null),
+                            null);
         } catch (Exception failure) {
-            verification.failure = failure;
+            verification = BulkLoadVerificationResult.failed(commit, failure);
         }
         coordinatorEventManager.put(verification);
     }
@@ -477,23 +482,47 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 return;
             }
         }
-        if (verification.activate) {
+        if (verification.importStillSelected) {
             notifyOnlineReplicas(bucket);
         }
         if (verification.committed) {
-            registerImportedSnapshot(commit);
+            registerImportedSnapshot(commit)
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) {
+                                    LOG.warn(
+                                            "Failed to register committed BulkLoad snapshot {} for {}.",
+                                            commit.snapshot.getSnapshotID(),
+                                            bucket,
+                                            stripCompletionException(failure));
+                                }
+                            });
         }
     }
 
     private static final class BulkLoadVerificationResult implements CoordinatorEvent {
         final CommitBulkLoadBucketEvent commit;
-        boolean committed;
-        boolean activate;
-        @Nullable LeaderAndIsr role;
-        @Nullable Exception failure;
+        final boolean committed;
+        final boolean importStillSelected;
+        @Nullable final LeaderAndIsr role;
+        @Nullable final Exception failure;
 
-        BulkLoadVerificationResult(CommitBulkLoadBucketEvent commit) {
+        private BulkLoadVerificationResult(
+                CommitBulkLoadBucketEvent commit,
+                boolean committed,
+                boolean importStillSelected,
+                @Nullable LeaderAndIsr role,
+                @Nullable Exception failure) {
             this.commit = commit;
+            this.committed = committed;
+            this.importStillSelected = importStillSelected;
+            this.role = role;
+            this.failure = failure;
+        }
+
+        static BulkLoadVerificationResult failed(
+                CommitBulkLoadBucketEvent commit, Exception failure) {
+            return new BulkLoadVerificationResult(commit, false, false, null, failure);
         }
     }
 

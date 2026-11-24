@@ -42,16 +42,20 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+
+import static org.apache.fluss.utils.concurrent.FutureUtils.runAsync;
 
 /** Allocates and commits snapshots for individual BulkLoad buckets. */
 public final class BulkLoadManager {
     private final ZooKeeperClient zooKeeperClient;
     private final int epochVersion;
+    private final Executor ioExecutor;
 
-    public BulkLoadManager(ZooKeeperClient zooKeeperClient, int epochVersion) {
+    public BulkLoadManager(ZooKeeperClient zooKeeperClient, int epochVersion, Executor ioExecutor) {
         this.zooKeeperClient = zooKeeperClient;
         this.epochVersion = epochVersion;
+        this.ioExecutor = ioExecutor;
     }
 
     /**
@@ -144,18 +148,21 @@ public final class BulkLoadManager {
                         epochVersion,
                         snapshotStores.getOrCreateCompletedSnapshotStore(tablePath, bucket));
         eventManager.put(event);
-        return event.result.exceptionally(
-                failure -> {
-                    try {
-                        if (failure instanceof KeeperException.NoNodeException
-                                || failure instanceof KeeperException.BadVersionException) {
-                            checkMutationTarget(bulkLoadTransaction, target.data());
-                        }
-                    } catch (Exception classified) {
-                        failure = classified;
-                    }
-                    throw new CompletionException(failure);
-                });
+        return event.result
+                .handle(
+                        (ignored, failure) -> {
+                            if (failure instanceof KeeperException.NoNodeException
+                                    || failure instanceof KeeperException.BadVersionException) {
+                                return runAsync(
+                                        () -> {
+                                            checkMutationTarget(bulkLoadTransaction, target.data());
+                                            throw (KeeperException) failure;
+                                        },
+                                        ioExecutor);
+                            }
+                            return event.result;
+                        })
+                .thenCompose(result -> result);
     }
 
     private VersionedData<BulkLoadTransaction> getTransaction(long tableId, String bulkLoadId)

@@ -246,8 +246,16 @@ public class CompletedSnapshotStore {
     }
 
     private boolean holdsSnapshot(long id) {
-        return stillInUseSnapshots.containsKey(id)
-                || completedSnapshots.stream().anyMatch(snapshot -> snapshot.getSnapshotID() == id);
+        if (stillInUseSnapshots.containsKey(id)) {
+            return true;
+        }
+        Iterator<CompletedSnapshot> snapshots = completedSnapshots.descendingIterator();
+        while (snapshots.hasNext()) {
+            if (snapshots.next().getSnapshotID() == id) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void trackSnapshot(CompletedSnapshot snapshot) {

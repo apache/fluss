@@ -60,6 +60,7 @@ import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
+import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
@@ -113,7 +114,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -215,7 +215,7 @@ class BulkLoadBucketCommitTest {
         int epoch =
                 client.fenceBecomeCoordinatorLeader("bucket-commit").getCoordinatorEpochZkVersion();
         client.registerLeaderAndIsr(bucket, new LeaderAndIsr(0, 0), epoch);
-        manager = new BulkLoadManager(client, epoch);
+        manager = new BulkLoadManager(client, epoch, ForkJoinPool.commonPool());
         snapshots =
                 new CompletedSnapshotStoreManager(
                         1,
@@ -368,21 +368,23 @@ class BulkLoadBucketCommitTest {
         CoordinatorEventManager events =
                 startPublicationProcessor(client, ForkJoinPool.commonPool())
                         .getCoordinatorEventManager();
-        assertThatThrownBy(
-                        () ->
-                                manager.commitBucketSnapshot(
-                                                LOAD_ID,
-                                                bucket,
-                                                snapshots,
-                                                event -> {
-                                                    try {
-                                                        client.deleteTable(TABLE);
-                                                    } catch (Exception failure) {
-                                                        throw new AssertionError(failure);
-                                                    }
-                                                    events.put(event);
-                                                })
-                                        .get(30, TimeUnit.SECONDS))
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
+        BulkLoadManager publishingManager =
+                new BulkLoadManager(
+                        client, client.getCurrentEpoch().getCoordinatorEpochZkVersion(), io);
+        CompletableFuture<CoordinatorEvent> publication = new CompletableFuture<>();
+        CompletableFuture<Void> commit =
+                publishingManager.commitBucketSnapshot(
+                        LOAD_ID, bucket, snapshots, publication::complete);
+        client.deleteTable(TABLE);
+        events.put(publication.get(30, TimeUnit.SECONDS));
+        AccessContextEvent<Void> nextEvent = new AccessContextEvent<>(context -> null);
+        events.put(nextEvent);
+        nextEvent.getResultFuture().get(30, TimeUnit.SECONDS);
+        assertThat(commit).isNotDone();
+        io.triggerAll();
+        assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
                 .hasCauseInstanceOf(BulkLoadNotFoundException.class);
         assertBucketNotCommitted();
     }
@@ -507,7 +509,9 @@ class BulkLoadBucketCommitTest {
         coordinator = cluster.newCoordinatorClient();
         manager =
                 new BulkLoadManager(
-                        client, client.getCurrentEpoch().getCoordinatorEpochZkVersion());
+                        client,
+                        client.getCurrentEpoch().getCoordinatorEpochZkVersion(),
+                        ForkJoinPool.commonPool());
         snapshots =
                 cluster.getCoordinatorServer()
                         .getCoordinatorEventProcessor()
@@ -728,94 +732,24 @@ class BulkLoadBucketCommitTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"false,true", "true,true", "true,false", "false,false"})
-    void testConnectionLossDuringPublication(boolean persisted, boolean canVerify)
-            throws Exception {
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
-        start(descriptor, null, canVerify ? 1 : 2);
-        if (!canVerify) {
-            retry(
-                    Duration.ofSeconds(30),
-                    () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
-        }
-        List<KvRecord> base = genKvRecords(new Object[] {2, "original"});
-        putRows(base);
+    @ValueSource(booleans = {false, true})
+    void testImmediatelyVerifyLostPublicationResponse(boolean persisted) throws Exception {
+        start();
         allocate();
-        Tuple2<byte[], byte[]> imported =
-                uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
-        AtomicBoolean verificationAvailable = new AtomicBoolean(canVerify);
-        CountDownLatch failedChecks = new CountDownLatch(2);
-        LeaderAndIsr initial = client.getLeaderAndIsr(bucket).get();
-        assertThat(adjustIsr(initial).getBucketEpoch()).isEqualTo(initial.bucketEpoch() + 1);
-        LeaderAndIsr beforeCommit = client.getLeaderAndIsr(bucket).get();
+        uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
+        LeaderAndIsr beforeCommit = advanceBucketEpoch();
         try (CuratorFramework curator =
                 losePublicationResponse(
-                        client, persisted, verificationAvailable, failedChecks, null)) {
-            ZooKeeperClient publisher = startPublisher(curator);
-            CoordinatorEventProcessor processor =
-                    startPublicationProcessor(publisher, ForkJoinPool.commonPool());
-            AccessContextEvent<Void> populateAssignment =
-                    new AccessContextEvent<>(
-                            context -> {
-                                context.setLiveTabletServers(cluster.getTabletServerInfos());
-                                context.updateBucketReplicaAssignment(bucket, beforeCommit.isr());
-                                return null;
-                            });
-            processor.getCoordinatorEventManager().put(populateAssignment);
-            populateAssignment.getResultFuture().get(30, TimeUnit.SECONDS);
-
-            BulkLoadManager publishingManager =
-                    new BulkLoadManager(
-                            publisher, client.getCurrentEpoch().getCoordinatorEpochZkVersion());
-            if (!canVerify) {
-                assertThatThrownBy(
-                                () ->
-                                        publishingManager
-                                                .commitBucketSnapshot(
-                                                        LOAD_ID,
-                                                        bucket,
-                                                        snapshots,
-                                                        processor.getCoordinatorEventManager())
-                                                .get(30, TimeUnit.SECONDS))
-                        .hasCauseInstanceOf(NetworkException.class);
-                verifyMixedIsrBatchAndFollowerLoss(beforeCommit);
-                int expected = persisted ? expectedLeaderEpoch : beforeCommit.leaderEpoch();
-                assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch()).isEqualTo(expected);
-                // Both the inline check and a background check failed before connectivity returned.
-                assertThat(failedChecks.await(30, TimeUnit.SECONDS)).isTrue();
-                verificationAvailable.set(true);
-                retry(
-                        Duration.ofSeconds(30),
-                        () -> {
-                            LeaderAndIsr current = client.getLeaderAndIsr(bucket).get();
-                            assertThat(current.leaderEpoch()).isEqualTo(expected);
-                            assertThat(current.isr()).containsExactly(beforeCommit.leader());
-                            assertThat(cluster.waitAndGetLeaderReplica(bucket).getLeaderEpoch())
-                                    .isEqualTo(expected);
-                            assertLookupRow(persisted ? imported : getKeyValuePairs(base).get(0));
-                        });
-                return;
-            }
+                        client, persisted, new AtomicBoolean(true), new CountDownLatch(0), null)) {
+            CompletableFuture<Void> commit = commitWithPublicationFault(curator, beforeCommit);
             if (!persisted) {
-                assertThatThrownBy(
-                                () ->
-                                        publishingManager
-                                                .commitBucketSnapshot(
-                                                        LOAD_ID,
-                                                        bucket,
-                                                        snapshots,
-                                                        processor.getCoordinatorEventManager())
-                                                .get(30, TimeUnit.SECONDS))
+                assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
                         .hasCauseInstanceOf(KeeperException.ConnectionLossException.class);
                 assertBucketNotCommitted();
                 assertThat(adjustPublicationIsr(beforeCommit).hasErrorCode()).isFalse();
                 return;
             }
-            publishingManager
-                    .commitBucketSnapshot(
-                            LOAD_ID, bucket, snapshots, processor.getCoordinatorEventManager())
-                    .get(30, TimeUnit.SECONDS);
+            commit.get(30, TimeUnit.SECONDS);
             LeaderAndIsr published = client.getLeaderAndIsr(bucket).get();
             assertThat(published.bucketEpoch()).isEqualTo(beforeCommit.bucketEpoch() + 1);
             assertThat(adjustPublicationIsr(beforeCommit).getErrorCode())
@@ -823,6 +757,80 @@ class BulkLoadBucketCommitTest {
             assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(snapshotId);
             assertThat(adjustPublicationIsr(published).hasErrorCode()).isFalse();
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnconfirmedPublicationIsolatesBucketAndRecoversWithoutRetry(boolean persisted)
+            throws Exception {
+        start(
+                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build(),
+                null,
+                2);
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(client.getLeaderAndIsr(bucket).get().isr()).hasSize(2));
+        List<KvRecord> base = genKvRecords(new Object[] {2, "original"});
+        putRows(base);
+        allocate();
+        Tuple2<byte[], byte[]> imported =
+                uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
+        LeaderAndIsr beforeCommit = advanceBucketEpoch();
+        AtomicBoolean verificationAvailable = new AtomicBoolean(false);
+        CountDownLatch failedChecks = new CountDownLatch(2);
+        try (CuratorFramework curator =
+                losePublicationResponse(
+                        client, persisted, verificationAvailable, failedChecks, null)) {
+            CompletableFuture<Void> commit = commitWithPublicationFault(curator, beforeCommit);
+            assertThatThrownBy(() -> commit.get(30, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NetworkException.class);
+            verifyMixedIsrBatchAndFollowerLoss(beforeCommit);
+            int expected = persisted ? expectedLeaderEpoch : beforeCommit.leaderEpoch();
+            assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch()).isEqualTo(expected);
+            // Both the inline check and a background check failed before connectivity returned.
+            assertThat(failedChecks.await(30, TimeUnit.SECONDS)).isTrue();
+            verificationAvailable.set(true);
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        LeaderAndIsr current = client.getLeaderAndIsr(bucket).get();
+                        assertThat(current.leaderEpoch()).isEqualTo(expected);
+                        assertThat(current.isr()).containsExactly(beforeCommit.leader());
+                        assertThat(cluster.waitAndGetLeaderReplica(bucket).getLeaderEpoch())
+                                .isEqualTo(expected);
+                        assertLookupRow(persisted ? imported : getKeyValuePairs(base).get(0));
+                    });
+        }
+    }
+
+    private LeaderAndIsr advanceBucketEpoch() throws Exception {
+        LeaderAndIsr initial = client.getLeaderAndIsr(bucket).get();
+        assertThat(adjustIsr(initial).getBucketEpoch()).isEqualTo(initial.bucketEpoch() + 1);
+        return client.getLeaderAndIsr(bucket).get();
+    }
+
+    private CompletableFuture<Void> commitWithPublicationFault(
+            CuratorFramework curator, LeaderAndIsr beforeCommit) throws Exception {
+        ZooKeeperClient publisher = startPublisher(curator);
+        CoordinatorEventProcessor processor =
+                startPublicationProcessor(publisher, ForkJoinPool.commonPool());
+        AccessContextEvent<Void> populateAssignment =
+                new AccessContextEvent<>(
+                        context -> {
+                            context.setLiveTabletServers(cluster.getTabletServerInfos());
+                            context.updateBucketReplicaAssignment(bucket, beforeCommit.isr());
+                            return null;
+                        });
+        processor.getCoordinatorEventManager().put(populateAssignment);
+        populateAssignment.getResultFuture().get(30, TimeUnit.SECONDS);
+
+        BulkLoadManager publishingManager =
+                new BulkLoadManager(
+                        publisher,
+                        client.getCurrentEpoch().getCoordinatorEpochZkVersion(),
+                        ForkJoinPool.commonPool());
+        return publishingManager.commitBucketSnapshot(
+                LOAD_ID, bucket, snapshots, processor.getCoordinatorEventManager());
     }
 
     @Test
@@ -875,7 +883,9 @@ class BulkLoadBucketCommitTest {
             initialize.getResultFuture().get(30, TimeUnit.SECONDS);
             BulkLoadManager publishingManager =
                     new BulkLoadManager(
-                            publisher, client.getCurrentEpoch().getCoordinatorEpochZkVersion());
+                            publisher,
+                            client.getCurrentEpoch().getCoordinatorEpochZkVersion(),
+                            ForkJoinPool.commonPool());
             assertThatThrownBy(
                             () ->
                                     publishingManager
