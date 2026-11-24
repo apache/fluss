@@ -220,9 +220,11 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                 return ArrowScanRecords.EMPTY;
             }
             maybeAutoCommit();
+            invokeCompletedOffsetCommitCallbacks();
 
             scannerMetricGroup.recordPollStart(System.currentTimeMillis());
             do {
+                logFetcher.resetPositionsIfNeeded();
                 ArrowScanRecords scanRecords = pollForRecordBatches();
                 if (scanRecords.isEmpty()) {
                     try {

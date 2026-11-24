@@ -26,11 +26,15 @@ import javax.annotation.Nullable;
 import java.util.Map;
 
 /**
- * Callback invoked asynchronously after a consumer-offset commit completes, times out, or is
- * cancelled on scanner close. Built-in scanners deliver completed callbacks on the scanner thread
- * during {@code poll}, {@code commitAsync}, {@code commitSync}, or {@code close}; a callback may
- * therefore wait for another scanner operation to run. A timeout or cancellation does not guarantee
- * the server has not applied the commit.
+ * Receives the result of an asynchronous consumer offset commit on the thread calling the scanner.
+ *
+ * <p>Built-in scanners invoke ready callbacks during a later poll, after any required lookup of
+ * committed offsets, or before submitting a subsequent synchronous or asynchronous commit. A commit
+ * call can proceed while an earlier asynchronous commit is still in flight.
+ *
+ * <p>Closing the scanner may also invoke callbacks while it waits for outstanding commits. The
+ * configured {@code client.request-timeout} limits this wait. Running callbacks can extend close
+ * beyond that timeout. A callback may remain undelivered even if its commit has already completed.
  */
 @PublicEvolving
 @FunctionalInterface
@@ -39,11 +43,11 @@ public interface OffsetCommitCallback {
     /**
      * Handles completion of an asynchronous offset commit.
      *
-     * @param offsets immutable snapshot of the offsets submitted for commit
-     * @param exception commit failure (including {@link
-     *     org.apache.fluss.exception.TimeoutException} if the request times out), {@link
-     *     java.util.concurrent.CancellationException} if the scanner closed before the commit
-     *     completed, or {@code null} on success
+     * @param offsets the caller-supplied offset map, or a read-only snapshot of the scanner's
+     *     positions if the caller omitted the map
+     * @param exception the commit failure, including {@link
+     *     org.apache.fluss.exception.TimeoutException} if the request timed out, or {@code null} on
+     *     success. A timeout leaves the server-side outcome unknown.
      */
     void onComplete(Map<TableBucket, OffsetMetadata> offsets, @Nullable Exception exception);
 }

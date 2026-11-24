@@ -25,12 +25,12 @@ import org.apache.fluss.client.table.scanner.log.internals.ConsumerGroupClient;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConsumerOffsetReset;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.IOUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,14 +40,11 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 
 /**
  * Base class that centralizes the shared poll loop, lightweight single-thread guard, wakeup and
@@ -69,8 +66,6 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
     protected final LogFetcher logFetcher;
     protected final ScannerMetricGroup scannerMetricGroup;
     @Nullable private final ConsumerGroupClient consumerGroupClient;
-    // Cache the bound supplier to avoid allocating one for each poll.
-    @Nullable private final Supplier<Map<TableBucket, OffsetMetadata>> autoCommitOffsets;
     private final long defaultApiTimeoutMs;
     private final ConsumerOffsetReset offsetResetPolicy;
 
@@ -93,33 +88,34 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         this.logScannerStatus = logScannerStatus;
         this.logFetcher = logFetcher;
         this.scannerMetricGroup = scannerMetricGroup;
-        this.scannerMetricGroup.registerRecordsLagGauge(logScannerStatus::recordsLag);
-        this.defaultApiTimeoutMs = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
-        this.offsetResetPolicy = conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_OFFSET_RESET);
-
-        String groupId = conf.getString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID);
-        boolean autoCommitEnabled =
-                conf.getBoolean(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED);
-        if (groupId == null) {
-            if (autoCommitEnabled
-                    && conf.containsKey(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED.key())) {
-                throw new InvalidConfigException(
-                        ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED.key()
-                                + " cannot be true without "
-                                + ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
-            }
-            this.consumerGroupClient = null;
-            this.autoCommitOffsets = null;
-        } else {
+        try {
+            this.scannerMetricGroup.registerRecordsLagGauge(logScannerStatus::recordsLag);
+            this.defaultApiTimeoutMs = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
+            this.offsetResetPolicy = conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_OFFSET_RESET);
             this.consumerGroupClient =
-                    new ConsumerGroupClient(
-                            groupId,
-                            metadataUpdater,
-                            autoCommitEnabled,
-                            conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL).toMillis(),
-                            defaultApiTimeoutMs);
-            this.autoCommitOffsets = logScannerStatus::allConsumed;
+                    createConsumerGroupClient(conf, metadataUpdater, logScannerStatus);
+        } catch (Throwable t) {
+            closeFetcherAndMetrics();
+            throw t;
         }
+    }
+
+    @Nullable
+    private static ConsumerGroupClient createConsumerGroupClient(
+            Configuration conf,
+            MetadataUpdater metadataUpdater,
+            LogScannerStatus logScannerStatus) {
+        if (conf.getString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID) != null) {
+            return new ConsumerGroupClient(conf, metadataUpdater, logScannerStatus);
+        }
+        if (conf.getBoolean(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED)
+                && conf.containsKey(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED.key())) {
+            throw new InvalidConfigException(
+                    ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED.key()
+                            + " cannot be true without "
+                            + ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
+        }
+        return null;
     }
 
     /**
@@ -146,9 +142,11 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
                 return emptyResult();
             }
             maybeAutoCommit();
+            invokeCompletedOffsetCommitCallbacks();
 
             scannerMetricGroup.recordPollStart(System.currentTimeMillis());
             do {
+                logFetcher.resetPositionsIfNeeded();
                 ScanRecords scanRecords = pollForFetches();
                 if (!scanRecords.hasProgress()) {
                     try {
@@ -170,12 +168,8 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
 
             return emptyResult();
         } finally {
-            try {
-                scannerMetricGroup.recordPollEnd(System.currentTimeMillis());
-                invokeCompletedOffsetCommitCallbacks();
-            } finally {
-                release();
-            }
+            release();
+            scannerMetricGroup.recordPollEnd(System.currentTimeMillis());
         }
     }
 
@@ -209,44 +203,32 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         logScannerStatus.assignFromCommittedOffset(tableBucket);
     }
 
+    /**
+     * Initializes pending fetch positions using committed offsets and the configured reset policy.
+     * Latest resets are dispatched asynchronously by the fetcher.
+     *
+     * @param startNanos the value of {@link System#nanoTime()} when the current poll started
+     * @param timeoutNanos the total timeout for the current poll, in nanoseconds
+     * @return {@code true} if no committed offsets were needed or their lookup finished with time
+     *     left to fetch. Returns {@code false} if the lookup exhausted the poll timeout.
+     */
     protected final boolean initializeCommittedOffsets(long startNanos, long timeoutNanos) {
-        Set<TableBucket> missing = logScannerStatus.missingCommittedOffsets();
-        if (missing.isEmpty() && logScannerStatus.missingLatestOffsets().isEmpty()) {
+        if (consumerGroupClient == null) {
             return true;
         }
-        if (!missing.isEmpty()) {
-            // Offset lookup and fetch waiting share the deadline set when poll began.
-            long remainingNanos = timeoutNanos - (System.nanoTime() - startNanos);
-            Map<TableBucket, OffsetMetadata> committed =
-                    consumerGroupClient.fetchCommittedOffsets(
-                            missing, Math.max(0L, TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
-            if (committed == null) {
-                return false;
-            }
-            logScannerStatus.resolveCommittedOffsets(committed, offsetResetPolicy);
+        Set<TableBucket> missing = logScannerStatus.missingCommittedOffsets();
+        if (missing.isEmpty()) {
+            return true;
         }
 
-        // Both the latest reset policy and an explicit LATEST_OFFSET subscription resolve real
-        // positions with ListOffsets; the sentinel is not a fetchable offset for the server.
-        // Read the set again: resolving committed offsets above may have moved buckets into the
-        // latest-awaiting state during this poll.
-        Set<TableBucket> missingLatest = logScannerStatus.missingLatestOffsets();
-        if (!missingLatest.isEmpty()) {
-            long remainingNanos = timeoutNanos - (System.nanoTime() - startNanos);
-            try {
-                Map<TableBucket, Long> latest =
-                        logFetcher.listLatestOffsets(
-                                missingLatest,
-                                Math.max(0L, TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
-                if (latest == null) {
-                    return false;
-                }
-                logScannerStatus.resolveLatestOffsets(latest);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new FlussRuntimeException("Interrupted while resolving latest offsets", e);
-            }
+        long remainingNanos = timeoutNanos - (System.nanoTime() - startNanos);
+        Map<TableBucket, OffsetMetadata> committed =
+                consumerGroupClient.fetchCommittedOffsets(
+                        missing, Math.max(0L, TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
+        if (committed == null) {
+            return false;
         }
+        logScannerStatus.resolveCommittedOffsets(committed, offsetResetPolicy);
 
         // Avoid starting a new fetch if offset resolution has already used the poll budget.
         return System.nanoTime() - startNanos < timeoutNanos;
@@ -254,8 +236,7 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
 
     protected final void maybeAutoCommit() {
         if (consumerGroupClient != null) {
-            consumerGroupClient.maybeAutoCommitOffsetsAsync(
-                    System.currentTimeMillis(), autoCommitOffsets);
+            consumerGroupClient.maybeAutoCommitOffsetsAsync();
         }
     }
 
@@ -267,9 +248,10 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         acquireAndEnsureOpen();
         try {
             requireConsumerGroup();
+            invokeCompletedOffsetCommitCallbacks();
             commitSyncSnapshot(logScannerStatus.allConsumed(), timeout);
         } finally {
-            invokeCompletedOffsetCommitCallbacksAndRelease();
+            release();
         }
     }
 
@@ -281,9 +263,10 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         acquireAndEnsureOpen();
         try {
             requireConsumerGroup();
-            commitSyncSnapshot(immutableOffsets(offsets), timeout);
+            invokeCompletedOffsetCommitCallbacks();
+            commitSyncSnapshot(offsets, timeout);
         } finally {
-            invokeCompletedOffsetCommitCallbacksAndRelease();
+            release();
         }
     }
 
@@ -302,12 +285,13 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         acquireAndEnsureOpen();
         try {
             requireConsumerGroup();
+            invokeCompletedOffsetCommitCallbacks();
             Map<TableBucket, OffsetMetadata> offsets = logScannerStatus.allConsumed();
             consumerGroupClient.commitOffsetsAsync(
                     Collections.unmodifiableMap(offsets),
                     callback == null ? this::logAsyncCommitFailure : callback);
         } finally {
-            invokeCompletedOffsetCommitCallbacksAndRelease();
+            release();
         }
     }
 
@@ -316,23 +300,15 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         acquireAndEnsureOpen();
         try {
             requireConsumerGroup();
-            consumerGroupClient.commitOffsetsAsync(
-                    immutableOffsets(offsets),
-                    callback == null ? this::logAsyncCommitFailure : callback);
-        } finally {
-            invokeCompletedOffsetCommitCallbacksAndRelease();
-        }
-    }
-
-    private void invokeCompletedOffsetCommitCallbacksAndRelease() {
-        try {
             invokeCompletedOffsetCommitCallbacks();
+            consumerGroupClient.commitOffsetsAsync(
+                    offsets, callback == null ? this::logAsyncCommitFailure : callback);
         } finally {
             release();
         }
     }
 
-    private void invokeCompletedOffsetCommitCallbacks() {
+    void invokeCompletedOffsetCommitCallbacks() {
         if (consumerGroupClient != null) {
             consumerGroupClient.invokeCompletedOffsetCommitCallbacks();
         }
@@ -342,18 +318,6 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         if (error != null) {
             LOG.error("Failed to commit consumer offsets for scanner {}", name, error);
         }
-    }
-
-    private static Map<TableBucket, OffsetMetadata> immutableOffsets(
-            Map<TableBucket, OffsetMetadata> offsets) {
-        Objects.requireNonNull(offsets, "offsets must not be null");
-        HashMap<TableBucket, OffsetMetadata> copy = new HashMap<>();
-        for (Map.Entry<TableBucket, OffsetMetadata> entry : offsets.entrySet()) {
-            copy.put(
-                    Objects.requireNonNull(entry.getKey(), "table bucket must not be null"),
-                    Objects.requireNonNull(entry.getValue(), "offset metadata must not be null"));
-        }
-        return Collections.unmodifiableMap(copy);
     }
 
     private void requireConsumerGroup() {
@@ -414,33 +378,21 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         acquire();
         try {
             if (!closed) {
+                closed = true;
                 LOG.trace("Closing log scanner: {}", name);
-                // Resources close in reverse order, preserving a commit failure if cleanup fails.
-                try (LogFetcher fetcherToClose = logFetcher;
-                        AutoCloseable metricsToClose = scannerMetricGroup::close;
-                        ConsumerGroupClient groupToClose = consumerGroupClient) {
-                    if (groupToClose != null
-                            && !groupToClose.maybeAutoCommitOffsetsSync(
-                                    logScannerStatus.allConsumed(), defaultApiTimeoutMs)) {
-                        throw new TimeoutException(
-                                "Timed out after "
-                                        + defaultApiTimeoutMs
-                                        + " ms committing offsets on close");
-                    }
-                } catch (RuntimeException e) {
-                    throw e;
-                } catch (Exception e) {
-                    throw new RuntimeException("Failed to close log scanner: " + name, e);
+                if (consumerGroupClient != null) {
+                    consumerGroupClient.close();
                 }
+                closeFetcherAndMetrics();
             }
             LOG.debug("Log scanner: {} has been closed", name);
         } finally {
-            closed = true;
-            try {
-                invokeCompletedOffsetCommitCallbacks();
-            } finally {
-                release();
-            }
+            release();
         }
+    }
+
+    private void closeFetcherAndMetrics() {
+        IOUtils.closeQuietly(scannerMetricGroup::close, "scanner metrics");
+        IOUtils.closeQuietly(logFetcher, "log fetcher");
     }
 }

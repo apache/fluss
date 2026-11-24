@@ -27,6 +27,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
+import org.apache.fluss.client.table.scanner.log.LogScannerStatus;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.scanner.log.internals.ConsumerGroupClient;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -114,11 +115,9 @@ public class ConsumerGroupFailoverITCase extends ClientToServerITCaseBase {
                 LogScanner scanner = table.newScan().createLogScanner();
                 ConsumerGroupClient offsetReader =
                         new ConsumerGroupClient(
-                                groupId,
+                                groupConfiguration,
                                 ((FlussConnection) groupConnection).getMetadataUpdater(),
-                                false,
-                                0L,
-                                ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis())) {
+                                new LogScannerStatus())) {
             scanner.subscribeFromBeginning(0);
             scanner.commitSync(
                     Collections.singletonMap(dataBucket, new OffsetMetadata(17L, "before")));
@@ -224,11 +223,9 @@ public class ConsumerGroupFailoverITCase extends ClientToServerITCaseBase {
                 LogScanner resumeScanner = table.newScan().createLogScanner();
                 ConsumerGroupClient offsetReader =
                         new ConsumerGroupClient(
-                                groupId,
+                                groupConfiguration,
                                 ((FlussConnection) groupConnection).getMetadataUpdater(),
-                                false,
-                                0L,
-                                ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis())) {
+                                new LogScannerStatus())) {
             scanner.subscribeFromBeginning(0);
             scanner.commitSync(
                     Collections.singletonMap(dataBucket, new OffsetMetadata(3L, "before")));
@@ -342,11 +339,7 @@ public class ConsumerGroupFailoverITCase extends ClientToServerITCaseBase {
             MetadataUpdater realUpdater = connection.getMetadataUpdater();
             try (ConsumerGroupClient offsetReader =
                     new ConsumerGroupClient(
-                            groupId,
-                            realUpdater,
-                            false,
-                            0L,
-                            ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis())) {
+                            groupConfiguration, realUpdater, new LogScannerStatus())) {
                 Map<TableBucket, OffsetMetadata> initialOffset =
                         Collections.singletonMap(dataBucket, new OffsetMetadata(3L, "before"));
                 assertThat(offsetReader.commitOffsetsSync(initialOffset, 60_000L)).isTrue();

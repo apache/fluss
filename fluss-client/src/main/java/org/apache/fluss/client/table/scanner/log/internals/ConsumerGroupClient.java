@@ -21,15 +21,18 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.scanner.log.LogScannerStatus;
 import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -40,21 +43,21 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayDeque;
+import javax.annotation.Nullable;
+
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.util.Objects.requireNonNull;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCommitConsumerOffsetsRequest;
 import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
 import static org.apache.fluss.utils.ExceptionUtils.stripFutureException;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -63,11 +66,9 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * Discovers and caches the tablet server that owns a consumer group, and commits/fetches consumer
  * offsets to/from it.
  *
- * <p>Discovery is initiated by scanner threads while RPC completion callbacks run on network
- * threads; both coordinate through this object's monitor, mirroring how LogFetcher shares state
- * between the scanner thread and fetch-response callbacks. Owner state is guarded by {@code this},
- * and the monitor is never held across blocking waits. RPC and timeout threads enqueue completed
- * offset-commit callbacks for the scanner thread to invoke without holding that monitor.
+ * <p>The scanner and RPC threads synchronize on this client to share the cached owner and its
+ * in-flight discovery. RPC and timeout threads publish offset commit results to a concurrent queue.
+ * The scanner thread drains the queue and invokes the callbacks.
  */
 @Internal
 public final class ConsumerGroupClient implements AutoCloseable {
@@ -77,106 +78,75 @@ public final class ConsumerGroupClient implements AutoCloseable {
 
     private final String groupId;
     private final MetadataUpdater metadataUpdater;
+    private final LogScannerStatus logScannerStatus;
     private final Clock clock;
     private final long retryBackoffMs;
     private final boolean autoCommitEnabled;
     private final long autoCommitIntervalMs;
-    private final long asyncCommitTimeoutMs;
+    private final long requestTimeoutMs;
     /** The cached owner gateway; null while the owner is unknown. */
     private TabletServerGateway ownerGateway;
 
     /** The pending owner-discovery request; null while no discovery is in flight. */
     private CompletableFuture<TabletServerGateway> ownerDiscovery;
 
-    /** Whether the manager has been closed; guarded by this object's monitor. */
-    private boolean closed;
+    private volatile boolean closed;
 
-    /** Commit callbacks not yet queued for delivery; guarded by this object's monitor. */
-    private final Set<PendingOffsetCommitCallback> pendingOffsetCommitCallbacks = new HashSet<>();
+    /** Submitted commits whose result has yet to be queued. */
+    private final AtomicInteger pendingAsyncCommits = new AtomicInteger();
 
-    /** Completed callbacks awaiting scanner delivery; guarded by this object's monitor. */
-    private final Queue<Runnable> completedOffsetCommitCallbacks = new ArrayDeque<>();
+    private final ConcurrentLinkedQueue<OffsetCommitCompletion> completedOffsetCommits =
+            new ConcurrentLinkedQueue<>();
 
     /** Accessed only by scanner operations (including close), never by RPC callbacks. */
-    private PendingCommittedOffsetRequest pendingOffsetFetch;
+    private PendingOffsetFetchRequest pendingOffsetFetch;
+
     /** Deadline (in milliseconds) for the next auto-commit; 0 when auto-commit is disabled. */
     private long nextAutoCommitDeadlineMs;
 
-    /**
-     * Creates a manager that discovers and caches the owner of one consumer group.
-     *
-     * @param groupId the consumer group whose owner is discovered
-     * @param metadataUpdater the client metadata used to pick a tablet server for discovery and to
-     *     open gateways to the discovered owner
-     */
-    @VisibleForTesting
-    ConsumerGroupClient(String groupId, MetadataUpdater metadataUpdater) {
-        this(
-                groupId,
-                metadataUpdater,
-                SystemClock.getInstance(),
-                DEFAULT_RETRY_BACKOFF_MS,
-                false,
-                0L,
-                ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis());
-    }
-
+    /** Creates the client for the consumer group configured for this scanner. */
     public ConsumerGroupClient(
-            String groupId,
+            Configuration conf,
             MetadataUpdater metadataUpdater,
-            boolean autoCommitEnabled,
-            long autoCommitIntervalMs,
-            long asyncCommitTimeoutMs) {
+            LogScannerStatus logScannerStatus) {
         this(
-                groupId,
+                conf,
                 metadataUpdater,
+                logScannerStatus,
                 SystemClock.getInstance(),
-                DEFAULT_RETRY_BACKOFF_MS,
-                autoCommitEnabled,
-                autoCommitIntervalMs,
-                asyncCommitTimeoutMs);
+                DEFAULT_RETRY_BACKOFF_MS);
     }
 
     @VisibleForTesting
     ConsumerGroupClient(
-            String groupId, MetadataUpdater metadataUpdater, Clock clock, long retryBackoffMs) {
-        this(
-                groupId,
-                metadataUpdater,
-                clock,
-                retryBackoffMs,
-                false,
-                0L,
-                ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis());
-    }
-
-    @VisibleForTesting
-    ConsumerGroupClient(
-            String groupId,
+            Configuration conf,
             MetadataUpdater metadataUpdater,
+            LogScannerStatus logScannerStatus,
             Clock clock,
-            long retryBackoffMs,
-            boolean autoCommitEnabled,
-            long autoCommitIntervalMs,
-            long asyncCommitTimeoutMs) {
-        this.groupId = Objects.requireNonNull(groupId, "groupId must not be null");
-        this.metadataUpdater =
-                Objects.requireNonNull(metadataUpdater, "metadataUpdater must not be null");
-        this.clock = Objects.requireNonNull(clock, "clock must not be null");
+            long retryBackoffMs) {
+        this.groupId =
+                requireNonNull(
+                        conf.get(ConfigOptions.CLIENT_CONSUMER_GROUP_ID),
+                        "groupId must not be null");
+        this.metadataUpdater = requireNonNull(metadataUpdater, "metadataUpdater must not be null");
+        this.logScannerStatus =
+                requireNonNull(logScannerStatus, "logScannerStatus must not be null");
+        this.clock = requireNonNull(clock, "clock must not be null");
         if (retryBackoffMs < 0) {
             throw new IllegalArgumentException("retryBackoffMs must not be negative");
         }
         this.retryBackoffMs = retryBackoffMs;
+        this.autoCommitEnabled = conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED);
+        this.autoCommitIntervalMs =
+                conf.get(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL).toMillis();
         if (autoCommitEnabled && autoCommitIntervalMs <= 0) {
             throw new IllegalArgumentException(
                     "autoCommitIntervalMs must be positive when auto-commit is enabled");
         }
-        this.autoCommitEnabled = autoCommitEnabled;
-        this.autoCommitIntervalMs = autoCommitIntervalMs;
-        if (asyncCommitTimeoutMs < 0) {
-            throw new IllegalArgumentException("asyncCommitTimeoutMs must not be negative");
+        this.requestTimeoutMs = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
+        if (requestTimeoutMs < 0) {
+            throw new IllegalArgumentException("requestTimeoutMs must not be negative");
         }
-        this.asyncCommitTimeoutMs = asyncCommitTimeoutMs;
         this.nextAutoCommitDeadlineMs =
                 autoCommitEnabled ? clock.milliseconds() + autoCommitIntervalMs : 0L;
     }
@@ -243,69 +213,47 @@ public final class ConsumerGroupClient implements AutoCloseable {
     /** Commits a stable offsets snapshot and queues its callback when the RPC finishes. */
     public void commitOffsetsAsync(
             Map<TableBucket, OffsetMetadata> offsets, OffsetCommitCallback callback) {
-        Objects.requireNonNull(callback, "callback must not be null");
+        requireNonNull(callback, "callback must not be null");
 
-        PendingOffsetCommitCallback pending = new PendingOffsetCommitCallback(offsets, callback);
-        CompletableFuture<Void> completion = pending.completion;
+        checkState(!closed, "Consumer group client is closed.");
+        pendingAsyncCommits.incrementAndGet();
+        CompletableFuture<Void> completion = new CompletableFuture<>();
         completion.whenComplete(
-                (ignored, error) -> enqueueCompletedOffsetCommitCallback(pending, error));
-        synchronized (this) {
-            checkState(!closed, "Consumer group client is closed.");
-            pendingOffsetCommitCallbacks.add(pending);
-        }
+                (ignored, error) ->
+                        enqueueOffsetCommitCompletion(offsets, callback, asException(error)));
         // TODO: Remove this once #279 adds RPC request timeouts. This only times out the callback;
         // the underlying request can remain in flight.
         FutureUtils.orTimeout(
                 completion,
-                asyncCommitTimeoutMs,
+                requestTimeoutMs,
                 TimeUnit.MILLISECONDS,
                 "Timed out committing consumer offsets for group " + groupId);
         try {
             sendCommit(offsets)
                     .whenComplete(
-                            (ignored, error) -> {
-                                if (error == null) {
-                                    completion.complete(null);
-                                } else {
-                                    completion.completeExceptionally(error);
-                                }
-                            });
+                            (result, error) -> FutureUtils.doForward(result, error, completion));
         } catch (RuntimeException error) {
             completion.completeExceptionally(error);
         }
     }
 
-    private void enqueueCompletedOffsetCommitCallback(
-            PendingOffsetCommitCallback pending, Throwable error) {
-        synchronized (this) {
-            if (!pendingOffsetCommitCallbacks.remove(pending)) {
-                return;
-            }
-            completedOffsetCommitCallbacks.add(
-                    () -> {
-                        try {
-                            pending.callback.onComplete(pending.offsets, asException(error));
-                        } catch (RuntimeException callbackError) {
-                            LOG.warn(
-                                    "Consumer offset commit callback failed for group {}",
-                                    groupId,
-                                    callbackError);
-                        }
-                    });
+    private void enqueueOffsetCommitCompletion(
+            Map<TableBucket, OffsetMetadata> offsets,
+            OffsetCommitCallback callback,
+            @Nullable Exception error) {
+        completedOffsetCommits.add(new OffsetCommitCompletion(offsets, callback, error));
+        pendingAsyncCommits.decrementAndGet();
+        if (closed) {
+            // A late response may have arrived after close cleared the queue.
+            completedOffsetCommits.clear();
         }
     }
 
     /** Called by scanner operations to deliver completed callbacks outside the group monitor. */
     public void invokeCompletedOffsetCommitCallbacks() {
-        while (true) {
-            Runnable callback;
-            synchronized (this) {
-                callback = completedOffsetCommitCallbacks.poll();
-            }
-            if (callback == null) {
-                return;
-            }
-            callback.run();
+        OffsetCommitCompletion completion;
+        while (!closed && (completion = completedOffsetCommits.poll()) != null) {
+            completion.invoke();
         }
     }
 
@@ -314,11 +262,16 @@ public final class ConsumerGroupClient implements AutoCloseable {
         if (timeoutMs < 0) {
             throw new IllegalArgumentException("timeoutMs must not be negative");
         }
+        long deadlineNanos = clock.nanoseconds() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        return commitOffsetsSyncBeforeDeadline(offsets, deadlineNanos);
+    }
+
+    private boolean commitOffsetsSyncBeforeDeadline(
+            Map<TableBucket, OffsetMetadata> offsets, long deadlineNanos) {
         if (offsets.isEmpty()) {
             return true;
         }
 
-        long deadlineNanos = clock.nanoseconds() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         do {
             long remainingMs = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - clock.nanoseconds());
             try {
@@ -343,7 +296,7 @@ public final class ConsumerGroupClient implements AutoCloseable {
     /** Fetches committed offsets for a stable bucket snapshot, retrying retriable failures. */
     public Map<TableBucket, OffsetMetadata> fetchCommittedOffsets(
             Set<TableBucket> tableBuckets, long timeoutMs) {
-        Objects.requireNonNull(tableBuckets, "tableBuckets must not be null");
+        requireNonNull(tableBuckets, "tableBuckets must not be null");
         if (timeoutMs < 0) {
             throw new IllegalArgumentException("timeoutMs must not be negative");
         }
@@ -353,7 +306,7 @@ public final class ConsumerGroupClient implements AutoCloseable {
 
         long deadlineNanos = clock.nanoseconds() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         do {
-            PendingCommittedOffsetRequest pending = getOrCreateOffsetFetch(tableBuckets);
+            PendingOffsetFetchRequest pending = getOrCreateOffsetFetch(tableBuckets);
             long remainingMs = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - clock.nanoseconds());
             try {
                 Map<TableBucket, OffsetMetadata> offsets =
@@ -411,17 +364,17 @@ public final class ConsumerGroupClient implements AutoCloseable {
     /**
      * Reads the current offsets and commits them asynchronously only when the interval has elapsed.
      */
-    public boolean maybeAutoCommitOffsetsAsync(
-            long nowMs, Supplier<Map<TableBucket, OffsetMetadata>> offsets) {
+    public boolean maybeAutoCommitOffsetsAsync() {
         if (!autoCommitEnabled) {
             return false;
         }
+        long nowMs = clock.milliseconds();
         if (nowMs < nextAutoCommitDeadlineMs) {
             return false;
         }
         nextAutoCommitDeadlineMs = nowMs + autoCommitIntervalMs;
         commitOffsetsAsync(
-                offsets.get(),
+                logScannerStatus.allConsumed(),
                 (committed, error) -> {
                     if (error != null) {
                         LOG.warn("Failed to auto-commit offsets for group {}", groupId, error);
@@ -430,21 +383,14 @@ public final class ConsumerGroupClient implements AutoCloseable {
         return true;
     }
 
-    /** Performs the final synchronous auto-commit used by scanner shutdown. */
-    public boolean maybeAutoCommitOffsetsSync(
-            Map<TableBucket, OffsetMetadata> offsets, long timeoutMs) {
-        return !autoCommitEnabled || commitOffsetsSync(offsets, timeoutMs);
-    }
-
-    private PendingCommittedOffsetRequest getOrCreateOffsetFetch(
-            Set<TableBucket> requestedBuckets) {
-        PendingCommittedOffsetRequest current = pendingOffsetFetch;
+    private PendingOffsetFetchRequest getOrCreateOffsetFetch(Set<TableBucket> requestedBuckets) {
+        PendingOffsetFetchRequest current = pendingOffsetFetch;
         if (current != null && current.requestedBuckets.equals(requestedBuckets)) {
             return current;
         }
 
-        PendingCommittedOffsetRequest created =
-                new PendingCommittedOffsetRequest(
+        PendingOffsetFetchRequest created =
+                new PendingOffsetFetchRequest(
                         requestedBuckets, sendGetConsumerOffsetsRequest(requestedBuckets));
         if (current != null) {
             current.response.cancel(false);
@@ -472,12 +418,9 @@ public final class ConsumerGroupClient implements AutoCloseable {
         if (offsets.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
+        CommitConsumerOffsetsRequest request = makeCommitConsumerOffsetsRequest(groupId, offsets);
         return getOrDiscoverOwner()
-                .thenCompose(
-                        gateway ->
-                                gateway.commitConsumerOffsets(
-                                        ClientRpcMessageUtils.makeCommitConsumerOffsetsRequest(
-                                                groupId, offsets)))
+                .thenCompose(gateway -> gateway.commitConsumerOffsets(request))
                 .thenApply(ClientRpcMessageUtils::checkCommitConsumerOffsetsResponse)
                 .whenComplete(
                         (ignored, error) -> {
@@ -529,64 +472,94 @@ public final class ConsumerGroupClient implements AutoCloseable {
                 cause instanceof Exception ? cause : new FlussRuntimeException(cause));
     }
 
-    /** Cancels unfinished commits, queues their callbacks, and forgets the owner. */
+    /**
+     * Submits an auto-commit if due, waits for outstanding commits, and releases group resources.
+     */
     @Override
     public void close() {
-        final CompletableFuture<TabletServerGateway> discovery;
-        final Set<PendingOffsetCommitCallback> pendingCallbacks;
+        if (closed) {
+            return;
+        }
+        long deadlineNanos = clock.nanoseconds() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMs);
+        try {
+            maybeAutoCommitOffsetsAsync();
+            awaitPendingOffsetCommitCallbacks(deadlineNanos);
+        } finally {
+            releaseGroupResources();
+        }
+    }
 
+    private void awaitPendingOffsetCommitCallbacks(long deadlineNanos) {
+        try {
+            // A completed request can still have a callback queued for the closing thread.
+            while ((pendingAsyncCommits.get() > 0 || !completedOffsetCommits.isEmpty())
+                    && deadlineNanos - clock.nanoseconds() > 0
+                    && !Thread.currentThread().isInterrupted()) {
+                invokeCompletedOffsetCommitCallbacks();
+                if (pendingAsyncCommits.get() > 0) {
+                    long remainingNanos = deadlineNanos - clock.nanoseconds();
+                    // TODO optimize this to use a single wait with a timeout instead of polling.
+                    TimeUnit.NANOSECONDS.sleep(
+                            Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(100)));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.debug(
+                    "Interrupted while awaiting offset commit callbacks for group {}", groupId, e);
+        }
+    }
+
+    private void releaseGroupResources() {
+        final CompletableFuture<TabletServerGateway> discovery;
         synchronized (this) {
             closed = true;
             ownerGateway = null;
             discovery = ownerDiscovery;
             ownerDiscovery = null;
-            pendingCallbacks = new HashSet<>(pendingOffsetCommitCallbacks);
-            for (PendingOffsetCommitCallback pending : pendingCallbacks) {
-                pending.completion.completeExceptionally(
-                        new CancellationException(
-                                "Consumer group client closed before commit completed"));
-                if (pendingOffsetCommitCallbacks.contains(pending)) {
-                    // The RPC may have completed the future before its enqueue handler obtained
-                    // this monitor. Claim and enqueue the actual outcome before the scanner drains.
-                    try {
-                        pending.completion.getNow(null);
-                        enqueueCompletedOffsetCommitCallback(pending, null);
-                    } catch (CompletionException | CancellationException error) {
-                        enqueueCompletedOffsetCommitCallback(pending, error);
-                    }
-                }
-            }
         }
+        completedOffsetCommits.clear();
 
         if (discovery != null) {
             // Waiting callers receive a CancellationException. The interrupt flag is false
             // because CompletableFuture cannot interrupt the underlying RPC.
             discovery.cancel(false);
         }
-        PendingCommittedOffsetRequest pendingFetch = pendingOffsetFetch;
+        PendingOffsetFetchRequest pendingFetch = pendingOffsetFetch;
         pendingOffsetFetch = null;
         if (pendingFetch != null) {
             pendingFetch.response.cancel(false);
         }
     }
 
-    private static final class PendingOffsetCommitCallback {
-        private final CompletableFuture<Void> completion = new CompletableFuture<>();
+    private static final class OffsetCommitCompletion {
         private final Map<TableBucket, OffsetMetadata> offsets;
         private final OffsetCommitCallback callback;
+        @Nullable private final Exception error;
 
-        private PendingOffsetCommitCallback(
-                Map<TableBucket, OffsetMetadata> offsets, OffsetCommitCallback callback) {
+        private OffsetCommitCompletion(
+                Map<TableBucket, OffsetMetadata> offsets,
+                OffsetCommitCallback callback,
+                @Nullable Exception error) {
             this.offsets = offsets;
             this.callback = callback;
+            this.error = error;
+        }
+
+        public void invoke() {
+            try {
+                callback.onComplete(offsets, error);
+            } catch (Throwable t) {
+                LOG.warn("Offset commit callback threw an uncaught exception", t);
+            }
         }
     }
 
-    private static final class PendingCommittedOffsetRequest {
+    private static final class PendingOffsetFetchRequest {
         private final Set<TableBucket> requestedBuckets;
         private final CompletableFuture<Map<TableBucket, OffsetMetadata>> response;
 
-        private PendingCommittedOffsetRequest(
+        private PendingOffsetFetchRequest(
                 Set<TableBucket> requestedBuckets,
                 CompletableFuture<Map<TableBucket, OffsetMetadata>> response) {
             this.requestedBuckets = requestedBuckets;

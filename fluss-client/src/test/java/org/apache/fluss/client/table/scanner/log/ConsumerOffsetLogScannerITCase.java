@@ -31,15 +31,19 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -48,21 +52,15 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * End-to-end tests for consumer offset commit and resume via {@link LogScanner}.
- *
- * <p>These tests verify commit/resume behavior purely through the {@link LogScanner} public API:
- * commit offsets on one scanner, then open a fresh scanner with {@code
- * subscribeFromCommittedOffset} and verify that it resumes from the committed position.
- */
+/** End-to-end tests for committing, resuming, and resetting log scanner offsets. */
 class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
 
     private static final Schema SCHEMA =
@@ -79,77 +77,63 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
         String groupId = "scanner-resume-" + System.nanoTime();
         TableBucket tableBucket = new TableBucket(tableId, null, 0);
 
-        // Commit offsets 0..2 (3 records consumed), then close the scanner.
         try (Connection groupConnection = groupConnection(groupId, false);
                 Table table = groupConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner()) {
             scanner.subscribeFromBeginning(0);
-            commitAsyncWithRetry(
-                    scanner,
+            scanner.commitSync(
                     Collections.singletonMap(tableBucket, new OffsetMetadata(1L, "warmup")));
-            commitSyncWithRetry(
-                    scanner,
-                    Collections.singletonMap(tableBucket, new OffsetMetadata(3L, "checkpoint")));
+            Map<TableBucket, OffsetMetadata> checkpoint =
+                    Collections.singletonMap(tableBucket, new OffsetMetadata(3L, "checkpoint"));
+            assertThat(
+                            awaitCommit(
+                                    callback -> scanner.commitAsync(checkpoint, callback),
+                                    () -> scanner.commitSync(Collections.emptyMap())))
+                    .isEqualTo(checkpoint);
         }
 
-        // Open a fresh scanner and resume from the committed offset.
-        // If the commit failed, subscribeFromCommittedOffset would start from the beginning
-        // and we would get 5 records instead of 2.
         try (Connection groupConnection = groupConnection(groupId, false);
                 Table table = groupConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner()) {
             scanner.subscribeFromCommittedOffset(0);
-            int records = 0;
-            long deadline = System.currentTimeMillis() + 10_000L;
-            while (records < 2 && System.currentTimeMillis() < deadline) {
-                ScanRecords scanRecords = scanner.poll(Duration.ofMillis(200));
-                for (ScanRecord ignored : scanRecords) {
-                    records++;
-                }
-            }
-            assertThat(records).isEqualTo(2);
+            assertThat(pollIds(scanner, 2)).containsExactly(3, 4);
         }
     }
 
     @Test
-    void testClosePerformsFinalAutoCommit() throws Exception {
+    void testCloseAutoCommitsCurrentPositionWhenIntervalElapses() throws Exception {
         TablePath tablePath = uniqueTablePath("close");
         long tableId = createTable(tablePath, descriptor(1), false);
         appendRows(tablePath, 10);
         String groupId = "scanner-close-" + System.nanoTime();
         TableBucket tableBucket = new TableBucket(tableId, null, 0);
 
-        // Subscribe from offset 0, then advance to offset 7 and close.
-        // Auto-commit is enabled, so close() should persist the consumed position.
-        try (Connection groupConnection = groupConnection(groupId, true);
+        Duration interval = Duration.ofMillis(1);
+        Configuration configuration =
+                new Configuration(clientConf)
+                        .set(ConfigOptions.CLIENT_CONSUMER_GROUP_ID, groupId)
+                        .set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, true)
+                        .set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL, interval);
+        try (Connection groupConnection = ConnectionFactory.createConnection(configuration);
                 Table table = groupConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner()) {
+            long autoCommitDueMs = System.currentTimeMillis() + interval.toMillis();
             scanner.subscribe(0, 0L);
-            commitAsyncWithRetry(
-                    scanner,
+            scanner.commitSync(
                     Collections.singletonMap(tableBucket, new OffsetMetadata(1L, "warmup")));
             scanner.subscribe(0, 7L);
+            waitUntil(
+                    () -> System.currentTimeMillis() >= autoCommitDueMs,
+                    Duration.ofSeconds(5),
+                    Duration.ofMillis(1),
+                    "Auto-commit interval did not elapse before close");
         }
 
-        // Open a fresh scanner and resume from the committed offset.
-        // If close() did not auto-commit, subscribeFromCommittedOffset would start from
-        // the warmup offset (1) and we would get 9 records instead of 3.
         try (Connection groupConnection = groupConnection(groupId, false);
                 Table table = groupConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner()) {
             scanner.subscribeFromCommittedOffset(0);
-            int records = 0;
-            long deadline = System.currentTimeMillis() + 10_000L;
-            while (System.currentTimeMillis() < deadline) {
-                ScanRecords scanRecords = scanner.poll(Duration.ofMillis(200));
-                for (ScanRecord ignored : scanRecords) {
-                    records++;
-                }
-                if (records >= 3) {
-                    break;
-                }
-            }
-            assertThat(records).isEqualTo(3);
+            assertThat(pollIds(scanner, 3)).containsExactly(7, 8, 9);
         }
     }
 
@@ -185,20 +169,23 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
         String groupId = "scanner-async-" + System.nanoTime();
         TableBucket bucket = new TableBucket(tableId, 0);
 
-        try (Connection groupConnection = groupConnection(groupId, false);
+        try (FlussConnection groupConnection = (FlussConnection) groupConnection(groupId, false);
                 Table table = groupConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner();
                 ConsumerGroupClient offsetReader =
                         new ConsumerGroupClient(
-                                groupId,
-                                ((FlussConnection) groupConnection).getMetadataUpdater(),
-                                false,
-                                0L,
-                                ConfigOptions.CLIENT_REQUEST_TIMEOUT.defaultValue().toMillis())) {
+                                groupConnection.getConfiguration(),
+                                groupConnection.getMetadataUpdater(),
+                                new LogScannerStatus())) {
             scanner.subscribeFromBeginning(0);
+            // Wait for sys.consumer_offsets to be ready before issuing a single asynchronous
+            // commit.
+            scanner.commitSync(Collections.singletonMap(bucket, new OffsetMetadata(0L)));
             assertThat(pollIds(scanner, 3)).containsExactly(0, 1, 2);
 
-            Map<TableBucket, OffsetMetadata> committed = commitAsyncWithRetry(scanner);
+            Map<TableBucket, OffsetMetadata> committed =
+                    awaitCommit(
+                            scanner::commitAsync, () -> scanner.commitSync(Collections.emptyMap()));
             assertThat(committed).containsEntry(bucket, new OffsetMetadata(3L));
 
             appendRows(tablePath, 3, 2);
@@ -257,25 +244,10 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
             assertThat(ids.get(first)).containsExactly(3);
             assertThat(ids.get(second)).containsExactly(3);
 
-            CountDownLatch callback = new CountDownLatch(1);
-            AtomicReference<Map<TableBucket, OffsetMetadata>> committed = new AtomicReference<>();
-            AtomicReference<Exception> failure = new AtomicReference<>();
-            scanner.commitAsync(
-                    (offsets, error) -> {
-                        committed.set(offsets);
-                        failure.set(error);
-                        callback.countDown();
-                    });
-            waitUntil(
-                    () -> {
-                        scanner.commitSync(Collections.emptyMap());
-                        return callback.getCount() == 0;
-                    },
-                    Duration.ofSeconds(30),
-                    Duration.ofMillis(100),
-                    "Asynchronous multi-table commit callback was not delivered");
-            assertThat(failure.get()).isNull();
-            assertThat(committed.get())
+            Map<TableBucket, OffsetMetadata> committed =
+                    awaitCommit(
+                            scanner::commitAsync, () -> scanner.commitSync(Collections.emptyMap()));
+            assertThat(committed)
                     .containsEntry(new TableBucket(firstId, 0), new OffsetMetadata(4L))
                     .containsEntry(new TableBucket(secondId, 0), new OffsetMetadata(4L));
         }
@@ -321,8 +293,7 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
                 Table table = groupConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner()) {
             scanner.subscribe(partitionId, 0, 0L);
-            commitSyncWithRetry(
-                    scanner,
+            scanner.commitSync(
                     Collections.singletonMap(
                             new TableBucket(tableId, partitionId, 0), new OffsetMetadata(2L)));
         }
@@ -374,27 +345,9 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testNewGroupWithLatestResetStartsFromLatestPosition() throws Exception {
         TablePath tablePath = uniqueTablePath("latest");
-        createTable(tablePath, descriptor(1), false);
+        TableBucket bucket = new TableBucket(createTable(tablePath, descriptor(1), false), 0);
         appendRows(tablePath, 3);
-        // The latest reset resolves the high watermark, which advances asynchronously after
-        // the appends are acked; wait for it before the first poll snapshots the position.
-        waitUntil(
-                () -> {
-                    try {
-                        return admin.listOffsets(
-                                                tablePath,
-                                                Collections.singleton(0),
-                                                new OffsetSpec.LatestSpec())
-                                        .bucketResult(0)
-                                        .get()
-                                == 3L;
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                },
-                Duration.ofSeconds(30),
-                Duration.ofMillis(100),
-                "Appended records did not become visible");
+        awaitHighWatermark(tablePath, 3L);
         String groupId = "scanner-latest-" + System.nanoTime();
 
         Configuration configuration = new Configuration(clientConf);
@@ -404,51 +357,97 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
 
         try (Connection groupConnection = ConnectionFactory.createConnection(configuration);
                 Table table = groupConnection.getTable(tablePath);
-                LogScanner scanner = table.newScan().createLogScanner()) {
+                LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
             scanner.subscribeFromCommittedOffset(0);
-            // The first poll resolves the new group's position to the current end offset.
-            scanner.poll(Duration.ofSeconds(30));
+            awaitLatestPosition(scanner, bucket, 3L, false);
 
             appendRows(tablePath, 3, 1);
             assertThat(pollIds(scanner, 1)).containsExactly(3);
         }
     }
 
-    @Test
-    void testExplicitLatestOffsetSubscriptionStartsFromLatestPosition() throws Exception {
-        TablePath tablePath = uniqueTablePath("explicit-latest");
-        createTable(tablePath, descriptor(1), false);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testExplicitLatestOffsetSubscriptionStartsFromLatestPosition(boolean arrowBatches)
+            throws Exception {
+        TablePath tablePath = uniqueTablePath("explicit-latest-" + arrowBatches);
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(SCHEMA)
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        false);
+        TableBucket bucket = new TableBucket(tableId, 0);
         appendRows(tablePath, 3);
-        // The latest sentinel is resolved against the high watermark, which advances
-        // asynchronously after the appends are acked.
+        awaitHighWatermark(tablePath, 3L);
+
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(tablePath);
+                LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
+            scanner.subscribe(0, LogScanner.LATEST_OFFSET);
+            awaitLatestPosition(scanner, bucket, 3L, arrowBatches);
+            appendRows(tablePath, 3, 1);
+            if (arrowBatches) {
+                waitUntil(
+                        () -> {
+                            try (ArrowScanRecords records =
+                                    scanner.pollRecordBatch(Duration.ofMillis(200))) {
+                                if (records.count() == 0) {
+                                    return false;
+                                }
+                                assertThat(records.count()).isOne();
+                                ArrowBatchData batch = records.iterator().next();
+                                assertThat(batch.getBaseLogOffset()).isEqualTo(3L);
+                                assertThat(batch.getVectorSchemaRoot().getVector(0).getObject(0))
+                                        .isEqualTo(3);
+                                return true;
+                            }
+                        },
+                        Duration.ofSeconds(30),
+                        Duration.ofMillis(10),
+                        "Appended Arrow record was not returned");
+            } else {
+                assertThat(pollIds(scanner, 1)).containsExactly(3);
+            }
+        }
+    }
+
+    private void awaitHighWatermark(TablePath tablePath, long expected) {
+        // An acknowledged append can precede the high watermark observed by a latest reset.
         waitUntil(
-                () -> {
-                    try {
-                        return admin.listOffsets(
+                () ->
+                        admin.listOffsets(
                                                 tablePath,
                                                 Collections.singleton(0),
                                                 new OffsetSpec.LatestSpec())
                                         .bucketResult(0)
-                                        .get()
-                                == 3L;
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                },
+                                        .get(5, TimeUnit.SECONDS)
+                                == expected,
                 Duration.ofSeconds(30),
                 Duration.ofMillis(100),
                 "Appended records did not become visible");
+    }
 
-        try (Connection connection = ConnectionFactory.createConnection(clientConf);
-                Table table = connection.getTable(tablePath);
-                LogScanner scanner = table.newScan().createLogScanner()) {
-            scanner.subscribe(0, LogScanner.LATEST_OFFSET);
-            // The first poll resolves the latest sentinel to the current end offset.
-            scanner.poll(Duration.ofSeconds(30));
-
-            appendRows(tablePath, 3, 1);
-            assertThat(pollIds(scanner, 1)).containsExactly(3);
-        }
+    private static void awaitLatestPosition(
+            LogScannerImpl scanner, TableBucket bucket, long expected, boolean arrowBatches) {
+        waitUntil(
+                () -> {
+                    if (arrowBatches) {
+                        try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ZERO)) {
+                            assertThat(records.count()).isZero();
+                        }
+                    } else {
+                        assertThat(scanner.poll(Duration.ZERO).isEmpty()).isTrue();
+                    }
+                    return Long.valueOf(expected)
+                            .equals(scanner.logScannerStatus.getBucketOffset(bucket));
+                },
+                Duration.ofSeconds(30),
+                Duration.ofMillis(10),
+                "Latest offset was not resolved");
     }
 
     private Connection groupConnection(String groupId, boolean autoCommit) {
@@ -459,79 +458,26 @@ class ConsumerOffsetLogScannerITCase extends ClientToServerITCaseBase {
         return ConnectionFactory.createConnection(configuration);
     }
 
-    private static void commitSyncWithRetry(
-            LogScanner scanner, Map<TableBucket, OffsetMetadata> offsets) throws Exception {
-        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
-        while (true) {
-            try {
-                scanner.commitSync(offsets);
-                return;
-            } catch (RuntimeException failure) {
-                if (System.currentTimeMillis() >= deadline) {
-                    throw failure;
-                }
-                Thread.sleep(200L);
-            }
-        }
-    }
-
-    private static AtomicReference<Exception> commitAsyncWithRetry(
-            LogScanner scanner, Map<TableBucket, OffsetMetadata> offsets) throws Exception {
-        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
-        AtomicReference<Exception> failure = new AtomicReference<>();
-        while (System.currentTimeMillis() < deadline) {
-            CountDownLatch callback = new CountDownLatch(1);
-            failure.set(null);
-            scanner.commitAsync(
-                    offsets,
-                    (committed, error) -> {
-                        failure.set(error);
-                        callback.countDown();
-                    });
-            if (awaitCommitCallback(scanner, callback) && failure.get() == null) {
-                return failure;
-            }
-            Thread.sleep(200L);
-        }
-        throw new AssertionError("Asynchronous offset commit did not succeed", failure.get());
-    }
-
-    private static Map<TableBucket, OffsetMetadata> commitAsyncWithRetry(LogScanner scanner)
-            throws Exception {
-        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
-        while (System.currentTimeMillis() < deadline) {
-            CountDownLatch callback = new CountDownLatch(1);
-            AtomicReference<Map<TableBucket, OffsetMetadata>> committed = new AtomicReference<>();
-            AtomicReference<Exception> failure = new AtomicReference<>();
-            scanner.commitAsync(
-                    (offsets, error) -> {
-                        committed.set(offsets);
-                        failure.set(error);
-                        callback.countDown();
-                    });
-            if (awaitCommitCallback(scanner, callback) && failure.get() == null) {
-                return committed.get();
-            }
-            Thread.sleep(200L);
-        }
-        throw new AssertionError("Asynchronous offset commit did not succeed");
-    }
-
-    private static boolean awaitCommitCallback(LogScanner scanner, CountDownLatch callback)
-            throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(35);
-        while (true) {
-            scanner.commitSync(Collections.emptyMap());
-            if (callback.getCount() == 0) {
-                return true;
-            }
-            long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) {
-                return false;
-            }
-            callback.await(
-                    Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS);
-        }
+    private static Map<TableBucket, OffsetMetadata> awaitCommit(
+            Consumer<OffsetCommitCallback> submit, Runnable invokeCallbacks) throws Exception {
+        CompletableFuture<Map<TableBucket, OffsetMetadata>> result = new CompletableFuture<>();
+        submit.accept(
+                (offsets, error) -> {
+                    if (error == null) {
+                        result.complete(offsets);
+                    } else {
+                        result.completeExceptionally(error);
+                    }
+                });
+        waitUntil(
+                () -> {
+                    invokeCallbacks.run();
+                    return result.isDone();
+                },
+                Duration.ofSeconds(35),
+                Duration.ofMillis(100),
+                "Asynchronous commit callback was not delivered");
+        return result.get();
     }
 
     private void appendRows(TablePath tablePath, int count) throws Exception {
