@@ -39,6 +39,24 @@ if (!result.Ok()) {
 }
 ```
 
+## Recovering a consumer group from an expired log position
+
+When a group has no saved offset for a bucket, `SubscribeFromCommitted` defaults to the earliest available record. A saved offset that points to deleted data is different: if the group saved 1 and the log now starts at 4, `Poll()` returns an out-of-range error. The scanner stays open. Polling again or restarting from the same saved offset does not advance that bucket.
+
+1. Log the group ID, `Result::error_code` and `error_message`. On this fetch path, C++ currently returns `ErrorCode::CLIENT_ERROR` (-2); the message includes the requested offset. Other errors also use -2, so do not reset offsets based on that code alone.
+2. For the assigned buckets, use `Admin::GetConsumerOffsets` to read the saved next offsets. Compare each with `Admin::ListOffsets` using `OffsetSpec::Earliest()` and `Latest()`; for partitioned tables use `ListPartitionOffsets` with the partition name. A saved offset below the earliest confirms a retention gap. An offset equal to the end is valid: the reader is caught up.
+3. If every record is required, pause consumption and backfill the missing range before resuming. If the application can skip the expired records, reposition just the affected bucket on the existing scanner:
+
+   ```cpp
+   // bucket is the fluss::TableBucket whose saved offset is below the log start.
+   auto status = scanner.Subscribe({bucket}, fluss::OffsetsInitializer::Earliest());
+   if (!status.Ok()) {
+       return status;
+   }
+   ```
+
+   Resume polling and commit the next offset according to the application's normal processing policy. Other buckets keep their positions. Choosing `Latest()` instead also skips records that are still available. Authorization failures require fixing permissions; changing the start offset does not resolve them.
+
 ## Connection State Checking
 
 Use `Available()` to verify that a connection or object is valid before using it:
