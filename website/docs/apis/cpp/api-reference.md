@@ -156,8 +156,9 @@ Complete API reference for the Fluss C++ client.
 ## Bounded and streaming UnionRead
 
 Capture a boundary with `Table::CaptureUnionReadContext`, or pass the boundary bytes
-captured by the Java or Rust SDK for the same table. On `TableScan`, apply projection
-and filtering before opening a reader:
+captured by the Java or Rust SDK for the same table. Apply projection and filtering
+on `TableScan` before opening a reader. Omitting projection returns all columns; an
+explicitly empty projection returns zero columns and preserves the row count.
 
 | Method | What `UnionReadReader::Next` returns |
 |---|---|
@@ -168,6 +169,14 @@ and filtering before opening a reader:
 Commit the snapshot and its checkpoint together. PK streaming requires FULL images. After the handoff, commit changes
 and offset advances together, even if filtering removes every row in a batch.
 `TimedOut` means no event was ready; continue polling the same reader.
+
+Streaming follows only the partitions and buckets in the captured boundary. A partition created
+later needs a new capture. On `PartitionsDropped`, remove the retired buckets from the
+checkpoint; their last consumed offsets do not guarantee that the reader reached the end.
+
+For PK bootstrap, the C++ build supports a Paimon baseline or a complete Fluss log.
+If a bucket needs a KV snapshot because it lacks a lake baseline and its log has been
+truncated, the read fails. The C++ build does not enable the Rust KV snapshot reader.
 
 ## `TableScan`
 

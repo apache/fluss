@@ -1970,8 +1970,7 @@ struct UnionReadEvent {
     std::vector<UnionReadChangeBatch> changes;
     /// Full checkpoint on SnapshotFinished.
     std::optional<UnionReadCheckpoint> checkpoint;
-    /// Advances on Changes; retired bucket positions on PartitionsDropped.
-
+    /// Advances on Changes; last consumed positions (not end offsets) on PartitionsDropped.
     std::vector<ReaderStopOffset> next_offsets;
 };
 
@@ -2001,8 +2000,7 @@ class TableScan {
 
     /// Pushes a predicate down for conservative server-side RecordBatch pruning.
     ///
-    /// Only Arrow log scans support this. Returned batches may contain
-    /// non-matching rows and must be filtered again by the caller.
+    /// Arrow log scans may return non-matching rows; UnionRead returns exact matches.
     TableScan& Filter(Predicate predicate);
 
     TableScan& Limit(int32_t row_number);
@@ -2045,7 +2043,8 @@ class TableScan {
     /// Read the filtered snapshot as Arrow batches until Finished.
     Result CreateBoundedUnionReader(const std::vector<uint8_t>& context, UnionReadReader& out,
                                     const UnionReadOptions& options = {}) const;
-    /// Read snapshot batches, SnapshotFinished, then bucket-ordered changes.
+    /// Read snapshot batches, SnapshotFinished, then changes in the captured buckets.
+    /// Partitions created after capture are not subscribed.
     Result CreateStreamingUnionReader(const std::vector<uint8_t>& context, UnionReadReader& out,
                                       const UnionReadOptions& options = {}) const;
     /// Resume the original query from the last committed checkpoint.
@@ -2071,6 +2070,7 @@ class TableScan {
     std::vector<std::string> name_projection_;
     std::optional<Predicate> predicate_;
     std::optional<int32_t> limit_;
+    bool has_projection_{false};
 };
 
 class WriteResult {

@@ -1427,12 +1427,14 @@ Result TableLookup::CreateLookuper(Lookuper& out) {
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
 
 TableScan& TableScan::ProjectByIndex(std::vector<size_t> column_indices) {
+    has_projection_ = true;
     projection_ = std::move(column_indices);
     name_projection_.clear();
     return *this;
 }
 
 TableScan& TableScan::ProjectByName(std::vector<std::string> column_names) {
+    has_projection_ = true;
     name_projection_ = std::move(column_names);
     projection_.clear();
     return *this;
@@ -2459,11 +2461,16 @@ Result TableScan::OpenUnionReader(const std::vector<uint8_t>& ctx, bool streamin
     opts.mode = checkpoint  ? ffi::FfiUnionMode::Resume
                 : streaming ? ffi::FfiUnionMode::Streaming
                             : ffi::FfiUnionMode::Bounded;
-    opts.predicate = EncodePredicate().nodes;
-    for (auto index : projection_) opts.projection.push_back(index);
-    for (const auto& name : name_projection_) opts.names.push_back(rust::String(name));
-    for (const auto& [k, v] : options.catalog_properties)
-        opts.properties.push_back({rust::String(k), rust::String(v)});
+    opts.has_projection = has_projection_;
+    try {
+        opts.predicate = EncodePredicate().nodes;
+        for (auto index : projection_) opts.projection.push_back(index);
+        for (const auto& name : name_projection_) opts.names.push_back(rust::String(name));
+        for (const auto& [k, v] : options.catalog_properties)
+            opts.properties.push_back({rust::String(k), rust::String(v)});
+    } catch (const std::invalid_argument& e) {
+        return utils::make_client_error(e.what());
+    }
     opts.has_budget = options.pk_memory_budget_bytes.has_value();
     opts.budget = options.pk_memory_budget_bytes.value_or(0);
     if (checkpoint) {

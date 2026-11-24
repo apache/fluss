@@ -272,6 +272,14 @@ with no visible rows. Resume with `scan.ResumeStreamingUnionReader(context,
 checkpoint, reader)` using the same filter and projection. If bootstrap was
 not committed, discard staged rows and start again from the saved boundary.
 
+Streaming follows only the partitions and buckets in the captured boundary. A partition created
+later needs a new capture. On `PartitionsDropped`, remove the retired buckets from the
+checkpoint; their last consumed offsets do not guarantee that the reader reached the end.
+
+For PK bootstrap, the C++ build supports a Paimon baseline or a complete Fluss log.
+If a bucket needs a KV snapshot because it lacks a lake baseline and its log has been
+truncated, the read fails. The C++ build does not enable the Rust KV snapshot reader.
+
 PK streaming requires FULL images. Both phases return exactly the requested columns.
 Request key columns explicitly for a keyed sink. FULL preserves matching change images, including
 retractions. A `TimedOut` event indicates no event was ready before the deadline;

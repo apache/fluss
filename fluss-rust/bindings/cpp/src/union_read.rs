@@ -87,19 +87,14 @@ impl Table {
         let schema = ctx.table_schema();
         let row = schema.row_type();
         let predicate = predicate_from_ffi_nodes(&opts.predicate, row).map_err(client_err)?;
-        let mut projection = opts.projection;
-        for name in opts.names {
-            projection.push(
-                row.get_field_index(&name)
-                    .ok_or_else(|| client_err(format!("Unknown projected field: {name}")))?,
-            );
-        }
         let budget = opts
             .has_budget
             .then(|| Arc::new(fcore::client::LimitedReadMemoryBudget::new(opts.budget)));
         let mut scan = table.new_scan();
-        if !projection.is_empty() {
-            scan = scan.with_projection(projection);
+        if !opts.names.is_empty() {
+            scan = scan.with_projection_by_names(opts.names);
+        } else if opts.has_projection {
+            scan = scan.with_projection(opts.projection);
         }
         if let Some(filter) = predicate {
             scan = scan.with_filter(filter);

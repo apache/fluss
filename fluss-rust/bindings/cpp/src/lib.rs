@@ -296,6 +296,7 @@ mod ffi {
     struct FfiUnionOptions {
         mode: FfiUnionMode,
         view_digest: [u8; 32],
+        has_projection: bool,
         projection: Vec<usize>,
         names: Vec<String>,
         predicate: Vec<FfiPredicateNode>,

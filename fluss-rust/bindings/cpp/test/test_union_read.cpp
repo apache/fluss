@@ -58,6 +58,12 @@ TEST(UnionReadTest, FrozenSnapshotAndResumedFullChanges) {
     scan.ProjectByName({"price"}).Filter(Col("price").GreaterThan(100));
     UnionReadReader reader;
     UnionReadEvent event;
+    ASSERT_OK(table.NewScan().ProjectByIndex({}).CreateBoundedUnionReader(context, reader));
+    ASSERT_OK(reader.Next(10000, event));
+    ASSERT_EQ(event.kind, UnionReadKind::Snapshot);
+    ASSERT_EQ(event.snapshot->num_columns(), 0);
+    ASSERT_EQ(event.snapshot->num_rows(), 1);
+
     ASSERT_OK(scan.CreateBoundedUnionReader(context, reader));
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::Snapshot);
