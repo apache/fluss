@@ -262,11 +262,9 @@ crypto-common@0.1.7
 digest@0.10.7
 dlv-list@0.5.2
 equivalent@1.0.2
-erased-serde@0.4.10
 errno@0.3.14
 fastrand@2.4.0
 flatbuffers@25.12.19
-fnv@1.0.7
 form_urlencoded@1.2.2
 futures@0.3.32
 futures-channel@0.3.32
@@ -288,7 +286,6 @@ hmac@0.12.1
 home@0.5.12
 http@1.4.0
 httparse@1.10.1
-httpdate@1.0.3
 hyper-rustls@0.27.7
 iana-time-zone@0.1.65
 idna@1.1.0
@@ -309,7 +306,6 @@ linked-hash-map@0.5.6
 linux-raw-sys@0.12.1
 lock_api@0.4.14
 log@0.4.35
-lru-slab@0.1.2
 md-5@0.10.6
 num-bigint@0.4.6
 num-bigint@0.5.1
@@ -329,9 +325,6 @@ prost@0.14.3
 pyo3@0.28.3
 pyo3-async-runtimes@0.28.0
 pyo3-ffi@0.28.3
-quinn@0.11.9
-quinn-proto@0.11.14
-quinn-udp@0.5.14
 rand@0.8.5
 rand@0.9.3
 rand_chacha@0.3.1
@@ -345,7 +338,6 @@ regex-syntax@0.8.10
 reqsign@0.16.5
 reqwest@0.12.28
 ring@0.17.14
-rustc-hash@2.1.2
 rustix@1.1.4
 rustls@0.23.37
 rustls-pki-types@1.14.0
@@ -353,7 +345,6 @@ ryu@1.0.23
 scopeguard@1.2.0
 serde@1.0.228
 serde_core@1.0.228
-serde_fmt@1.1.0
 serde_json@1.0.149
 serde_urlencoded@0.7.1
 sha1@0.10.6
@@ -364,35 +355,18 @@ smallvec@1.15.1
 snafu@0.8.9
 socket2@0.6.3
 stable_deref_trait@1.2.1
-sval@2.18.0
-sval_buffer@2.18.0
-sval_dynamic@2.18.0
-sval_fmt@2.18.0
-sval_json@2.18.0
-sval_nested@2.18.0
-sval_ref@2.18.0
-sval_serde@2.18.0
 sync_wrapper@1.0.2
 tempfile@3.27.0
 thiserror@1.0.69
-thiserror@2.0.18
-tinyvec@1.11.0
-tinyvec_macros@0.1.1
 tokio-rustls@0.26.4
-typeid@1.0.3
 typenum@1.19.0
 url@2.5.8
 utf8_iter@1.0.4
 utf8parse@0.2.2
 uuid@1.23.0
 value-bag@1.12.0
-value-bag-serde1@1.12.0
-value-bag-sval2@1.12.0
 windows-link@0.2.1
-windows-sys@0.60.2
 windows-sys@0.61.2
-windows-targets@0.53.5
-windows_x86_64_msvc@0.53.1
 zerocopy@0.8.48
 zeroize@1.8.2
 zstd-safe@7.2.4
@@ -625,33 +599,6 @@ License file: LICENSE
 | SOFTWARE.
 --------------------------------------------------------------------------------
 
-The Python wheels use the Rust crate foldhash@0.2.0.
-Project URL: https://github.com/orlp/foldhash
-Declared license: Zlib
-Selected crate license: Zlib
-
-License file: LICENSE
-| Copyright (c) 2024 Orson Peters
-|
-| This software is provided 'as-is', without any express or implied warranty. In
-| no event will the authors be held liable for any damages arising from the use of
-| this software.
-|
-| Permission is granted to anyone to use this software for any purpose, including
-| commercial applications, and to alter it and redistribute it freely, subject to
-| the following restrictions:
-|
-| 1. The origin of this software must not be misrepresented; you must not claim
-|     that you wrote the original software. If you use this software in a product,
-|     an acknowledgment in the product documentation would be appreciated but is
-|     not required.
-|
-| 2. Altered source versions must be plainly marked as such, and must not be
-|     misrepresented as being the original software.
-|
-| 3. This notice may not be removed or altered from any source distribution.
---------------------------------------------------------------------------------
-
 The Python wheels use the Rust crate funty@2.0.0.
 Project URL: https://github.com/myrrlyn/funty
 Declared license: MIT
@@ -708,39 +655,6 @@ License file: LICENSE
 | LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 | OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 | SOFTWARE.
---------------------------------------------------------------------------------
-
-The Python wheels use the Rust crate h2@0.4.13.
-Project URL: https://github.com/hyperium/h2
-Declared license: MIT
-Selected crate license: MIT
-
-License file: LICENSE
-| Copyright (c) 2017 h2 authors
-|
-| Permission is hereby granted, free of charge, to any
-| person obtaining a copy of this software and associated
-| documentation files (the "Software"), to deal in the
-| Software without restriction, including without
-| limitation the rights to use, copy, modify, merge,
-| publish, distribute, sublicense, and/or sell copies of
-| the Software, and to permit persons to whom the Software
-| is furnished to do so, subject to the following
-| conditions:
-|
-| The above copyright notice and this permission notice
-| shall be included in all copies or substantial portions
-| of the Software.
-|
-| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-| ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-| TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-| PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-| SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-| CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-| OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-| IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-| DEALINGS IN THE SOFTWARE.
 --------------------------------------------------------------------------------
 
 The Python wheels use the Rust crate http-body@1.0.1.

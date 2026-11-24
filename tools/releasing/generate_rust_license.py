@@ -24,7 +24,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 SEPARATOR = "-" * 80
 
@@ -52,47 +52,42 @@ def cargo_metadata(package_dir: Path, target: str) -> dict:
     return json.loads(subprocess.check_output(command, text=True))
 
 
-def is_proc_macro(package: dict) -> bool:
-    return any("proc-macro" in target["kind"] for target in package.get("targets", ()))
-
-
 def runtime_packages(
     package_dir: Path, targets: Iterable[str], root_name: str
 ) -> List[dict]:
     packages: Dict[str, dict] = {}
-    runtime_ids: Set[str] = set()
-
     for target in targets:
         metadata = cargo_metadata(package_dir, target)
-        target_packages = {package["id"]: package for package in metadata["packages"]}
-        packages.update(target_packages)
-        nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
         roots = [
-            package["id"]
-            for package in metadata["packages"]
-            if package["name"] == root_name and package["source"] is None
+            p for p in metadata["packages"]
+            if p["name"] == root_name and p["source"] is None
         ]
         if len(roots) != 1:
             raise RuntimeError(f"Expected one local package named {root_name}.")
-        pending = roots
-        target_ids: Set[str] = set()
 
-        while pending:
-            package_id = pending.pop()
-            if package_id in target_ids:
-                continue
-            target_ids.add(package_id)
-            runtime_ids.add(package_id)
-            for dependency in nodes[package_id]["deps"]:
-                if any(
-                    kind["kind"] is None for kind in dependency["dep_kinds"]
-                ) and not is_proc_macro(target_packages[dependency["pkg"]]):
-                    pending.append(dependency["pkg"])
+        # metadata unifies features across workspace members. Ask Cargo which
+        # normal dependencies are enabled when building just this artifact.
+        tree = subprocess.check_output(
+            [
+                "cargo", "tree", "--locked", "--manifest-path", roots[0]["manifest_path"],
+                "--package", roots[0]["id"], "--target", target,
+                "--edges", "normal,no-proc-macro", "--prefix", "none", "--format", "{p}",
+            ],
+            text=True,
+        )
+        by_version = {}
+        for package in metadata["packages"]:
+            key = (package["name"], "v" + package["version"])
+            by_version.setdefault(key, []).append(package)
+        for line in set(tree.splitlines()):
+            key = tuple(line.split(maxsplit=2)[:2])
+            matches = by_version.get(key, [])
+            if len(matches) != 1:
+                raise RuntimeError(f"Cannot identify {line!r} in Cargo metadata.")
+            package = matches[0]
+            packages[package["id"]] = package
 
-    return sorted(
-        (packages[package_id] for package_id in runtime_ids),
-        key=lambda package: (package["name"], package["version"]),
-    )
+    return sorted(packages.values(), key=lambda p: (p["name"], p["version"]))
 
 
 def license_terms(expression: str) -> Tuple[str, ...]:
