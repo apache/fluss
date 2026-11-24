@@ -1424,7 +1424,7 @@ public class ZooKeeperClient implements AutoCloseable {
         }
         return getVersionedData(
                 BulkLoadTransactionZNode.path(tableId, bulkLoadId),
-                bytes -> BulkLoadTransactionZNode.decode(tableId, bulkLoadId, bytes));
+                BulkLoadTransactionZNode::decode);
     }
 
     /** Reads the BulkLoad target at its original physical partition identity. */
@@ -1432,7 +1432,7 @@ public class ZooKeeperClient implements AutoCloseable {
             BulkLoadTransaction transaction, @Nullable Long partitionId) throws Exception {
         return getVersionedData(
                 BulkLoadTargetZNode.path(transaction.tableId, transaction.bulkLoadId, partitionId),
-                bytes -> BulkLoadTargetZNode.decode(partitionId, bytes));
+                BulkLoadTargetZNode::decode);
     }
 
     /** Reads the bucket allocation or the result of its completed commit. */

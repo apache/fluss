@@ -73,8 +73,6 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.RetryNTimes;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Op;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.OpResult;
@@ -767,20 +765,18 @@ class BulkLoadBucketCommitTest {
     private void seedRunningTarget(TableInfo table) throws Exception {
         Long partitionId = bucket.getPartitionId();
         String path = BulkLoadTransactionZNode.path(table.getTableId(), LOAD_ID);
-        ObjectMapper mapper = new ObjectMapper();
-        ObjectNode transaction = mapper.createObjectNode();
-        transaction
-                .put("version", 1)
-                .put("state", BulkLoadTransaction.RUNNING)
-                .put("created_time", 10);
-        transaction
-                .putObject("table_path")
-                .put("database_name", table.getTablePath().getDatabaseName())
-                .put("table_name", table.getTablePath().getTableName());
-        transaction
-                .put("schema_id", table.getSchemaId())
-                .put("remote_data_dir", table.getRemoteDataDir());
-        createNode(path, mapper.writeValueAsBytes(transaction));
+        BulkLoadTransaction transaction =
+                new BulkLoadTransaction(
+                        table.getTableId(),
+                        LOAD_ID,
+                        table.getTablePath(),
+                        table.getSchemaId(),
+                        table.getRemoteDataDir(),
+                        BulkLoadTransaction.RUNNING,
+                        10,
+                        null,
+                        null);
+        createNode(path, BulkLoadTransactionZNode.encode(transaction));
 
         String targetPath = BulkLoadTargetZNode.path(table.getTableId(), LOAD_ID, partitionId);
         BulkLoadTarget target =

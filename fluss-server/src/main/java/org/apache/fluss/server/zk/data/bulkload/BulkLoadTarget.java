@@ -30,7 +30,7 @@ public final class BulkLoadTarget {
     public final String remoteDataDir;
     public final boolean withdrawn;
 
-    /** Creates a target with the partition identity from its path. */
+    /** Creates a target record. */
     public BulkLoadTarget(
             @Nullable Long partitionId,
             @Nullable String partitionName,

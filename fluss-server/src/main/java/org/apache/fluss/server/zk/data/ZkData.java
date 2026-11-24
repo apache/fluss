@@ -316,10 +316,13 @@ public final class ZkData {
             return "/bulk_load/tables/" + tableId + "/transactions/" + bulkLoadId;
         }
 
-        public static BulkLoadTransaction decode(long tableId, String bulkLoadId, byte[] json) {
-            return JsonSerdeUtils.readValue(
-                    json,
-                    node -> BulkLoadTransactionJsonSerde.deserialize(tableId, bulkLoadId, node));
+        public static byte[] encode(BulkLoadTransaction transaction) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    transaction, BulkLoadTransactionJsonSerde.INSTANCE);
+        }
+
+        public static BulkLoadTransaction decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, BulkLoadTransactionJsonSerde.INSTANCE);
         }
     }
 
@@ -332,12 +335,11 @@ public final class ZkData {
         }
 
         public static byte[] encode(BulkLoadTarget target) {
-            return JsonSerdeUtils.writeValueAsBytes(target, BulkLoadTargetJsonSerde::serialize);
+            return JsonSerdeUtils.writeValueAsBytes(target, BulkLoadTargetJsonSerde.INSTANCE);
         }
 
-        public static BulkLoadTarget decode(@Nullable Long partitionId, byte[] json) {
-            return JsonSerdeUtils.readValue(
-                    json, node -> BulkLoadTargetJsonSerde.deserialize(partitionId, node));
+        public static BulkLoadTarget decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, BulkLoadTargetJsonSerde.INSTANCE);
         }
     }
 

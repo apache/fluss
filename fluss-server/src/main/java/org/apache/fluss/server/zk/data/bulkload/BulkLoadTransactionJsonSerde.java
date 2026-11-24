@@ -18,20 +18,45 @@
 package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerializer;
+
+import java.io.IOException;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
-/** Reads the bucket operations' view of a BulkLoad transaction. */
-public final class BulkLoadTransactionJsonSerde {
-    private static final int COMMITTED = 1;
-    private static final int ABORTED = 2;
+/** JSON format of a BulkLoad transaction. */
+public final class BulkLoadTransactionJsonSerde
+        implements JsonSerializer<BulkLoadTransaction>, JsonDeserializer<BulkLoadTransaction> {
+    public static final BulkLoadTransactionJsonSerde INSTANCE = new BulkLoadTransactionJsonSerde();
 
     private BulkLoadTransactionJsonSerde() {}
 
-    /** Decodes the persisted fields and takes the transaction identity from the znode path. */
-    public static BulkLoadTransaction deserialize(
-            long tableId, String bulkLoadId, JsonNode record) {
+    @Override
+    public void serialize(BulkLoadTransaction txn, JsonGenerator out) throws IOException {
+        out.writeStartObject();
+        out.writeNumberField("version", 1);
+        out.writeNumberField("table_id", txn.tableId);
+        out.writeStringField("bulk_load_id", txn.bulkLoadId);
+        out.writeStringField("database_name", txn.tablePath.getDatabaseName());
+        out.writeStringField("table_name", txn.tablePath.getTableName());
+        out.writeNumberField("schema_id", txn.schemaId);
+        out.writeStringField("remote_data_dir", txn.remoteDataDir);
+        out.writeNumberField("state", txn.state);
+        out.writeNumberField("created_time", txn.createdTime);
+        if (txn.finishedTime != null) {
+            out.writeNumberField("finished_time", txn.finishedTime);
+        }
+        if (txn.abortMessage != null) {
+            out.writeStringField("abort_message", txn.abortMessage);
+        }
+        out.writeEndObject();
+    }
+
+    @Override
+    public BulkLoadTransaction deserialize(JsonNode record) {
         JsonNode version = record.path("version");
         checkArgument(
                 version.isInt() && version.intValue() == 1,
@@ -41,18 +66,21 @@ public final class BulkLoadTransactionJsonSerde {
         checkArgument(
                 state.isInt()
                         && (state.intValue() == BulkLoadTransaction.RUNNING
-                                || state.intValue() == COMMITTED
-                                || state.intValue() == ABORTED),
+                                || state.intValue() == BulkLoadTransaction.COMMITTED
+                                || state.intValue() == BulkLoadTransaction.ABORTED),
                 "Invalid BulkLoad transaction state: %s",
                 state);
 
-        JsonNode path = record.get("table_path");
         return new BulkLoadTransaction(
-                tableId,
-                bulkLoadId,
-                TablePath.of(path.get("database_name").asText(), path.get("table_name").asText()),
+                record.get("table_id").longValue(),
+                record.get("bulk_load_id").textValue(),
+                TablePath.of(
+                        record.get("database_name").asText(), record.get("table_name").asText()),
                 record.get("schema_id").asInt(),
                 record.get("remote_data_dir").textValue(),
-                state.intValue());
+                state.intValue(),
+                record.get("created_time").longValue(),
+                record.has("finished_time") ? record.get("finished_time").longValue() : null,
+                record.path("abort_message").textValue());
     }
 }

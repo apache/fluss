@@ -19,15 +19,18 @@ package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-
-import javax.annotation.Nullable;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** JSON format of a BulkLoad target. */
-public final class BulkLoadTargetJsonSerde {
+public final class BulkLoadTargetJsonSerde
+        implements JsonSerializer<BulkLoadTarget>, JsonDeserializer<BulkLoadTarget> {
+    public static final BulkLoadTargetJsonSerde INSTANCE = new BulkLoadTargetJsonSerde();
+    private static final String PARTITION_ID = "partition_id";
     private static final int VERSION = 1;
     private static final String PARTITION_NAME = "partition_name";
     private static final String BUCKET_COUNT = "bucket_count";
@@ -36,11 +39,12 @@ public final class BulkLoadTargetJsonSerde {
 
     private BulkLoadTargetJsonSerde() {}
 
-    /** Writes the target fields stored in the znode. */
-    public static void serialize(BulkLoadTarget target, JsonGenerator out) throws IOException {
+    @Override
+    public void serialize(BulkLoadTarget target, JsonGenerator out) throws IOException {
         out.writeStartObject();
         out.writeNumberField("version", VERSION);
-        if (target.partitionName != null) {
+        if (target.partitionId != null) {
+            out.writeNumberField(PARTITION_ID, target.partitionId);
             out.writeStringField(PARTITION_NAME, target.partitionName);
         }
         out.writeNumberField(BUCKET_COUNT, target.bucketCount);
@@ -49,15 +53,18 @@ public final class BulkLoadTargetJsonSerde {
         out.writeEndObject();
     }
 
-    /** Decodes a target with the partition identity from its path. */
-    public static BulkLoadTarget deserialize(@Nullable Long partitionId, JsonNode record) {
+    @Override
+    public BulkLoadTarget deserialize(JsonNode record) {
         JsonNode version = record.path("version");
         checkArgument(
                 version.isInt() && version.intValue() == VERSION,
                 "Unsupported BulkLoad target version.");
+        JsonNode id = record.path(PARTITION_ID);
         String partitionName = record.path(PARTITION_NAME).textValue();
         checkArgument(
-                partitionId == null ? !record.has(PARTITION_NAME) : partitionName != null,
+                id.isMissingNode()
+                        ? !record.has(PARTITION_NAME)
+                        : id.isIntegralNumber() && id.canConvertToLong() && partitionName != null,
                 "BulkLoad target partition ID and name must be specified together.");
         JsonNode count = record.path(BUCKET_COUNT);
         checkArgument(count.isInt(), "Invalid BulkLoad target bucket count.");
@@ -66,7 +73,7 @@ public final class BulkLoadTargetJsonSerde {
         JsonNode withdrawn = record.path(WITHDRAWN);
         checkArgument(withdrawn.isBoolean(), "Invalid BulkLoad target withdrawal state.");
         return new BulkLoadTarget(
-                partitionId,
+                id.isMissingNode() ? null : id.longValue(),
                 partitionName,
                 count.intValue(),
                 remoteDataDir,
