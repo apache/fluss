@@ -145,13 +145,13 @@ public class IcebergRecordAsFlussRow implements InternalRow {
     @Override
     public BinaryString getChar(int pos, int length) {
         String value = (String) icebergRecord.get(pos);
-        return BinaryString.fromBytes(value.getBytes());
+        return BinaryString.fromString(value);
     }
 
     @Override
     public BinaryString getString(int pos) {
         String value = (String) icebergRecord.get(pos);
-        return BinaryString.fromBytes(value.getBytes());
+        return BinaryString.fromString(value);
     }
 
     @Override

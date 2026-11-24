@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -346,5 +347,32 @@ class IcebergRecordAsFlussRowTest {
         record.setField("map_field", null);
         icebergRecordAsFlussRow.replaceIcebergRecord(record);
         assertThat(icebergRecordAsFlussRow.isNullAt(14)).isTrue();
+    }
+
+    @Test
+    void testNonAsciiStringsAreDecodedAsUtf8() {
+        // Iceberg returns java.lang.String; the Fluss row must hold its UTF-8 bytes whatever the
+        // JVM default charset is (e.g. ANSI_X3.4-1968 on Java 17 without a locale, where
+        // String.getBytes() turns every non-ASCII character into '?').
+        String name = "Saree \u20b9499 \u2013 \u0938\u093e\u0921\u093c\u0940";
+        String chars = "24 \u00d7 15";
+        record.setField("id", 1L);
+        record.setField("name", name);
+        record.setField("char_data", chars);
+        Map<String, Integer> map = new HashMap<>();
+        map.put("k\u00e9y", 1);
+        record.setField("map_field", map);
+        record.setField("__bucket", 1);
+        record.setField("__offset", 1L);
+        record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        assertThat(icebergRecordAsFlussRow.getString(1).toBytes())
+                .isEqualTo(name.getBytes(StandardCharsets.UTF_8));
+        assertThat(icebergRecordAsFlussRow.getString(1).toString()).isEqualTo(name);
+        assertThat(icebergRecordAsFlussRow.getChar(12, chars.length()).toString()).isEqualTo(chars);
+        assertThat(icebergRecordAsFlussRow.getMap(14).keyArray().getString(0).toString())
+                .isEqualTo("k\u00e9y");
     }
 }

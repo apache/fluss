@@ -102,13 +102,13 @@ public class IcebergArrayAsFlussArray implements InternalArray {
     @Override
     public BinaryString getChar(int pos, int length) {
         String value = (String) icebergList.get(pos);
-        return BinaryString.fromBytes(value.getBytes());
+        return BinaryString.fromString(value);
     }
 
     @Override
     public BinaryString getString(int pos) {
         String value = (String) icebergList.get(pos);
-        return BinaryString.fromBytes(value.getBytes());
+        return BinaryString.fromString(value);
     }
 
     @Override
