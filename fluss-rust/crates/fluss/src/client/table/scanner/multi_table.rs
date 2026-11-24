@@ -40,8 +40,8 @@ impl FlussConnection {
         group: ConsumerGroupOptions,
     ) -> Result<MultiTableScan<'_>> {
         group.validate()?;
-        if tables.is_empty() || tables.iter().collect::<HashSet<_>>().len() != tables.len() {
-            return Err(invalid("Multi-table scan needs distinct, nonempty tables"));
+        if tables.iter().collect::<HashSet<_>>().len() != tables.len() {
+            return Err(invalid("Multi-table scan needs distinct tables"));
         }
         let admin = self.get_admin()?;
         let mut infos = Vec::new();
@@ -52,7 +52,7 @@ impl FlussConnection {
             connection: self,
             tables: infos,
             group,
-            auto_commit: None,
+            auto_commit: Some(DEFAULT_AUTO_COMMIT_INTERVAL),
         })
     }
 }
@@ -72,31 +72,33 @@ impl MultiTableScan<'_> {
         Ok(self)
     }
 
+    /// Disables periodic and final commits.
+    pub fn without_auto_commit(mut self) -> Self {
+        self.auto_commit = None;
+        self
+    }
+
     fn build(self, batch: bool) -> Result<MultiTableInner> {
         let group = Arc::new(ConsumerGroup::new(
             self.group,
             self.connection.get_connections(),
             self.connection.get_metadata(),
         ));
-        let mut scanners = Vec::new();
-        for info in self.tables {
-            let scan = TableScan::new(self.connection, info, self.connection.get_metadata());
-            let mut inner = if batch {
-                scan.create_record_batch_log_scanner()?.inner
-            } else {
-                scan.create_log_scanner()?.inner
-            };
-            Arc::get_mut(&mut inner)
-                .expect("new scanner is unshared")
-                .consumer_group = Some(group.clone());
-            scanners.push(inner);
-        }
-        Ok(MultiTableInner {
-            scanners,
+        let mut inner = MultiTableInner {
+            scanners: Vec::new(),
             group,
+            batch,
+            config: self.connection.config().clone(),
+            metadata: self.connection.get_metadata(),
+            connections: self.connection.get_connections(),
+            admin: self.connection.get_admin()?,
             auto_commit: self.auto_commit.map(AutoCommit::new).transpose()?,
             next: AtomicUsize::new(0),
-        })
+        };
+        for info in self.tables {
+            inner.add_table(&info)?;
+        }
+        Ok(inner)
     }
 
     /// Creates a record scanner; record buckets identify their source table.
@@ -116,6 +118,11 @@ impl MultiTableScan<'_> {
 }
 
 struct MultiTableInner {
+    batch: bool,
+    config: Config,
+    metadata: Arc<Metadata>,
+    connections: Arc<RpcClient>,
+    admin: Arc<crate::client::FlussAdmin>,
     scanners: Vec<Arc<LogScannerInner>>,
     group: Arc<ConsumerGroup>,
     auto_commit: Option<AutoCommit>,
@@ -123,6 +130,44 @@ struct MultiTableInner {
 }
 
 impl MultiTableInner {
+    fn add_table(&mut self, info: &TableInfo) -> Result<()> {
+        validate_scan_support_inner(&info.table_path, info, !self.batch)?;
+        let mut scanner = LogScannerInner::new(
+            info,
+            self.metadata.clone(),
+            self.connections.clone(),
+            &self.config,
+            None,
+            true,
+            None,
+            self.admin.clone(),
+        )?;
+        scanner.consumer_group = Some(self.group.clone());
+        self.scanners.push(Arc::new(scanner));
+        Ok(())
+    }
+
+    async fn register(&mut self, path: &TablePath) -> Result<&TableInfo> {
+        if let Some(index) = self.scanners.iter().position(|s| &s.table_path == path) {
+            let s = &self.scanners[index];
+            if !s.log_scanner_status.get_all_subscriptions().is_empty()
+                || !s.pending_starts.lock().buckets.is_empty()
+            {
+                return Ok(&self.scanners[index].table_info);
+            }
+            let info = self.admin.get_table_info(path).await?;
+            if info.table_id == s.table_id && info.get_schema_id() == s.table_info.get_schema_id() {
+                return Ok(&self.scanners[index].table_info);
+            }
+            self.add_table(&info)?;
+            self.scanners.swap_remove(index);
+            return Ok(&self.scanners[index].table_info);
+        }
+        let info = self.admin.get_table_info(path).await?;
+        self.add_table(&info)?;
+        Ok(&self.scanners.last().unwrap().table_info)
+    }
+
     fn scanner(&self, id: i64) -> Result<&LogScannerInner> {
         self.scanners
             .iter()
@@ -179,10 +224,20 @@ macro_rules! multi_methods {
             /// Polls fairly across tables. Process the previous result before polling again
             /// when auto-commit is enabled. An error never discards another table's returned data.
             pub async fn poll(&self, timeout: Duration) -> Result<$result> {
-                if let Some(auto) = &self.inner.auto_commit {
-                    auto.before_poll(&self.inner.group).await?;
-                }
                 let deadline = tokio::time::Instant::now() + timeout;
+                for scanner in &self.inner.scanners {
+                    if !scanner
+                        .prepare_positions(
+                            deadline.saturating_duration_since(tokio::time::Instant::now()),
+                        )
+                        .await?
+                    {
+                        return Ok($empty);
+                    }
+                }
+                if let Some(auto) = &self.inner.auto_commit {
+                    auto.before_poll(&self.inner.group);
+                }
                 loop {
                     for _ in 0..self.inner.scanners.len() {
                         let index = self.inner.next.fetch_add(1, Ordering::Relaxed)
@@ -198,6 +253,30 @@ macro_rules! multi_methods {
                     }
                     tokio::time::sleep((deadline - now).min(Duration::from_millis(10))).await;
                 }
+            }
+
+            /// Registers a table by path on demand, returning the schema used to decode its rows.
+            pub async fn register_table(&mut self, path: &TablePath) -> Result<&TableInfo> {
+                self.inner.register(path).await
+            }
+
+            /// Resolves this group's committed positions on poll, within the poll deadline.
+            pub fn subscribe_from_committed(
+                &self,
+                buckets: &[TableBucket],
+                fallback: &OffsetsInitializer,
+            ) -> Result<()> {
+                for bucket in buckets {
+                    self.inner
+                        .scanner(bucket.table_id())?
+                        .validate_group_buckets(std::slice::from_ref(bucket))?;
+                }
+                for bucket in buckets {
+                    self.inner
+                        .scanner(bucket.table_id())?
+                        .defer_committed(std::slice::from_ref(bucket), fallback)?;
+                }
+                Ok(())
             }
 
             /// Restores starting positions across tables before changing any subscriptions.
@@ -234,11 +313,6 @@ macro_rules! multi_methods {
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
             ) -> Result<OffsetCommitHandle> {
-                for bucket in offsets.keys() {
-                    self.inner
-                        .scanner(bucket.table_id())?
-                        .validate_group_buckets(std::iter::once(bucket))?;
-                }
                 self.inner.group.enqueue(offsets)
             }
 
@@ -250,6 +324,14 @@ macro_rules! multi_methods {
                 self.commit_async()
                     .map_err(OffsetCommitError::Rejected)?
                     .await?
+            }
+
+            /// Waits for the final automatic commit, if enabled, and closes the scanner.
+            pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
+                if self.inner.auto_commit.is_some() {
+                    AutoCommit::finish(&self.inner.group).await?;
+                }
+                Ok(())
             }
 
             /// Commits explicit next offsets. After an unknown outcome, unsafe rewinds are rejected for the affected buckets.

@@ -357,7 +357,7 @@ async fn partition_commits_keep_partial_failures_and_missing_positions_distinct(
 }
 
 #[tokio::test]
-async fn arrow_commits_track_delivered_batches_and_forget_progress_after_seek() {
+async fn arrow_commits_track_delivered_batches_and_explicit_seek_positions() {
     let connection = connection().await;
     let admin = connection.get_admin().unwrap();
     let (path, bucket) = log_table(&connection).await;
@@ -405,10 +405,10 @@ async fn arrow_commits_track_delivered_batches_and_forget_progress_after_seek() 
         Some(OffsetAndMetadata::new(8))
     );
     scanner.subscribe(0, 0).await.unwrap();
-    assert!(scanner.commit_sync().await.unwrap().is_empty());
+    scanner.close().await.unwrap();
     assert_eq!(
         admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
-        Some(OffsetAndMetadata::new(8))
+        Some(OffsetAndMetadata::new(0))
     );
     admin.drop_table(&path, false).await.unwrap();
     connection.close(Duration::from_secs(10)).await.unwrap();
@@ -422,9 +422,9 @@ async fn multi_table_auto_commit_and_admin_management_preserve_positions() {
     let (second, b) = log_table(&connection).await;
     let group = format!("multi-{}", a.table_id());
     let buckets = [a.clone(), b.clone()];
-    let scanner = connection
+    let mut scanner = connection
         .new_multi_table_scan(
-            &[first.clone(), second.clone()],
+            std::slice::from_ref(&first),
             ConsumerGroupOptions::new(&group),
         )
         .await
@@ -433,9 +433,12 @@ async fn multi_table_auto_commit_and_admin_management_preserve_positions() {
         .unwrap()
         .create_log_scanner()
         .unwrap();
+    assert_eq!(
+        scanner.register_table(&second).await.unwrap().table_id,
+        b.table_id()
+    );
     scanner
-        .subscribe_with_initializer(&buckets, &OffsetsInitializer::committed(&group))
-        .await
+        .subscribe_from_committed(&buckets, &OffsetsInitializer::earliest())
         .unwrap();
     let first_poll = scanner.poll(Duration::from_secs(10)).await.unwrap();
     assert_eq!(first_poll.count(), 2);
@@ -464,15 +467,25 @@ async fn multi_table_auto_commit_and_admin_management_preserve_positions() {
         .unwrap()
         .clone();
     assert_ne!(first_bucket, second_bucket);
-    let saved = admin.get_consumer_offsets(&group, &buckets).await.unwrap();
+    let saved = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let offsets = admin.get_consumer_offsets(&group, &buckets).await.unwrap();
+            if offsets[&first_bucket].is_some() {
+                break offsets;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(saved[&first_bucket], Some(OffsetAndMetadata::new(2)));
     assert_eq!(saved[&second_bucket], None);
-    success(scanner.commit_sync().await.unwrap());
+    scanner.close().await.unwrap();
     assert!(admin.list_consumer_groups().await.unwrap().contains(&group));
     let saved = admin.list_consumer_offsets(&group).await.unwrap();
     assert_eq!(saved.len(), 2);
     assert!(saved.values().all(|value| value.offset == 2));
-    drop(scanner);
+
     // Admin rewinds and updates metadata across tables in one commit request.
     success(
         admin

@@ -71,6 +71,7 @@ pub use consumer_group::{AutoCommitError, OffsetsInitializer};
 mod multi_table;
 pub use multi_table::{MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan};
 
+const DEFAULT_AUTO_COMMIT_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct TableScan<'a> {
@@ -116,22 +117,28 @@ impl<'a> TableScan<'a> {
 
     /// Enables persisted offsets for a manually assigned consumer group.
     /// Existing subscriptions still use their explicit starting offsets; use
-    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. Automatic commits are disabled by default.
+    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. Group scanners commit every five seconds by default.
     pub fn with_consumer_group(mut self, options: ConsumerGroupOptions) -> Result<Self> {
         options.validate()?;
+        self.auto_commit_interval
+            .get_or_insert(DEFAULT_AUTO_COMMIT_INTERVAL);
         self.consumer_group = Some(options);
         Ok(self)
     }
 
-    /// Enables periodic commits at the start of poll, before delivering more data.
+    /// Sets the interval for poll-triggered asynchronous commits.
     /// Process the previous poll completely before polling again. The interval is checked
-    /// only on poll; idle applications do not commit in the background. Failures stop that
-    /// poll and are returned to the caller. Drop does not commit: after processing the final
-    /// batch, await `commit_sync` and inspect its results before dropping the scanner.
+    /// only on poll; failures are logged. Close the scanner to persist its final position.
     pub fn with_auto_commit(mut self, interval: Duration) -> Result<Self> {
         consumer_group::AutoCommit::new(interval)?;
         self.auto_commit_interval = Some(interval);
         Ok(self)
+    }
+
+    /// Disables periodic and final commits on this group scanner.
+    pub fn without_auto_commit(mut self) -> Self {
+        self.auto_commit_interval = Some(Duration::ZERO);
+        self
     }
 
     /// Controls how log scanners handle schema evolution.
@@ -469,6 +476,7 @@ impl<'a> TableScan<'a> {
         )?;
         inner.auto_commit = self
             .auto_commit_interval
+            .filter(|v| !v.is_zero())
             .map(consumer_group::AutoCommit::new)
             .transpose()?;
         inner.consumer_group = self.consumer_group.map(|options| {
@@ -521,6 +529,7 @@ impl<'a> TableScan<'a> {
         )?;
         inner.auto_commit = self
             .auto_commit_interval
+            .filter(|v| !v.is_zero())
             .map(consumer_group::AutoCommit::new)
             .transpose()?;
         inner.consumer_group = self.consumer_group.map(|options| {
@@ -572,6 +581,7 @@ impl PolledBatches {
 struct LogScannerInner {
     consumer_group: Option<Arc<ConsumerGroup>>,
     auto_commit: Option<consumer_group::AutoCommit>,
+    pending_starts: Mutex<consumer_group::PendingStarts>,
     table_path: TablePath,
     table_id: TableId,
     table_info: TableInfo,
@@ -772,6 +782,7 @@ impl LogScannerInner {
         Ok(Self {
             consumer_group: None,
             auto_commit: None,
+            pending_starts: Default::default(),
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
             table_info: table_info.clone(),
@@ -814,14 +825,17 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+    async fn poll_records(self: &Arc<Self>, timeout: Duration) -> Result<ScanRecords> {
         // Pairs record_poll_start (now) with record_poll_end
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
         let _poll_guard = PollGuard::new(self);
-        self.maybe_auto_commit().await?;
         let start = Instant::now();
         let deadline = start + timeout;
+        if !self.prepare_positions(timeout).await? {
+            return Ok(ScanRecords::empty());
+        }
+        self.maybe_auto_commit();
 
         loop {
             // Try to collect fetches
@@ -974,11 +988,7 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
-        if let Some(group) = &self.consumer_group {
-            group.delivered.lock().remove(&table_bucket);
-        }
-        self.log_scanner_status
-            .assign_scan_bucket(table_bucket, offset);
+        self.assign_buckets(HashMap::from([(table_bucket, offset)]));
         Ok(())
     }
 
@@ -1039,11 +1049,7 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
-        if let Some(group) = &self.consumer_group {
-            group.delivered.lock().remove(&table_bucket);
-        }
-        self.log_scanner_status
-            .assign_scan_bucket(table_bucket, offset);
+        self.assign_buckets(HashMap::from([(table_bucket, offset)]));
         Ok(())
     }
 
@@ -1144,8 +1150,14 @@ impl LogScannerInner {
     fn assign_buckets(&self, bucket_offsets: HashMap<TableBucket, i64>) {
         if let Some(group) = &self.consumer_group {
             let mut delivered = group.delivered.lock();
-            for bucket in bucket_offsets.keys() {
-                delivered.remove(bucket);
+            let mut pending = self.pending_starts.lock();
+            for (bucket, &offset) in &bucket_offsets {
+                pending.forget(bucket);
+                if offset >= 0 {
+                    delivered.insert(bucket.clone(), OffsetAndMetadata::new(offset));
+                } else {
+                    delivered.remove(bucket);
+                }
             }
         }
         self.log_scanner_status.assign_scan_buckets(bucket_offsets);
@@ -1156,6 +1168,7 @@ impl LogScannerInner {
             .unassign_scan_buckets(from_ref(bucket));
         if let Some(group) = &self.consumer_group {
             group.delivered.lock().remove(bucket);
+            self.pending_starts.lock().forget(bucket);
         }
     }
 
@@ -1212,11 +1225,14 @@ impl LogScannerInner {
         self.log_fetcher.collect_fetches().await
     }
 
-    async fn poll_batches(&self, timeout: Duration) -> Result<PolledBatches> {
+    async fn poll_batches(self: &Arc<Self>, timeout: Duration) -> Result<PolledBatches> {
         let _poll_guard = PollGuard::new(self);
-        self.maybe_auto_commit().await?;
         let start = Instant::now();
         let deadline = start + timeout;
+        if !self.prepare_positions(timeout).await? {
+            return Ok(PolledBatches::default());
+        }
+        self.maybe_auto_commit();
 
         loop {
             let batches = self.poll_for_batches().await?;
@@ -4793,6 +4809,41 @@ mod tests {
             inner.unsubscribe(0).await?;
             assert!(!group.delivered.lock().contains_key(&bucket));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_record_does_not_wait_for_auto_commit_ack() -> Result<()> {
+        use futures::FutureExt;
+        let (mut inner, _, data) = scanner_fixture(true)?;
+        let scanner = Arc::get_mut(&mut inner).unwrap();
+        let group = Arc::new(ConsumerGroup::new(
+            ConsumerGroupOptions::new("busy"),
+            scanner.log_fetcher.conns.clone(),
+            scanner.metadata.clone(),
+        ));
+        let bucket = TableBucket::new(1, 0);
+        group
+            .delivered
+            .lock()
+            .insert(bucket.clone(), OffsetAndMetadata::new(0));
+        scanner.consumer_group = Some(group);
+        scanner.auto_commit = Some(consumer_group::AutoCommit::new(Duration::from_nanos(1))?);
+        scanner
+            .log_scanner_status
+            .assign_scan_bucket(bucket.clone(), 0);
+        scanner.log_fetcher.log_fetch_buffer.add(memory_fetch(
+            &scanner.log_fetcher,
+            bucket,
+            data,
+            0,
+        ));
+        // On this single-thread runtime no spawned commit task can run until poll yields.
+        let rows = inner
+            .poll_records(Duration::ZERO)
+            .now_or_never()
+            .expect("poll waited for a commit")?;
+        assert!(rows.count() > 0);
         Ok(())
     }
 

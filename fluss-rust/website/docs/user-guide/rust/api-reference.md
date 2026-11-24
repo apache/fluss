@@ -277,22 +277,25 @@ consumer requires stopping the previous writer before the replacement starts com
 
 `ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
 after preceding queued commits finish. A scanner admits up to 64 pending commits. If admission returns
-`Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A deadline reached before any attempt starts writing rejects only that commit. Background auto-commit is disabled. Existing scanners with
+`Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A deadline reached before any attempt starts writing rejects only that commit.  Existing scanners with
 no group retain their behavior. Offset persistence requires a server implementing discovery,
 commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
 consumer offsets. A committed offset that has expired from log retention is not silently reset.
 
+Use `subscribe_from_committed(buckets, fallback)` to resolve this scanner's group on poll.
+A short poll can return empty while lookup continues. Use `subscribe_with_initializer` when
+subscription must finish resolving the entire selection before returning.
+
 ### Periodic commits and multiple tables
 
-Automatic commits are opt-in with `scan.with_auto_commit(Duration::from_secs(5))?` and
-require a consumer group. They run at the start of a poll once the interval has elapsed,
-using only positions from previous completed polls. Process the whole previous result before
+Group scanners default to a five-second interval; use `without_auto_commit()` for manual commits. They run at the start of a poll once the interval has elapsed,
+using the current positions, including explicit seeks. Process the whole previous result before
 polling again. There is no timer writing offsets while the application is processing a batch.
-A commit failure fails the poll before delivering more records; its error source retains
-`AutoCommitError`, including per-bucket failures. After an unknown outcome, the same per-bucket rewind rules apply as for explicit commits.
+Poll does not wait for a periodic commit. Failures are logged. After an unknown outcome, the same per-bucket rewind rules apply as for explicit commits.
 
-For shutdown, finish processing the last result, await `commit_sync`, inspect every bucket,
-and drop the scanner. Drop and connection close do not perform a final commit. Applications
+A multi-table scanner accepts an empty initial table list; call `register_table(path)` to obtain its table ID and schema before assigning buckets.
+
+For shutdown, finish processing the last result, await `scanner.close()` to commit the final positions when auto-commit is enabled. Drop alone does not commit. Applications
 that dispatch work to another thread should use explicit commits after that work completes.
 
 ```rust,ignore
