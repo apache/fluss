@@ -25,9 +25,9 @@ namespace {
 
 using namespace fluss;
 
-TEST(UnionReadTest, FrozenSnapshotAndResumedWalDeletes) {
+TEST(UnionReadTest, FrozenSnapshotAndResumedFullChanges) {
     auto* env = fluss_test::FlussTestEnvironment::Instance();
-    TablePath path("fluss", "cpp_union_read_wal");
+    TablePath path("fluss", "cpp_union_read_full");
     auto desc = TableDescriptor::NewBuilder()
                     .SetSchema(Schema::NewBuilder()
                                    .AddColumn("id", DataType::Int())
@@ -35,7 +35,7 @@ TEST(UnionReadTest, FrozenSnapshotAndResumedWalDeletes) {
                                    .SetPrimaryKeys({"id"})
                                    .Build())
                     .SetBucketCount(1)
-                    .SetProperty("table.changelog.image", "WAL")
+                    .SetProperty("table.changelog.image", "FULL")
                     .Build();
     fluss_test::CreateTable(env->GetAdmin(), path, desc);
     Table table;
@@ -70,30 +70,35 @@ TEST(UnionReadTest, FrozenSnapshotAndResumedWalDeletes) {
     ASSERT_OK(scan.CreateStreamingUnionReader(context, reader));
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::Snapshot);
-    ASSERT_EQ(event.snapshot->schema()->field(1)->name(), "id");
+    ASSERT_EQ(event.snapshot->num_columns(), 1);
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::SnapshotFinished);
-    ASSERT_EQ(event.next_offsets.size(), 1u);
-    auto checkpoint = event.next_offsets;
+    ASSERT_TRUE(event.checkpoint.has_value());
+    auto checkpoint = *event.checkpoint;
+    ASSERT_EQ(checkpoint.next_offsets.size(), 1u);
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::Changes);
-    ASSERT_EQ(event.changes.Count(), 1u);
-    auto first = *event.changes.begin();
-    ASSERT_EQ(first.change_type, ChangeType::Delete);
+    ASSERT_EQ(event.changes.size(), 1u);
+    auto first = event.changes[0];
+    ASSERT_EQ(first.change_types, std::vector<ChangeType>{ChangeType::UpdateBefore});
     ASSERT_EQ(event.next_offsets.size(), 1u);
-    ASSERT_GT(event.next_offsets[0].offset, checkpoint[0].offset);
-    checkpoint = event.next_offsets;
+    ASSERT_GT(event.next_offsets[0].offset, checkpoint.next_offsets[0].offset);
+    checkpoint.next_offsets = event.next_offsets;
+    auto other = table.NewScan();
+    EXPECT_FALSE(other.ResumeStreamingUnionReader(context, checkpoint, reader).Ok());
     ASSERT_OK(scan.ResumeStreamingUnionReader(context, checkpoint, reader));
     ASSERT_OK(reader.Next(1, event));
     ASSERT_EQ(event.kind, UnionReadKind::TimedOut);
-    write(70);
+    write(120);
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::Changes);
-    ASSERT_EQ(event.changes.Count(), 1u);
-    ASSERT_EQ((*event.changes.begin()).change_type, ChangeType::Delete);
-    ASSERT_EQ((*event.changes.begin()).offset, checkpoint[0].offset);
+    ASSERT_EQ(event.changes.size(), 1u);
+    ASSERT_EQ(event.changes[0].change_types, std::vector<ChangeType>{ChangeType::UpdateAfter});
+    ASSERT_EQ(
+        std::static_pointer_cast<arrow::Int32Array>(event.changes[0].batch->column(0))->Value(0),
+        120);
     reader = UnionReadReader{};
-    EXPECT_EQ(first.row.GetInt32("id"), 1);
+    EXPECT_EQ(std::static_pointer_cast<arrow::Int32Array>(first.batch->column(0))->Value(0), 130);
     EXPECT_EQ(initial->num_rows(), 1);
 }
 
@@ -125,20 +130,26 @@ TEST(UnionReadTest, CheckpointAdvancesPastFilteredAppends) {
     ASSERT_OK(scan.CreateStreamingUnionReader(context, reader));
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::SnapshotFinished);
-    ASSERT_EQ(event.next_offsets.size(), 1u);
-    auto start = event.next_offsets[0].offset;
+    ASSERT_TRUE(event.checkpoint.has_value());
+    auto checkpoint = *event.checkpoint;
+    ASSERT_EQ(checkpoint.next_offsets.size(), 1u);
+    auto start = checkpoint.next_offsets[0].offset;
     append(-1);
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::Changes);
-    ASSERT_EQ(event.changes.Count(), 0u);
+    ASSERT_TRUE(event.changes.empty());
     ASSERT_EQ(event.next_offsets.size(), 1u);
     ASSERT_EQ(event.next_offsets[0].offset, start + 1);
-    ASSERT_OK(scan.ResumeStreamingUnionReader(context, event.next_offsets, reader));
+    checkpoint.next_offsets = event.next_offsets;
+    ASSERT_OK(scan.ResumeStreamingUnionReader(context, checkpoint, reader));
     append(42);
     ASSERT_OK(reader.Next(10000, event));
     ASSERT_EQ(event.kind, UnionReadKind::Changes);
-    ASSERT_EQ(event.changes.Count(), 1u);
-    EXPECT_EQ((*event.changes.begin()).row.GetInt32("value"), 42);
+    ASSERT_EQ(event.changes.size(), 1u);
+    EXPECT_TRUE(event.changes[0].change_types.empty());
+    EXPECT_EQ(
+        std::static_pointer_cast<arrow::Int32Array>(event.changes[0].batch->column(0))->Value(0),
+        42);
 }
 
 }  // namespace

@@ -166,10 +166,10 @@ and filtering before opening a reader:
 | Method | What `UnionReadReader::Next` returns |
 |---|---|
 | `CreateBoundedUnionReader` | Arrow snapshot batches, then `Finished`. |
-| `CreateStreamingUnionReader` | Snapshot batches, one `SnapshotFinished` with the next offset of every captured bucket, then `Changes`. |
-| `ResumeStreamingUnionReader` | Changes from the saved next offsets, using the original boundary, projection and filter. |
+| `CreateStreamingUnionReader` | Snapshot batches, one `SnapshotFinished` with a typed checkpoint, then Arrow `Changes` or `PartitionsDropped`. |
+| `ResumeStreamingUnionReader` | Changes from the saved checkpoint, using the original boundary, projection and filter. |
 
-Commit the snapshot before saving the handoff offsets. After the handoff, commit changes
+Commit the snapshot and its checkpoint together. PK streaming requires FULL images. After the handoff, commit changes
 and offset advances together, even if filtering removes every row in a batch.
 `TimedOut` means no event was ready; continue polling the same reader.
 

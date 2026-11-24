@@ -2401,19 +2401,6 @@ Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id)
     return utils::from_ffi_result(ffi_result);
 }
 
-static std::shared_ptr<const detail::ScanData> TakeScanData(
-    rust::Box<ffi::ScanResultInner> records) {
-    auto data = std::make_shared<detail::ScanData>(nullptr, detail::ColumnMap{});
-    data->raw = records.into_raw();
-    auto col_count = data->raw->sv_column_count();
-    for (size_t i = 0; i < col_count; ++i) {
-        auto name = data->raw->sv_column_name(i);
-        data->columns[std::string(name.data(), name.size())] = {
-            i, static_cast<TypeId>(data->raw->sv_column_type(i))};
-    }
-    return data;
-}
-
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
         return utils::make_client_error("LogScanner not available");
@@ -2425,7 +2412,16 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
                                  std::string(result_box->sv_error_message()));
     }
 
-    out.data_ = TakeScanData(std::move(result_box));
+    // Wrap raw pointer in ScanData immediately so it's never leaked on exception.
+    auto data = std::make_shared<detail::ScanData>(result_box.into_raw(), detail::ColumnMap{});
+    // Build column map eagerly — shared by all RowViews/BucketRecords.
+    auto col_count = data->raw->sv_column_count();
+    for (size_t i = 0; i < col_count; ++i) {
+        auto name = data->raw->sv_column_name(i);
+        data->columns[std::string(name.data(), name.size())] = {
+            i, static_cast<TypeId>(data->raw->sv_column_type(i))};
+    }
+    out.data_ = std::move(data);
     return utils::make_ok();
 }
 
@@ -2448,19 +2444,19 @@ Result TableScan::CreateStreamingUnionReader(const std::vector<uint8_t>& ctx, Un
 }
 
 Result TableScan::ResumeStreamingUnionReader(const std::vector<uint8_t>& ctx,
-                                             const std::vector<ReaderStopOffset>& offsets,
+                                             const UnionReadCheckpoint& checkpoint,
                                              UnionReadReader& out,
                                              const UnionReadOptions& options) const {
-    return OpenUnionReader(ctx, true, &offsets, out, options);
+    return OpenUnionReader(ctx, true, &checkpoint, out, options);
 }
 
 Result TableScan::OpenUnionReader(const std::vector<uint8_t>& ctx, bool streaming,
-                                  const std::vector<ReaderStopOffset>* offsets,
-                                  UnionReadReader& out, const UnionReadOptions& options) const {
+                                  const UnionReadCheckpoint* checkpoint, UnionReadReader& out,
+                                  const UnionReadOptions& options) const {
     if (!table_) return utils::make_client_error("Table not available");
     if (limit_) return utils::make_client_error("UnionRead does not support Limit");
     ffi::FfiUnionOptions opts{};
-    opts.mode = offsets     ? ffi::FfiUnionMode::Resume
+    opts.mode = checkpoint  ? ffi::FfiUnionMode::Resume
                 : streaming ? ffi::FfiUnionMode::Streaming
                             : ffi::FfiUnionMode::Bounded;
     opts.predicate = EncodePredicate().nodes;
@@ -2470,8 +2466,9 @@ Result TableScan::OpenUnionReader(const std::vector<uint8_t>& ctx, bool streamin
         opts.properties.push_back({rust::String(k), rust::String(v)});
     opts.has_budget = options.pk_memory_budget_bytes.has_value();
     opts.budget = options.pk_memory_budget_bytes.value_or(0);
-    if (offsets) {
-        for (const auto& o : *offsets) {
+    if (checkpoint) {
+        opts.view_digest = checkpoint->view_digest;
+        for (const auto& o : checkpoint->next_offsets) {
             opts.offsets.push_back({o.bucket.table_id, o.bucket.partition_id.has_value(),
                                     o.bucket.partition_id.value_or(0), o.bucket.bucket_id,
                                     o.offset});
@@ -2510,7 +2507,26 @@ Result UnionReadReader::Next(int64_t timeout_ms, UnionReadEvent& out) {
             break;
         case ffi::FfiUnionKind::Changes:
             next.kind = UnionReadKind::Changes;
-            next.changes.data_ = TakeScanData(std::move(event.records));
+            for (const auto& b : event.changes) {
+                ArrowArray data{};
+                ArrowSchema type{};
+                auto status = utils::from_ffi_result(b.data->export_union_batch(
+                    reinterpret_cast<size_t>(&data), reinterpret_cast<size_t>(&type)));
+                if (!status.Ok()) return status;
+                auto batch = arrow::ImportRecordBatch(&data, &type);
+                if (!batch.ok()) return utils::make_client_error(batch.status().ToString());
+                UnionReadChangeBatch change{
+                    {b.table_id, b.bucket_id,
+                     b.has_partition_id ? std::optional<int64_t>(b.partition_id) : std::nullopt},
+                    std::move(batch).ValueOrDie(),
+                    {}};
+                for (auto kind : b.changes)
+                    change.change_types.push_back(static_cast<ChangeType>(kind));
+                next.changes.push_back(std::move(change));
+            }
+            break;
+        case ffi::FfiUnionKind::PartitionsDropped:
+            next.kind = UnionReadKind::PartitionsDropped;
             break;
         case ffi::FfiUnionKind::TimedOut:
             next.kind = UnionReadKind::TimedOut;
@@ -2525,6 +2541,8 @@ Result UnionReadReader::Next(int64_t timeout_ms, UnionReadEvent& out) {
               o.has_partition_id ? std::optional<int64_t>(o.partition_id) : std::nullopt},
              o.offset});
     }
+    if (next.kind == UnionReadKind::SnapshotFinished)
+        next.checkpoint = UnionReadCheckpoint{event.view_digest, std::move(next.next_offsets)};
     out = std::move(next);
     return utils::make_ok();
 }

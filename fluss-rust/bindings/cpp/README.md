@@ -245,7 +245,7 @@ return Arrow snapshot batches followed by `Finished`. For a continuous import:
 std::vector<uint8_t> context;
 Check(table.CaptureUnionReadContext(context));
 auto scan = table.NewScan();
-scan.ProjectByName({"price"}).Filter(fluss::Col("price").GreaterThan(100));
+scan.ProjectByName({"id", "price"}).Filter(fluss::Col("price").GreaterThan(100));
 fluss::UnionReadReader reader;
 Check(scan.CreateStreamingUnionReader(context, reader));
 fluss::UnionReadEvent event;
@@ -254,9 +254,11 @@ for (;;) {
     switch (event.kind) {
         case fluss::UnionReadKind::Snapshot: Stage(event.snapshot); break;
         case fluss::UnionReadKind::SnapshotFinished:
-            CommitBootstrap(context, event.next_offsets); break;
+            CommitBootstrap(context, *event.checkpoint); break;
         case fluss::UnionReadKind::Changes:
             ApplyAndCheckpoint(event.changes, event.next_offsets); break;
+        case fluss::UnionReadKind::PartitionsDropped:
+            RemoveBucketsFromCheckpoint(event.next_offsets); break;
         case fluss::UnionReadKind::TimedOut: continue;
         case fluss::UnionReadKind::Finished: return;
     }
@@ -264,18 +266,17 @@ for (;;) {
 ```
 
 Here the capitalized helpers are application code. Commit output and next unread
-offsets together. At the marker the offsets cover **every** captured bucket;
+offsets together. At the marker the offsets cover each selected bucket;
 afterwards merge each poll's advances into that checkpoint, including buckets
 with no visible rows. Resume with `scan.ResumeStreamingUnionReader(context,
 checkpoint, reader)` using the same filter and projection. If bootstrap was
 not committed, discard staged rows and start again from the saved boundary.
 
-The stream appends missing PK columns to the projection. With a non-key filter
-on a WAL table, apply `UpdateAfter` as an upsert and `Delete` by key, even if the
-key is already absent. FULL mode preserves matching change images, including
+PK streaming requires FULL images. Both phases return exactly the requested columns.
+Request key columns explicitly for a keyed sink. FULL preserves matching change images, including
 retractions. A `TimedOut` event indicates no event was ready before the deadline;
 keep the same reader. Call `Next` from one thread at a time and destroy the reader
-after the call returns. Returned Arrow batches and copied scan records remain
+after the call returns. Returned Arrow batches remain
 valid independently of the reader.
 
 ## TODO

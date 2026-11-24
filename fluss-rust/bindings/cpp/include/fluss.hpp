@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -1393,7 +1394,6 @@ class ScanRecords {
 
    private:
     friend class LogScanner;
-    friend class UnionReadReader;
     ScanRecord RecordAt(size_t bucket, size_t rec_idx) const;
     std::shared_ptr<const detail::ScanData> data_;
 };
@@ -1945,13 +1945,33 @@ struct UnionReadOptions {
     std::optional<size_t> pk_memory_budget_bytes;
 };
 
-enum class UnionReadKind { Snapshot, SnapshotFinished, Changes, TimedOut, Finished };
+enum class UnionReadKind {
+    Snapshot,
+    SnapshotFinished,
+    Changes,
+    PartitionsDropped,
+    TimedOut,
+    Finished
+};
 
+struct UnionReadCheckpoint {
+    std::array<uint8_t, 32> view_digest{};
+    std::vector<ReaderStopOffset> next_offsets;
+};
+struct UnionReadChangeBatch {
+    TableBucket bucket;
+    std::shared_ptr<arrow::RecordBatch> batch;
+    /// Empty for append; otherwise one kind per row, in order.
+    std::vector<ChangeType> change_types;
+};
 struct UnionReadEvent {
     UnionReadKind kind{UnionReadKind::Finished};
     std::shared_ptr<arrow::RecordBatch> snapshot;
-    ScanRecords changes;
-    /// Next unread offsets: full assignment at SnapshotFinished, per-poll advances at Changes.
+    std::vector<UnionReadChangeBatch> changes;
+    /// Full checkpoint on SnapshotFinished.
+    std::optional<UnionReadCheckpoint> checkpoint;
+    /// Advances on Changes; retired bucket positions on PartitionsDropped.
+
     std::vector<ReaderStopOffset> next_offsets;
 };
 
@@ -2028,11 +2048,9 @@ class TableScan {
     /// Read snapshot batches, SnapshotFinished, then bucket-ordered changes.
     Result CreateStreamingUnionReader(const std::vector<uint8_t>& context, UnionReadReader& out,
                                       const UnionReadOptions& options = {}) const;
-    /// Use the original context and query with the last committed offset of every bucket (next
-    /// unread).
+    /// Resume the original query from the last committed checkpoint.
     Result ResumeStreamingUnionReader(const std::vector<uint8_t>& context,
-                                      const std::vector<ReaderStopOffset>& next_offsets,
-                                      UnionReadReader& out,
+                                      const UnionReadCheckpoint& checkpoint, UnionReadReader& out,
                                       const UnionReadOptions& options = {}) const;
 
     Result CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out);
@@ -2045,9 +2063,8 @@ class TableScan {
     Result DoCreateScanner(LogScanner& out, bool is_record_batch);
     struct EncodedPredicate;
     EncodedPredicate EncodePredicate() const;
-    Result OpenUnionReader(const std::vector<uint8_t>&, bool streaming,
-                           const std::vector<ReaderStopOffset>*, UnionReadReader&,
-                           const UnionReadOptions&) const;
+    Result OpenUnionReader(const std::vector<uint8_t>&, bool streaming, const UnionReadCheckpoint*,
+                           UnionReadReader&, const UnionReadOptions&) const;
 
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;

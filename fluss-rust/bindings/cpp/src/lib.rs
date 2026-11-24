@@ -18,7 +18,7 @@
 mod lookup;
 mod types;
 mod union_read;
-use union_read::UnionReader;
+use union_read::{UnionArrowBatch, UnionReader};
 mod write_callback;
 use lookup::{
     LookupCompletion, PendingLookup, PendingPrefixLookup, PrefixLookupCompletion,
@@ -285,6 +285,7 @@ mod ffi {
     }
 
     enum FfiUnionKind {
+        PartitionsDropped,
         Snapshot,
         SnapshotFinished,
         Changes,
@@ -294,6 +295,7 @@ mod ffi {
 
     struct FfiUnionOptions {
         mode: FfiUnionMode,
+        view_digest: [u8; 32],
         projection: Vec<usize>,
         names: Vec<String>,
         predicate: Vec<FfiPredicateNode>,
@@ -303,11 +305,20 @@ mod ffi {
         has_budget: bool,
     }
 
+    struct FfiUnionBatch {
+        table_id: i64,
+        partition_id: i64,
+        has_partition_id: bool,
+        bucket_id: i32,
+        changes: Vec<u8>,
+        data: Box<UnionArrowBatch>,
+    }
     struct FfiUnionEvent {
         result: FfiResult,
         kind: FfiUnionKind,
         offsets: Vec<FfiReaderStopOffset>,
-        records: Box<ScanResultInner>,
+        changes: Vec<FfiUnionBatch>,
+        view_digest: [u8; 32],
     }
 
     struct FfiBoundedReadResult {
@@ -464,6 +475,8 @@ mod ffi {
         type Connection;
         type Admin;
         type Table;
+        type UnionArrowBatch;
+        fn export_union_batch(self: &UnionArrowBatch, array: usize, schema: usize) -> FfiResult;
         type UnionReader;
         unsafe fn delete_union_reader(reader: *mut UnionReader);
         fn capture_union_context(self: &Table, bytes: &mut Vec<u8>) -> FfiResult;
@@ -2625,10 +2638,31 @@ impl LogScanner {
         let result = RUNTIME.block_on(async { inner.poll(timeout).await });
 
         match result {
-            Ok(records) => Box::new(ScanResultInner::from_records(
-                records,
-                self.projected_columns.clone(),
-            )),
+            Ok(records) => {
+                let columns = self.projected_columns.clone();
+                let mut total_count = 0usize;
+                let mut buckets = Vec::new();
+                let mut bucket_infos = Vec::new();
+                for (table_bucket, bucket_records) in records.into_records_by_buckets() {
+                    let count = bucket_records.len();
+                    total_count += count;
+                    bucket_infos.push(ffi::FfiBucketInfo {
+                        table_id: table_bucket.table_id(),
+                        bucket_id: table_bucket.bucket_id(),
+                        has_partition_id: table_bucket.partition_id().is_some(),
+                        partition_id: table_bucket.partition_id().unwrap_or(0),
+                        record_count: count,
+                    });
+                    buckets.push((table_bucket, bucket_records));
+                }
+                Box::new(ScanResultInner {
+                    error: None,
+                    buckets,
+                    columns,
+                    bucket_infos,
+                    total_count,
+                })
+            }
             Err(e) => {
                 let ffi_err = err_from_core_error(&e);
                 Box::new(ScanResultInner::from_error(
@@ -3425,31 +3459,6 @@ pub struct ScanResultInner {
 }
 
 impl ScanResultInner {
-    fn from_records(records: fcore::record::ScanRecords, columns: Vec<Column>) -> Self {
-        let mut total_count = 0usize;
-        let mut buckets = Vec::new();
-        let mut bucket_infos = Vec::new();
-        for (table_bucket, bucket_records) in records.into_records_by_buckets() {
-            let count = bucket_records.len();
-            total_count += count;
-            bucket_infos.push(ffi::FfiBucketInfo {
-                table_id: table_bucket.table_id(),
-                bucket_id: table_bucket.bucket_id(),
-                has_partition_id: table_bucket.partition_id().is_some(),
-                partition_id: table_bucket.partition_id().unwrap_or(0),
-                record_count: count,
-            });
-            buckets.push((table_bucket, bucket_records));
-        }
-        Self {
-            error: None,
-            buckets,
-            columns,
-            bucket_infos,
-            total_count,
-        }
-    }
-
     fn from_error(code: i32, msg: String) -> Self {
         Self {
             error: Some((code, msg)),

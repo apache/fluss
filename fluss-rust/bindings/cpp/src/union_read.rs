@@ -16,13 +16,14 @@
 // under the License.
 
 use super::*;
-use fluss_lake::{FlussLakeError, FlussLakeTable, UnionReadEvent, UnionReadStream};
+use fluss_lake::{
+    FlussLakeError, FlussLakeTable, UnionReadCheckpoint, UnionReadEvent, UnionReadStream,
+};
 use futures::{StreamExt, TryStreamExt};
 use prost::Message;
 
 pub struct UnionReader {
     stream: UnionReadStream,
-    columns: Vec<Column>,
 }
 
 fn lake_error(error: FlussLakeError) -> ffi::FfiResult {
@@ -96,16 +97,15 @@ impl Table {
         let budget = opts
             .has_budget
             .then(|| Arc::new(fcore::client::LimitedReadMemoryBudget::new(opts.budget)));
-        let mut columns = Vec::new();
+        let mut scan = table.new_scan();
+        if !projection.is_empty() {
+            scan = scan.with_projection(projection);
+        }
+        if let Some(filter) = predicate {
+            scan = scan.with_filter(filter);
+        }
         let stream = match opts.mode {
             ffi::FfiUnionMode::Bounded => {
-                let mut scan = table.new_scan();
-                if !projection.is_empty() {
-                    scan = scan.with_projection(projection);
-                }
-                if let Some(filter) = predicate {
-                    scan = scan.with_filter(filter);
-                }
                 let plan = scan.plan_with_context(&ctx).await.map_err(lake_error)?;
                 let mut reader = scan.new_reader();
                 if let Some(budget) = budget {
@@ -118,29 +118,7 @@ impl Table {
                     .boxed()
             }
             ffi::FfiUnionMode::Streaming | ffi::FfiUnionMode::Resume => {
-                let mut scan = table.new_stream_scan();
-                if projection.is_empty() {
-                    columns = schema.columns().to_vec();
-                } else {
-                    for key in schema.primary_key_indexes() {
-                        if !projection.contains(&key) {
-                            projection.push(key);
-                        }
-                    }
-                    columns =
-                        projection
-                            .iter()
-                            .map(|&i| {
-                                schema.columns().get(i).cloned().ok_or_else(|| {
-                                    client_err(format!("Invalid projection index: {i}"))
-                                })
-                            })
-                            .collect::<Result<_, _>>()?;
-                    scan = scan.with_projection(projection);
-                }
-                if let Some(filter) = predicate {
-                    scan = scan.with_filter(filter);
-                }
+                let mut scan = scan.new_stream();
                 if let Some(budget) = budget {
                     scan = scan.with_memory_budget(budget);
                 }
@@ -157,7 +135,14 @@ impl Table {
                             return Err(client_err("Duplicate checkpoint bucket".into()));
                         }
                     }
-                    scan.resume(&ctx, offsets).await
+                    scan.resume(
+                        &ctx,
+                        UnionReadCheckpoint {
+                            view_digest: opts.view_digest,
+                            next_offsets: offsets,
+                        },
+                    )
+                    .await
                 } else {
                     scan.start(&ctx).await
                 }
@@ -167,7 +152,6 @@ impl Table {
         };
         Ok(UnionReader {
             stream: stream.fuse().boxed(),
-            columns,
         })
     }
 }
@@ -184,10 +168,8 @@ impl UnionReader {
             result: ok_result(),
             kind: Kind::Finished,
             offsets: vec![],
-            records: Box::new(ScanResultInner::from_records(
-                fcore::record::ScanRecords::empty(),
-                vec![],
-            )),
+            view_digest: [0; 32],
+            changes: vec![],
         };
         let next = RUNTIME.block_on(async {
             tokio::time::timeout(Duration::from_millis(timeout_ms), self.stream.next()).await
@@ -197,30 +179,47 @@ impl UnionReader {
             Ok(None) => (),
             Ok(Some(Err(e))) => out.result = lake_error(e),
             Ok(Some(Ok(UnionReadEvent::Snapshot(batch)))) => {
-                match types::export_record_batch(&batch) {
-                    Ok((a, s)) => {
-                        // Caller provides fresh Arrow C Data structs; ImportRecordBatch consumes their release callbacks.
-                        unsafe {
-                            (array as *mut FFI_ArrowArray).write(a);
-                            (schema as *mut FFI_ArrowSchema).write(s);
-                        }
-                        out.kind = Kind::Snapshot;
-                    }
-                    Err(e) => out.result = client_err(e),
-                }
+                out.result = UnionArrowBatch(batch).export_union_batch(array, schema);
+                out.kind = Kind::Snapshot;
             }
-            Ok(Some(Ok(UnionReadEvent::SnapshotFinished(offsets)))) => {
+            Ok(Some(Ok(UnionReadEvent::SnapshotFinished(cp)))) => {
                 out.kind = Kind::SnapshotFinished;
-                out.offsets = offsets.into_iter().map(|(b, o)| offset(&b, o)).collect();
-            }
-            Ok(Some(Ok(UnionReadEvent::Changes(records)))) => {
-                out.kind = Kind::Changes;
-                out.offsets = records
-                    .records_by_buckets()
-                    .keys()
-                    .filter_map(|b| records.consumed_up_to_offset(b).map(|o| offset(b, o)))
+                out.view_digest = cp.view_digest;
+                out.offsets = cp
+                    .next_offsets
+                    .into_iter()
+                    .map(|(b, o)| offset(&b, o))
                     .collect();
-                *out.records = ScanResultInner::from_records(records, self.columns.clone());
+            }
+            Ok(Some(Ok(UnionReadEvent::Changes {
+                batches,
+                next_offsets,
+            }))) => {
+                out.kind = Kind::Changes;
+                out.offsets = next_offsets
+                    .into_iter()
+                    .map(|(b, o)| offset(&b, o))
+                    .collect();
+                out.changes = batches
+                    .into_iter()
+                    .map(|c| ffi::FfiUnionBatch {
+                        table_id: c.bucket.table_id(),
+                        partition_id: c.bucket.partition_id().unwrap_or_default(),
+                        has_partition_id: c.bucket.partition_id().is_some(),
+                        bucket_id: c.bucket.bucket_id(),
+                        changes: c
+                            .change_types
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|k| k.to_byte_value())
+                            .collect(),
+                        data: Box::new(UnionArrowBatch(c.batch)),
+                    })
+                    .collect();
+            }
+            Ok(Some(Ok(UnionReadEvent::PartitionsDropped(offsets)))) => {
+                out.kind = Kind::PartitionsDropped;
+                out.offsets = offsets.into_iter().map(|(b, o)| offset(&b, o)).collect();
             }
         }
         out
@@ -234,5 +233,22 @@ fn offset(b: &fcore::metadata::TableBucket, o: i64) -> ffi::FfiReaderStopOffset 
         partition_id: b.partition_id().unwrap_or_default(),
         bucket_id: b.bucket_id(),
         offset: o,
+    }
+}
+
+pub struct UnionArrowBatch(arrow::record_batch::RecordBatch);
+impl UnionArrowBatch {
+    pub(super) fn export_union_batch(&self, array: usize, schema: usize) -> ffi::FfiResult {
+        match types::export_record_batch(&self.0) {
+            Ok((a, s)) => {
+                // C++ supplies fresh C Data structs and transfers their release callbacks to Arrow.
+                unsafe {
+                    (array as *mut FFI_ArrowArray).write(a);
+                    (schema as *mut FFI_ArrowSchema).write(s);
+                }
+                ok_result()
+            }
+            Err(e) => client_err(e),
+        }
     }
 }
