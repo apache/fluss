@@ -19,8 +19,6 @@ package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
 
@@ -75,51 +73,5 @@ public final class BulkLoadTransaction {
                 createdTime,
                 now,
                 message);
-    }
-
-    /** Encodes the version 1 JSON record. Physical identity is carried by the path. */
-    public byte[] toJson() {
-        return JsonSerdeUtils.writeValueAsBytes(
-                this,
-                (value, out) -> {
-                    out.writeStartObject();
-                    out.writeNumberField("version", 1);
-                    out.writeNumberField("state", state);
-                    out.writeObjectFieldStart("table_path");
-                    out.writeStringField("database_name", tablePath.getDatabaseName());
-                    out.writeStringField("table_name", tablePath.getTableName());
-                    out.writeEndObject();
-                    out.writeNumberField("schema_id", schemaId);
-                    out.writeStringField("remote_data_dir", remoteDataDir);
-                    out.writeNumberField("created_time", createdTime);
-                    if (finishedTime != null) {
-                        out.writeNumberField("finished_time", finishedTime);
-                    }
-                    if (abortMessage != null) {
-                        out.writeStringField("abort_message", abortMessage);
-                    }
-                    out.writeEndObject();
-                });
-    }
-
-    /** Decodes a transaction using its physical identity from the path. */
-    public static BulkLoadTransaction fromJson(long tableId, String bulkLoadId, byte[] bytes) {
-        return JsonSerdeUtils.readValue(
-                bytes,
-                node -> {
-                    JsonNode path = node.get("table_path");
-                    return new BulkLoadTransaction(
-                            tableId,
-                            bulkLoadId,
-                            TablePath.of(
-                                    path.get("database_name").asText(),
-                                    path.get("table_name").asText()),
-                            node.get("schema_id").asInt(),
-                            node.get("remote_data_dir").textValue(),
-                            node.get("state").asInt(),
-                            node.get("created_time").asLong(),
-                            node.has("finished_time") ? node.get("finished_time").asLong() : null,
-                            node.has("abort_message") ? node.get("abort_message").asText() : null);
-                });
     }
 }

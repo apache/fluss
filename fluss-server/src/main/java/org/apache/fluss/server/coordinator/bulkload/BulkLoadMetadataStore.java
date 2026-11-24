@@ -32,12 +32,16 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucketJsonSerde;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTargetJsonSerde;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransactionJsonSerde;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
+import org.apache.fluss.utils.json.JsonDeserializer;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
@@ -49,7 +53,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -113,7 +116,11 @@ public final class BulkLoadMetadataStore {
         ensurePath(table + "/owners/partitions");
         List<CuratorOp> ops = new ArrayList<>(physicalChecks);
         String path = transactionPath(transaction.tableId, transaction.bulkLoadId);
-        ops.add(create(path, transaction.toJson()));
+        ops.add(
+                create(
+                        path,
+                        JsonSerdeUtils.writeValueAsBytes(
+                                transaction, BulkLoadTransactionJsonSerde.INSTANCE)));
         ops.add(create(path + "/targets", new byte[0]));
         if (targets.get(0).partitionId != null) {
             ops.add(create(path + "/targets/partitions", new byte[0]));
@@ -146,7 +153,11 @@ public final class BulkLoadMetadataStore {
             }
             String targetPath =
                     targetPath(transaction.tableId, transaction.bulkLoadId, target.partitionId);
-            ops.add(create(targetPath, target.toJson()));
+            ops.add(
+                    create(
+                            targetPath,
+                            JsonSerdeUtils.writeValueAsBytes(
+                                    target, BulkLoadTargetJsonSerde.INSTANCE)));
             ops.add(create(targetPath + "/buckets", new byte[0]));
         }
         submit(ops, epochVersion);
@@ -154,9 +165,7 @@ public final class BulkLoadMetadataStore {
 
     public Optional<Versioned<BulkLoadTransaction>> transaction(long tableId, String id)
             throws Exception {
-        return read(
-                transactionPath(tableId, id),
-                bytes -> BulkLoadTransaction.fromJson(tableId, id, bytes));
+        return read(transactionPath(tableId, id), BulkLoadTransactionJsonSerde.INSTANCE);
     }
 
     public List<Versioned<BulkLoadTarget>> targets(BulkLoadTransaction transaction)
@@ -173,7 +182,7 @@ public final class BulkLoadMetadataStore {
         }
         Collections.sort(ids);
         for (long id : ids) {
-            read(path + "/partitions/" + id, bytes -> BulkLoadTarget.fromJson(id, bytes))
+            read(path + "/partitions/" + id, BulkLoadTargetJsonSerde.INSTANCE)
                     .ifPresent(result::add);
         }
         return result;
@@ -183,14 +192,14 @@ public final class BulkLoadMetadataStore {
             BulkLoadTransaction transaction, TableBucket bucket) throws Exception {
         return read(
                 bucketPath(transaction.tableId, transaction.bulkLoadId, bucket),
-                BulkLoadBucket::fromJson);
+                BulkLoadBucketJsonSerde.INSTANCE);
     }
 
     public Optional<Versioned<BulkLoadTarget>> target(
             BulkLoadTransaction transaction, @Nullable Long partitionId) throws Exception {
         return read(
                 targetPath(transaction.tableId, transaction.bulkLoadId, partitionId),
-                bytes -> BulkLoadTarget.fromJson(partitionId, bytes));
+                BulkLoadTargetJsonSerde.INSTANCE);
     }
 
     /** Persists one allocation; the transaction check serializes it against termination. */
@@ -207,7 +216,8 @@ public final class BulkLoadMetadataStore {
         ops.add(
                 create(
                         bucketPath(transaction.value.tableId, transaction.value.bulkLoadId, bucket),
-                        allocation.toJson()));
+                        JsonSerdeUtils.writeValueAsBytes(
+                                allocation, BulkLoadBucketJsonSerde.INSTANCE)));
         submit(ops, epochVersion);
     }
 
@@ -240,11 +250,12 @@ public final class BulkLoadMetadataStore {
         ops.add(
                 update(
                         allocation,
-                        new BulkLoadBucket(
+                        JsonSerdeUtils.writeValueAsBytes(
+                                new BulkLoadBucket(
                                         allocation.value.snapshotId,
                                         allocation.value.logOffset,
-                                        BulkLoadBucket.COMMITTED)
-                                .toJson()));
+                                        BulkLoadBucket.COMMITTED),
+                                BulkLoadBucketJsonSerde.INSTANCE)));
         ops.add(
                 create(
                         ZkData.BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId()),
@@ -321,7 +332,13 @@ public final class BulkLoadMetadataStore {
             int epochVersion)
             throws Exception {
         BulkLoadTransaction result = transaction.value.finish(state, now, message);
-        submit(Collections.singletonList(update(transaction, result.toJson())), epochVersion);
+        submit(
+                Collections.singletonList(
+                        update(
+                                transaction,
+                                JsonSerdeUtils.writeValueAsBytes(
+                                        result, BulkLoadTransactionJsonSerde.INSTANCE))),
+                epochVersion);
         return result;
     }
 
@@ -334,7 +351,11 @@ public final class BulkLoadMetadataStore {
         requireRunning(transaction);
         List<CuratorOp> ops = new ArrayList<>();
         ops.add(check(transaction));
-        ops.add(update(target, target.value.withdraw().toJson()));
+        ops.add(
+                update(
+                        target,
+                        JsonSerdeUtils.writeValueAsBytes(
+                                target.value.withdraw(), BulkLoadTargetJsonSerde.INSTANCE)));
         submit(ops, epochVersion);
     }
 
@@ -499,10 +520,7 @@ public final class BulkLoadMetadataStore {
     }
 
     private Optional<Versioned<String>> readOwner(String path) throws Exception {
-        return read(
-                path,
-                bytes ->
-                        JsonSerdeUtils.readValue(bytes, node -> node.get("bulk_load_id").asText()));
+        return read(path, node -> node.get("bulk_load_id").asText());
     }
 
     private void deleteTree(
@@ -585,12 +603,14 @@ public final class BulkLoadMetadataStore {
         }
     }
 
-    private <T> Optional<Versioned<T>> read(String path, Function<byte[], T> decoder)
+    private <T> Optional<Versioned<T>> read(String path, JsonDeserializer<T> decoder)
             throws Exception {
         Stat stat = new Stat();
         try {
             byte[] data = curator.getData().storingStatIn(stat).forPath(path);
-            return Optional.of(new Versioned<>(path, stat.getVersion(), decoder.apply(data)));
+            return Optional.of(
+                    new Versioned<>(
+                            path, stat.getVersion(), JsonSerdeUtils.readValue(data, decoder)));
         } catch (KeeperException.NoNodeException ignored) {
             return Optional.empty();
         }

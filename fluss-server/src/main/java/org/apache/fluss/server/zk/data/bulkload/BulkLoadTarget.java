@@ -18,7 +18,6 @@
 package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
 
@@ -31,7 +30,7 @@ public final class BulkLoadTarget {
     public final String remoteDataDir;
     public final boolean withdrawn;
 
-    /** Creates a target record using the partition identity carried by its path. */
+    /** Creates a target record. */
     public BulkLoadTarget(
             @Nullable Long partitionId,
             @Nullable String partitionName,
@@ -48,37 +47,5 @@ public final class BulkLoadTarget {
     /** Returns the same physical target withdrawn from the remaining task set. */
     public BulkLoadTarget withdraw() {
         return new BulkLoadTarget(partitionId, partitionName, bucketCount, remoteDataDir, true);
-    }
-
-    /** Encodes the version 1 JSON record. */
-    public byte[] toJson() {
-        return JsonSerdeUtils.writeValueAsBytes(
-                this,
-                (value, out) -> {
-                    out.writeStartObject();
-                    out.writeNumberField("version", 1);
-                    if (partitionName != null) {
-                        out.writeStringField("partition_name", partitionName);
-                    }
-                    out.writeNumberField("bucket_count", bucketCount);
-                    out.writeStringField("remote_data_dir", remoteDataDir);
-                    out.writeBooleanField("withdrawn", withdrawn);
-                    out.writeEndObject();
-                });
-    }
-
-    /** Decodes a record using the partition ID from its path. */
-    public static BulkLoadTarget fromJson(@Nullable Long partitionId, byte[] bytes) {
-        return JsonSerdeUtils.readValue(
-                bytes,
-                node ->
-                        new BulkLoadTarget(
-                                partitionId,
-                                node.has("partition_name")
-                                        ? node.get("partition_name").asText()
-                                        : null,
-                                node.get("bucket_count").asInt(),
-                                node.get("remote_data_dir").asText(),
-                                node.get("withdrawn").asBoolean()));
     }
 }

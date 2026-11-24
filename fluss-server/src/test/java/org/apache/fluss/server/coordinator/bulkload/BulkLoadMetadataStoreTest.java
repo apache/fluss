@@ -91,6 +91,10 @@ class BulkLoadMetadataStoreTest {
         Versioned<BulkLoadTarget> target = store.targets(stale.value).get(0);
         Versioned<BulkLoadBucket> allocation = store.bucket(stale.value, bucket).get();
         store.abort(stale, 20, "cancelled", EPOCH);
+        BulkLoadTransaction aborted = transaction("a").value;
+        assertThat(aborted.createdTime).isEqualTo(stale.value.createdTime);
+        assertThat(aborted.finishedTime).isEqualTo(20L);
+        assertThat(aborted.abortMessage).isEqualTo("cancelled");
         assertThatThrownBy(
                         () ->
                                 store.commitBucket(
