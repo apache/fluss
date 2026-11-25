@@ -449,6 +449,87 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </tbody>
 </table>
 
+#### Rebalance Metrics
+
+Rebalance metrics use the `coordinator` scope with no additional infix or per-table/per-bucket labels.
+They are registered when the coordinator server starts and remain registered across leadership changes.
+Gauges report 0 on standby. On the active coordinator, they describe the most recently registered
+rebalance. Finished bucket counts include only outcomes observed in the current leader term, remain
+available after completion or cancellation within that term, and are cleared when the next rebalance
+is registered. Recovering a previously finished rebalance leaves these counts at 0 because per-bucket
+completion and failure outcomes are not persisted.
+Counters accumulate across rebalances and leader terms within the same coordinator process. They
+retain their values on standby and reset when the coordinator server restarts, not on leadership
+changes. These are per-process counts, not a cluster-wide total transferred between coordinators.
+Recovering a previously finished rebalance does not increment the counters; a recovered unfinished
+rebalance is counted by the coordinator that observes its completion.
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="10"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
+      <td>rebalanceInProgress</td>
+      <td>1 while a rebalance is running; otherwise 0.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsPending</td>
+      <td>Number of unfinished buckets, including running buckets and buckets awaiting reconciliation after a timeout.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsCompleted</td>
+      <td>Number of buckets observed to complete successfully by this leader in the most recently registered rebalance.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsFailed</td>
+      <td>Number of buckets observed to fail by this leader in the most recently registered rebalance, excluding timeouts.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceBucketsTimedOut</td>
+      <td>Number of unfinished buckets currently timed out or awaiting recovery reconciliation. This count falls as reconciliation resolves those buckets.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceDurationMs</td>
+      <td>Elapsed milliseconds since the running rebalance was registered on this leader; 0 when idle.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalanceInflightBucketDurationMs</td>
+      <td>Elapsed milliseconds for the longest-running bucket in the running set; 0 when no bucket is running. Timed-out buckets awaiting reconciliation are excluded.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rebalancesCompletedTotal</td>
+      <td>Number of rebalances observed by this coordinator process to reach the final status <code>COMPLETED</code>, including empty plans, across all its leader terms.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rebalancesFailedTotal</td>
+      <td>Number of rebalances observed by this coordinator process to reach the final status <code>FAILED</code>, across all its leader terms. A soft timeout alone does not count as a failure.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rebalancesCanceledTotal</td>
+      <td>Number of rebalances observed by this coordinator process to reach the final status <code>CANCELED</code>, across all its leader terms.</td>
+      <td>Counter</td>
+    </tr>
+  </tbody>
+</table>
+
 ### Tablet Server
 
 <table class="table table-bordered">

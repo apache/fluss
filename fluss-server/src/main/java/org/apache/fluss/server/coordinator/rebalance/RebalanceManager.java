@@ -83,6 +83,7 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizerUtils.getDiff;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -141,6 +142,7 @@ public class RebalanceManager implements ServerReconfigurable {
     private final EventManager eventManager;
     private final Clock clock;
     private final Scheduler scheduler;
+    private final RebalanceMetrics metrics;
     private final long targetUnavailableTimeoutMs;
     private final long noProgressTimeoutMs;
     private final int maxTrackedTimedOutTasks;
@@ -191,7 +193,13 @@ public class RebalanceManager implements ServerReconfigurable {
     private volatile boolean recoveryPending = true;
 
     private @Nullable ScheduledFuture<?> timeoutCheckTask;
-    private long registerTime;
+    // Reporters read only these scalar fields, never the coordinator's task collections.
+    private volatile long registerTime;
+    private volatile int unfinishedBuckets;
+    private volatile int completedBuckets;
+    private volatile int failedBuckets;
+    private volatile int timedOutBuckets;
+    private volatile long oldestRunningStartMs = -1L;
     private @Nullable RebalanceStatus rebalanceStatus;
     private @Nullable String currentRebalanceId;
 
@@ -209,7 +217,8 @@ public class RebalanceManager implements ServerReconfigurable {
             EventManager eventManager,
             Clock clock,
             Configuration conf,
-            Scheduler scheduler) {
+            Scheduler scheduler,
+            RebalanceMetrics metrics) {
         this.targetUnavailableTimeoutMs =
                 getTimeoutMillis(
                         conf, ConfigOptions.COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT);
@@ -227,6 +236,7 @@ public class RebalanceManager implements ServerReconfigurable {
         this.eventManager = eventManager;
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.scheduler = scheduler;
+        this.metrics = checkNotNull(metrics, "metrics");
         this.goalOptimizer = new GoalOptimizer();
         validate(conf);
         this.maxInflightRebalanceTasks =
@@ -246,6 +256,46 @@ public class RebalanceManager implements ServerReconfigurable {
                 REBALANCE_TASK_TIMEOUT_MS,
                 TIMEOUT_CHECK_INTERVAL_MS);
         initialize();
+        metrics.bind(this);
+    }
+
+    long rebalanceInProgress() {
+        return hasActiveRebalance ? 1L : 0L;
+    }
+
+    long pendingBucketCount() {
+        return unfinishedBuckets;
+    }
+
+    long completedBucketCount() {
+        return completedBuckets;
+    }
+
+    long failedBucketCount() {
+        return failedBuckets;
+    }
+
+    long timedOutBucketCount() {
+        return timedOutBuckets;
+    }
+
+    long rebalanceDurationMs() {
+        return hasActiveRebalance ? Math.max(0L, clock.milliseconds() - registerTime) : 0L;
+    }
+
+    long inflightBucketDurationMs() {
+        long startMs = oldestRunningStartMs;
+        return startMs < 0L ? 0L : Math.max(0L, clock.milliseconds() - startMs);
+    }
+
+    private void updateBucketMetrics() {
+        unfinishedBuckets = inProgressRebalanceTasks.size();
+        timedOutBuckets = timedOutRebalanceTasks.size() + pendingRecoveredTasks.size();
+        oldestRunningStartMs =
+                runningRebalanceTasks.values().stream()
+                        .mapToLong(attempt -> attempt.startMs)
+                        .min()
+                        .orElse(-1L);
     }
 
     public @Nullable String getRebalanceId() {
@@ -418,11 +468,17 @@ public class RebalanceManager implements ServerReconfigurable {
         timedOutRebalanceTasks.remove(tableBucket);
         queuedReconcileEvents.remove(executionKey);
         RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.remove(tableBucket);
+        updateBucketMetrics();
         if (resultForBucket == null) {
             return false;
         }
         finishedRebalanceTasks.put(
                 tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+        if (statusForBucket == COMPLETED) {
+            completedBuckets++;
+        } else if (statusForBucket == FAILED) {
+            failedBuckets++;
+        }
         LOG.info(
                 "Rebalance {} progress: {} pending, {} running, {} timed out and tracking, "
                         + "{} finished.",
@@ -527,6 +583,7 @@ public class RebalanceManager implements ServerReconfigurable {
 
         cancelRequested = true;
         cancelPendingTasks(tasksToCancel);
+        updateBucketMetrics();
 
         // Admitted tasks that have not changed anything yet can be given up on right away: there
         // is no half-applied assignment to drain, so cancellation does not have to wait for them.
@@ -687,6 +744,7 @@ public class RebalanceManager implements ServerReconfigurable {
         RebalanceResultForBucket result = inProgressRebalanceTasks.get(tableBucket);
         if (result == null) {
             timedOutRebalanceTasks.remove(tableBucket);
+            updateBucketMetrics();
             return false;
         }
         inProgressRebalanceTasks.put(
@@ -757,6 +815,7 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     private void processNewRebalanceTasks() {
+        updateBucketMetrics();
         TableBucket tableBucket;
         while (timedOutRebalanceTasks.size() < maxTrackedTimedOutTasks
                 && (tableBucket = pendingRecoveredTasks.poll()) != null) {
@@ -773,6 +832,7 @@ public class RebalanceManager implements ServerReconfigurable {
             timedOutRebalanceTasks.put(tableBucket, attempt);
             enqueueReconciliation(attempt);
         }
+        updateBucketMetrics();
         if (!pendingRecoveredTasks.isEmpty()) {
             return;
         }
@@ -799,6 +859,7 @@ public class RebalanceManager implements ServerReconfigurable {
                     tableBucket, new RebalanceTaskAttempt(executionKey, clock.milliseconds()));
             inProgressRebalanceTasks.put(
                     tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING));
+            updateBucketMetrics();
             ExecutionResult executionResult =
                     rebalanceExecutor.tryToExecuteRebalanceTask(resultForBucket.plan());
             if (executionResult == ExecutionResult.COMPLETED) {
@@ -839,6 +900,20 @@ public class RebalanceManager implements ServerReconfigurable {
             return;
         }
 
+        switch (finalStatus) {
+            case COMPLETED:
+                metrics.incRebalancesCompleted();
+                break;
+            case FAILED:
+                metrics.incRebalancesFailed();
+                break;
+            case CANCELED:
+                metrics.incRebalancesCanceled();
+                break;
+            default:
+                throw new IllegalStateException(
+                        "Unexpected final rebalance status: " + finalStatus);
+        }
         rebalanceStatus = finalStatus;
         finalizationPending = false;
         inProgressRebalanceTasks.clear();
@@ -847,17 +922,18 @@ public class RebalanceManager implements ServerReconfigurable {
         runningRebalanceTasks.clear();
         timedOutRebalanceTasks.clear();
         queuedReconcileEvents.clear();
+        updateBucketMetrics();
         hasActiveRebalance = false;
 
         LOG.info(
                 "Rebalance {} reached final status {} in {} ms.",
                 currentRebalanceId,
                 finalStatus,
-                System.currentTimeMillis() - registerTime);
+                clock.milliseconds() - registerTime);
     }
 
     private void resetRebalance(String rebalanceId, boolean cancelRequested) {
-        registerTime = System.currentTimeMillis();
+        registerTime = clock.milliseconds();
         currentRebalanceId = rebalanceId;
         recoveredRebalance = false;
         this.cancelRequested = cancelRequested;
@@ -869,6 +945,9 @@ public class RebalanceManager implements ServerReconfigurable {
         timedOutRebalanceTasks.clear();
         finishedRebalanceTasks.clear();
         queuedReconcileEvents.clear();
+        completedBuckets = 0;
+        failedBuckets = 0;
+        updateBucketMetrics();
         hasActiveRebalance = true;
     }
 
@@ -1157,6 +1236,7 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     public void close() {
+        metrics.unbind(this);
         stopTimeoutChecker();
         isClosed = true;
     }

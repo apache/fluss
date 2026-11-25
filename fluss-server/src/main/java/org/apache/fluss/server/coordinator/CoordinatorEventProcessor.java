@@ -240,7 +240,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         this.coordinatorEventManager = new CoordinatorEventManager(this, coordinatorMetricGroup);
         this.rebalanceManager =
                 new RebalanceManager(
-                        this, zooKeeperClient, coordinatorEventManager, clock, conf, scheduler);
+                        this,
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        clock,
+                        conf,
+                        scheduler,
+                        coordinatorMetricGroup.getRebalanceMetrics());
         CoordinatorRequestBatch replicaRequestBatch =
                 new CoordinatorRequestBatch(
                         coordinatorChannelManager,
@@ -561,12 +567,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     public void shutdown() {
-        clearOfflineLeaderRetryTask();
-        // Cancel periodic event producers before stopping the event loop.
-        rebalanceManager.stopTimeoutChecker();
-        // close the event manager
-        coordinatorEventManager.close();
-        rebalanceManager.close();
+        try {
+            clearOfflineLeaderRetryTask();
+            // Cancel periodic event producers before stopping the event loop.
+            rebalanceManager.stopTimeoutChecker();
+            coordinatorEventManager.close();
+        } finally {
+            rebalanceManager.close();
+        }
         onShutdown();
         assignmentPersistenceByBucket.clear();
         coordinatorContext.resetContext();
