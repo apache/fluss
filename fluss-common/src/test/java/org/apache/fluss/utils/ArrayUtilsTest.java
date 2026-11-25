@@ -139,5 +139,17 @@ public class ArrayUtilsTest {
         assertThat(ArrayUtils.isPrefix(a, c)).isFalse();
         assertThat(ArrayUtils.isPrefix(a, d)).isFalse();
         assertThat(ArrayUtils.isPrefix(a, e)).isTrue();
+        assertThat(ArrayUtils.isPrefix(a, a)).isTrue();
+    }
+
+    @Test
+    void testIsPrefixWithLongerPrefix() {
+        assertThat(ArrayUtils.isPrefix(new int[] {1, 2}, new int[] {1, 2, 3})).isFalse();
+    }
+
+    @Test
+    void testIsPrefixWithEmptyArray() {
+        assertThat(ArrayUtils.isPrefix(new int[0], new int[] {1})).isFalse();
+        assertThat(ArrayUtils.isPrefix(new int[0], new int[0])).isTrue();
     }
 }
