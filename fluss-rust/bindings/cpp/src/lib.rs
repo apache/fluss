@@ -17,7 +17,9 @@
 
 mod lookup;
 mod types;
+#[cfg(feature = "union_read")]
 mod union_read;
+#[cfg(feature = "union_read")]
 use union_read::{UnionArrowBatch, UnionReader};
 mod write_callback;
 use lookup::{
@@ -278,12 +280,14 @@ mod ffi {
         arrow_batches: FfiArrowRecordBatches,
     }
 
+    #[cfg(feature = "union_read")]
     enum FfiUnionMode {
         Bounded,
         Streaming,
         Resume,
     }
 
+    #[cfg(feature = "union_read")]
     enum FfiUnionKind {
         PartitionsDropped,
         Snapshot,
@@ -293,6 +297,7 @@ mod ffi {
         Finished,
     }
 
+    #[cfg(feature = "union_read")]
     struct FfiUnionOptions {
         mode: FfiUnionMode,
         view_digest: [u8; 32],
@@ -306,6 +311,7 @@ mod ffi {
         has_budget: bool,
     }
 
+    #[cfg(feature = "union_read")]
     struct FfiUnionBatch {
         table_id: i64,
         partition_id: i64,
@@ -314,6 +320,7 @@ mod ffi {
         changes: Vec<u8>,
         data: Box<UnionArrowBatch>,
     }
+    #[cfg(feature = "union_read")]
     struct FfiUnionEvent {
         result: FfiResult,
         kind: FfiUnionKind,
@@ -472,10 +479,8 @@ mod ffi {
         ptr: usize,
     }
 
+    #[cfg(feature = "union_read")]
     extern "Rust" {
-        type Connection;
-        type Admin;
-        type Table;
         type UnionArrowBatch;
         fn export_union_batch(self: &UnionArrowBatch, array: usize, schema: usize) -> FfiResult;
         type UnionReader;
@@ -488,6 +493,12 @@ mod ffi {
             array: usize,
             schema: usize,
         ) -> FfiUnionEvent;
+    }
+
+    extern "Rust" {
+        type Connection;
+        type Admin;
+        type Table;
         type AppendWriter;
         type WriteResult;
         type LogScanner;
@@ -2854,6 +2865,7 @@ const BATCH_AVAILABLE: i32 = 0;
 const TIMED_OUT: i32 = 1;
 const FINISHED: i32 = 2;
 
+#[cfg(feature = "union_read")]
 unsafe fn delete_union_reader(reader: *mut UnionReader) {
     unsafe { drop(Box::from_raw(reader)) };
 }

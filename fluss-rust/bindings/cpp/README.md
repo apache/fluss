@@ -7,7 +7,7 @@ C++ bindings for Fluss, built on top of the [fluss-rust](../../crates/fluss) cli
 - Rust 1.95+
 - C++17-capable compiler
 - CMake 3.22+ and/or Bazel
-- Apache Arrow C++, libclang (for the RocksDB bindings), and the OpenSSL development package on Linux
+- Apache Arrow C++; UnionRead also requires libclang and, on Linux, the OpenSSL development package
 
 ## Build
 
@@ -232,7 +232,11 @@ per-poll API for engines that need to check cancellation between batches.
 
 ### Bounded and streaming UnionRead
 
-Both build systems include the Rust UnionRead reader and its Paimon backend.
+UnionRead is enabled by default. To build without its Paimon and RocksDB dependencies,
+use `-DFLUSS_ENABLE_UNION_READ=OFF` with CMake or `--define fluss_union_read=false` with Bazel.
+The SDK target exports `FLUSS_ENABLE_UNION_READ` to C++ consumers when enabled.
+If you link the archives manually, define this macro only for a UnionRead-enabled build.
+
 To override lake catalog properties on a worker, pass `UnionReadOptions` when
 opening the reader. The optional PK memory budget applies during bootstrap.
 

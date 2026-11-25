@@ -2427,6 +2427,7 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     return utils::make_ok();
 }
 
+#ifdef FLUSS_ENABLE_UNION_READ
 Result Table::CaptureUnionReadContext(std::vector<uint8_t>& out) const {
     if (!table_) return utils::make_client_error("Table not available");
     rust::Vec<uint8_t> bytes;
@@ -2553,6 +2554,7 @@ Result UnionReadReader::Next(int64_t timeout_ms, UnionReadEvent& out) {
     out = std::move(next);
     return utils::make_ok();
 }
+#endif
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,

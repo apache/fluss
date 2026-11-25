@@ -5,7 +5,10 @@ sidebar_position: 1
 
 The C++ bindings are not yet published as a package. You need to build from source.
 
-**Prerequisites:** CMake 3.22+, C++17 compiler, Rust 1.95+, Apache Arrow C++ library, libclang for the RocksDB bindings, and OpenSSL development headers and libraries (Linux)
+**Prerequisites:** CMake 3.22+, C++17 compiler, Rust 1.95+, Apache Arrow C++ library. UnionRead also requires libclang and, on Linux, OpenSSL development headers and libraries.
+
+UnionRead is enabled by default. To build without its Paimon and RocksDB dependencies,
+use `-DFLUSS_ENABLE_UNION_READ=OFF` with CMake or `--define fluss_union_read=false` with Bazel.
 
 ```bash
 git clone https://github.com/apache/fluss.git

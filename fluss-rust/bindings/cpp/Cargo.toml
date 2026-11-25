@@ -26,15 +26,19 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+default = ["union_read"]
+union_read = ["dep:fluss-lake", "dep:futures", "dep:prost"]
+
 [dependencies]
 anyhow = "1.0"
 arrow = { workspace = true, features = ["ffi"] }
 bigdecimal = { workspace = true }
 cxx = "1.0"
 fluss = { workspace = true, features = ["storage-all"] }
-fluss-lake = { path = "../../crates/fluss-lake", features = ["paimon", "kv-snapshot"] }
-futures = "0.3"
-prost = "0.14"
+fluss-lake = { path = "../../crates/fluss-lake", features = ["paimon", "kv-snapshot"], optional = true }
+futures = { version = "0.3", optional = true }
+prost = { version = "0.14", optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 
 [build-dependencies]
