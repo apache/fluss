@@ -38,7 +38,8 @@ public class RequestChannel {
     private Connection running;
     private boolean waiting;
     private boolean stealWakeup;
-    private int queued;
+    // Updates still use the group lock. Per-worker gauges read a single snapshot.
+    private volatile int queued;
 
     /** Creates a standalone request channel. */
     public RequestChannel(int queueCapacity) {
@@ -211,12 +212,7 @@ public class RequestChannel {
 
     /** Returns the number of requests queued for this worker. */
     public int requestsCount() {
-        group.lock.lock();
-        try {
-            return queued;
-        } finally {
-            group.lock.unlock();
-        }
+        return queued;
     }
 
     int groupRequestsCount() {
@@ -249,6 +245,7 @@ public class RequestChannel {
     }
 
     private void makeReady(Connection connection) {
+        connection.readyOrder = group.nextReadyOrder++;
         ready.addLast(connection);
         signal();
         signalThief();
@@ -258,16 +255,31 @@ public class RequestChannel {
         if (!ready.isEmpty()) {
             return ready.removeFirst();
         }
+        Connection oldest = null;
         for (RequestChannel donor : group.workers) {
-            if (donor.canShare()) {
-                Connection connection = donor.ready.removeLast();
-                int pending = connection.pending.size();
-                donor.queued -= pending;
-                queued += pending;
-                connection.owner = this;
-                donor.signalThief();
-                return connection;
+            if (!donor.canShare()) {
+                continue;
             }
+            Connection head = donor.ready.getFirst();
+            if (donor.running == null) {
+                // Keep the donor's first head available for its local claim.
+                Iterator<Connection> candidates = donor.ready.iterator();
+                candidates.next();
+                head = candidates.next();
+            }
+            if (oldest == null || head.readyOrder < oldest.readyOrder) {
+                oldest = head;
+            }
+        }
+        if (oldest != null) {
+            RequestChannel donor = oldest.owner;
+            donor.ready.removeFirstOccurrence(oldest);
+            int pending = oldest.pending.size();
+            donor.queued -= pending;
+            queued += pending;
+            oldest.owner = this;
+            donor.signalThief();
+            return oldest;
         }
         return null;
     }
@@ -302,6 +314,7 @@ public class RequestChannel {
         private final ArrayDeque<RpcRequest> pending = new ArrayDeque<>(1);
         private final Runnable scheduleResume;
         private RequestChannel owner;
+        private long readyOrder;
         private ReadWait wait = ReadWait.NONE;
         private boolean readPermit;
         private boolean closed;
@@ -326,6 +339,7 @@ public class RequestChannel {
         private final int perConnection;
         private final LinkedHashSet<Connection> readWaiters = new LinkedHashSet<>();
         private int used;
+        private long nextReadyOrder;
         private boolean closed;
 
         private Group(int workers, int capacity, int perConnection) {

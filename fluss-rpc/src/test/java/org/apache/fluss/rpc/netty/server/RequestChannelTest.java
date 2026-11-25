@@ -79,6 +79,32 @@ class RequestChannelTest {
     }
 
     @Test
+    void testStealsOldestEligibleHeadAcrossWorkers() {
+        RequestChannel[] workers = RequestChannel.forGroup(3, 16, 3);
+        RequestChannel busy = workers[0];
+        RequestChannel donor = workers[1];
+        RequestChannel idle = workers[2];
+        RpcRequest running = new TestRequest();
+        RpcRequest reserved = new TestRequest();
+        RpcRequest oldestEligible = new TestRequest();
+        RpcRequest newer = new TestRequest();
+
+        submit(busy, busy.newConnection(() -> {}), running);
+        assertThat(busy.pollRequest(0)).isSameAs(running);
+        submit(donor, donor.newConnection(() -> {}), reserved);
+        submit(donor, donor.newConnection(() -> {}), oldestEligible);
+        submit(busy, busy.newConnection(() -> {}), newer);
+
+        assertThat(idle.pollRequest(0)).isSameAs(oldestEligible);
+        idle.requestFinished();
+        assertThat(donor.pollRequest(0)).isSameAs(reserved);
+        donor.requestFinished();
+        busy.requestFinished();
+        assertThat(busy.pollRequest(0)).isSameAs(newer);
+        busy.requestFinished();
+    }
+
+    @Test
     void testRunnableHeadWakesAnIdleWorker() throws Exception {
         RequestChannel[] workers = RequestChannel.forGroup(2, 16, 3);
         RequestChannel busyWorker = workers[0];
