@@ -40,6 +40,8 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -69,6 +71,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.IOException;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -88,6 +91,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaJsonProduceITCase {
     private static final String DATABASE = "fluss";
     private static final byte[] KEY = new byte[] {1, 2};
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final RowType VALUE_TYPE =
             RowType.builder()
                     .field("id", DataTypes.INT())
@@ -193,11 +197,12 @@ class KafkaJsonProduceITCase {
                                     layout.equals("nested") ? 2 : 1 + VALUE_TYPE.getFieldCount();
                             if (rescue) {
                                 if (index == 0) {
-                                    assertThat(row.getString(headersPosition).toString())
+                                    assertThat(parseJson(row.getString(headersPosition).toString()))
                                             .isEqualTo(
-                                                    "{\"extra\":null,\"_kafka_key\":42,"
-                                                            + "\"amount\":\"bad\","
-                                                            + "\"items\":[{\"extra\":[1,null,2],\"quantity\":\"bad\"},null]}");
+                                                    parseJson(
+                                                            "{\"extra\":null,\"_kafka_key\":42,"
+                                                                    + "\"amount\":\"bad\","
+                                                                    + "\"items\":[{\"extra\":[1,null,2],\"quantity\":\"bad\"},null]}"));
                                 } else {
                                     assertThat(row.isNullAt(headersPosition)).isTrue();
                                 }
@@ -590,6 +595,14 @@ class KafkaJsonProduceITCase {
         config.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 10000);
         config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 30000);
         return new KafkaProducer<>(config);
+    }
+
+    private static JsonNode parseJson(String value) {
+        try {
+            return OBJECT_MAPPER.readTree(value);
+        } catch (IOException e) {
+            throw new AssertionError("Invalid JSON: " + value, e);
+        }
     }
 
     private static Configuration clusterConfig() {
