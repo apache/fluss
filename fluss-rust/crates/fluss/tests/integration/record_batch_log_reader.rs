@@ -63,7 +63,7 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3, 4, 5, 6]),
@@ -73,6 +73,7 @@ mod reader_test {
             )
             .expect("Failed to append batch");
         writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let scanner = table
             .new_scan()
@@ -135,12 +136,13 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["a", "b", "c"])).unwrap(),
             )
             .expect("Failed to append batch");
         writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let scanner = table
             .new_scan()
@@ -311,12 +313,13 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["a", "b", "c"])).unwrap(),
             )
             .expect("Failed to append initial batch");
         writer.flush().await.expect("Failed to flush initial batch");
+        ack.await.expect("append ack");
 
         let scanner = table
             .new_scan()
@@ -341,7 +344,7 @@ mod reader_test {
             "reader should wait when the stopping offset is beyond the current log end"
         );
 
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [4, 5, 6]), ("name", Utf8, ["d", "e", "f"])).unwrap(),
             )
@@ -350,6 +353,7 @@ mod reader_test {
             .flush()
             .await
             .expect("Failed to flush follow-up batch");
+        ack.await.expect("append ack");
 
         let batches = tokio::time::timeout(Duration::from_secs(10), collect_task)
             .await
@@ -405,7 +409,7 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3, 4]),
@@ -414,7 +418,7 @@ mod reader_test {
                 .unwrap(),
             )
             .expect("Failed to append first batch");
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [5, 6, 7, 8]),
@@ -424,6 +428,9 @@ mod reader_test {
             )
             .expect("Failed to append second batch");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         let latest_offsets = admin
             .list_offsets(&table_path, &[0, 1], OffsetSpec::Latest)
@@ -500,7 +507,7 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3, 4]),
@@ -510,6 +517,7 @@ mod reader_test {
             )
             .expect("Failed to append batch");
         writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let scanner = table
             .new_scan()
@@ -580,7 +588,7 @@ mod reader_test {
             ("value", Int64, [100, 200])
         )
         .unwrap();
-        writer
+        let ack1 = writer
             .append_arrow_batch(us_batch)
             .expect("Failed to append US batch");
 
@@ -590,10 +598,13 @@ mod reader_test {
             ("value", Int64, [300, 400])
         )
         .unwrap();
-        writer
+        let ack2 = writer
             .append_arrow_batch(eu_batch)
             .expect("Failed to append EU batch");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         let scanner = table
             .new_scan()
@@ -668,7 +679,7 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2]),
@@ -678,7 +689,7 @@ mod reader_test {
                 .unwrap(),
             )
             .expect("Failed to append US batch");
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [3, 4]),
@@ -689,6 +700,9 @@ mod reader_test {
             )
             .expect("Failed to append EU batch");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         let table_id = table.get_table_info().table_id;
         let partition_infos = admin
@@ -801,7 +815,7 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3, 4, 5]),
@@ -811,6 +825,7 @@ mod reader_test {
             )
             .expect("Failed to append batch");
         writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let scanner = table
             .new_scan()
@@ -875,12 +890,12 @@ mod reader_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["a", "b", "c"])).unwrap(),
             )
             .expect("Failed to append batch 1");
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [100, 101, 102]),
@@ -890,6 +905,9 @@ mod reader_test {
             )
             .expect("Failed to append batch 2");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         for (filter, expected) in [
             (col("id").lt(100), vec![1, 2, 3]),

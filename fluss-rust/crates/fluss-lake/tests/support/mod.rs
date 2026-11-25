@@ -34,13 +34,19 @@ extern "C" fn cleanup_on_exit() {
 static CLUSTER_PORT: LazyLock<u16> =
     LazyLock::new(|| 20_000 + (std::process::id() % 12_000) as u16);
 
-// Preparation needs lake-enabled metadata, but no host access to lake files.
 static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
     std::thread::spawn(|| {
         let runtime = tokio::runtime::Runtime::new()
             .expect("Failed to create UnionRead integration test runtime");
         runtime.block_on(async {
             let cluster_conf = HashMap::from([
+                ("kv.snapshot.interval".to_string(), "1s".to_string()),
+                ("kv.snapshot.num-retained".to_string(), "8".to_string()),
+                ("log.retention.check-interval".to_string(), "1s".to_string()),
+                (
+                    "remote.log.task-interval-duration".to_string(),
+                    "0ms".to_string(),
+                ),
                 ("datalake.enabled".to_string(), "true".to_string()),
                 ("datalake.format".to_string(), "paimon".to_string()),
                 (
@@ -57,6 +63,12 @@ static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
                 &cluster_conf,
             )
             .with_port(*CLUSTER_PORT)
+            .with_remote_data_dir(
+                std::env::current_dir()
+                    .unwrap()
+                    .join("target")
+                    .join(format!("union-read-remote-{}", std::process::id())),
+            )
             .build()
             .await;
             wait_for_cluster_ready(&cluster).await;

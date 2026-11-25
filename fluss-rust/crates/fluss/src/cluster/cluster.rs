@@ -1056,9 +1056,7 @@ mod tests {
                 node_id: 1,
                 host: "ts1".to_string(),
                 port: 9123,
-                listeners: None,
-                rack: None,
-                server_tag: None,
+                ..Default::default()
             }],
             table_metadata: vec![PbTableMetadata {
                 table_path: PbTablePath {
@@ -1074,6 +1072,7 @@ mod tests {
                 remote_data_dir: None,
                 bucket_count_epoch: None,
                 bucket_count: None,
+                deleted: None,
             }],
             partition_metadata: vec![PbPartitionMetadata {
                 table_id,
@@ -1127,9 +1126,7 @@ mod tests {
             node_id: 1,
             host: "ts1".to_string(),
             port: 9123,
-            listeners: None,
-            rack: None,
-            server_tag: None,
+            ..Default::default()
         };
         let table_response = MetadataResponse {
             coordinator_server: None,
@@ -1148,6 +1145,7 @@ mod tests {
                 remote_data_dir: None,
                 bucket_count_epoch: Some(2),
                 bucket_count: None,
+                deleted: None,
             }],
             partition_metadata: vec![],
         };

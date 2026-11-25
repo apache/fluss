@@ -31,6 +31,7 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -51,33 +52,42 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests physical name resolution and catalog failure translation at the Admin boundary. */
 final class FlussMetadataAccessTest extends FlussTrinoTestBase {
-    private static final TablePath PATH = TablePath.of("Sales", "Users");
+    private TablePath tablePath;
+
+    @BeforeEach
+    void setUpTablePath() {
+        tablePath = TablePath.of(databaseName("Sales"), "Users");
+    }
 
     @Test
     void testSchemaNamesAreCanonicalAndDistinct() throws Exception {
-        createDatabase("Sales");
-        createDatabase("sales");
-        createDatabase("Inventory");
-        assertThat(access.listSchemaNames()).contains("sales", "inventory").doesNotHaveDuplicates();
-        assertThat(access.resolveSchema("INVENTORY"))
+        createDatabase(databaseName("Sales"));
+        createDatabase(databaseName("sales"));
+        createDatabase(databaseName("Inventory"));
+        assertThat(access.listSchemaNames())
+                .contains(databaseName("sales"), databaseName("inventory"))
+                .doesNotHaveDuplicates();
+        assertThat(access.resolveSchema(databaseName("INVENTORY")))
                 .hasValueSatisfying(
                         schema -> {
-                            assertThat(schema.getTrinoName()).isEqualTo("inventory");
-                            assertThat(schema.getFlussName()).isEqualTo("Inventory");
+                            assertThat(schema.getTrinoName()).isEqualTo(databaseName("inventory"));
+                            assertThat(schema.getFlussName()).isEqualTo(databaseName("Inventory"));
                         });
     }
 
     @Test
     void testAmbiguousSchema() throws Exception {
-        createDatabase("Sales");
-        createDatabase("sales");
-        assertThatThrownBy(() -> access.resolveSchema("sales"))
+        createDatabase(databaseName("Sales"));
+        createDatabase(databaseName("sales"));
+        assertThatThrownBy(() -> access.resolveSchema(databaseName("sales")))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->
                                 assertThat(failure.getErrorCode())
                                         .isEqualTo(NOT_SUPPORTED.toErrorCode()))
-                .hasMessage("Ambiguous Fluss database 'sales': Sales, sales");
+                .hasMessage(
+                        "Ambiguous Fluss database '%s': %s, %s",
+                        databaseName("sales"), databaseName("Sales"), databaseName("sales"));
         assertThatThrownBy(() -> access.listTableNameMappings(Optional.empty()))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Ambiguous Fluss database");
@@ -85,36 +95,41 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
 
     @Test
     void testResolvePhysicalTableName() throws Exception {
-        createTable(PATH, usersTable().toTableDescriptor());
-        assertThat(access.resolveTable(new SchemaTableName("sales", "users")))
+        createTable(tablePath, usersTable().toTableDescriptor());
+        assertThat(access.resolveTable(new SchemaTableName(databaseName("sales"), "users")))
                 .hasValueSatisfying(
                         table -> {
                             assertThat(table.getTrinoName())
-                                    .isEqualTo(new SchemaTableName("sales", "users"));
-                            assertThat(table.getFlussDatabaseName()).isEqualTo("Sales");
+                                    .isEqualTo(new SchemaTableName(databaseName("sales"), "users"));
+                            assertThat(table.getFlussDatabaseName())
+                                    .isEqualTo(databaseName("Sales"));
                             assertThat(table.getFlussTableName()).isEqualTo("Users");
                         });
     }
 
     @Test
     void testCatalogWideListingResolvesEachPhysicalDatabase() throws Exception {
-        createTable(PATH, usersTable().toTableDescriptor());
-        createTable(TablePath.of("Inventory", "Products"), usersTable().toTableDescriptor());
+        createTable(tablePath, usersTable().toTableDescriptor());
+        createTable(
+                TablePath.of(databaseName("Inventory"), "Products"),
+                usersTable().toTableDescriptor());
         assertThat(access.listTableNameMappings(Optional.empty()))
                 .flatExtracting(FlussMetadataAccess.TableNameMapping::listTableNames)
                 .containsExactlyInAnyOrder(
-                        new SchemaTableName("sales", "users"),
-                        new SchemaTableName("inventory", "products"));
+                        new SchemaTableName(databaseName("sales"), "users"),
+                        new SchemaTableName(databaseName("inventory"), "products"));
     }
 
     @Test
     void testTargetedListingIgnoresUnrelatedSchemaAmbiguity() throws Exception {
-        createDatabase("Sales");
-        createDatabase("sales");
-        createTable(TablePath.of("Inventory", "Products"), usersTable().toTableDescriptor());
-        assertThat(access.listTableNameMappings(Optional.of("inventory")))
+        createDatabase(databaseName("Sales"));
+        createDatabase(databaseName("sales"));
+        createTable(
+                TablePath.of(databaseName("Inventory"), "Products"),
+                usersTable().toTableDescriptor());
+        assertThat(access.listTableNameMappings(Optional.of(databaseName("inventory"))))
                 .flatExtracting(FlussMetadataAccess.TableNameMapping::listTableNames)
-                .containsExactly(new SchemaTableName("inventory", "products"));
+                .containsExactly(new SchemaTableName(databaseName("inventory"), "products"));
     }
 
     @Test
@@ -127,15 +142,17 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
     @Test
     void testTableIndexResolvesOnlyRequestedNames() throws Exception {
         for (String name : Arrays.asList("Users", "Order", "oRder")) {
-            createTable(TablePath.of("Sales", name), usersTable().toTableDescriptor());
+            createTable(
+                    TablePath.of(databaseName("Sales"), name), usersTable().toTableDescriptor());
         }
         FlussMetadataAccess.TableNameMapping index =
-                access.loadTableNameMapping(new ResolvedSchemaName("sales", "Sales"));
-        admin.dropDatabase("Sales", false, true).get(30, TimeUnit.SECONDS);
+                access.loadTableNameMapping(
+                        new ResolvedSchemaName(databaseName("sales"), databaseName("Sales")));
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
         assertThat(index.listTableNames())
                 .containsExactlyInAnyOrder(
-                        new SchemaTableName("sales", "users"),
-                        new SchemaTableName("sales", "order"));
+                        new SchemaTableName(databaseName("sales"), "users"),
+                        new SchemaTableName(databaseName("sales"), "order"));
         assertThat(index.resolveTable("USERS"))
                 .hasValueSatisfying(
                         table -> assertThat(table.getFlussTableName()).isEqualTo("Users"));
@@ -147,39 +164,41 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
 
     @Test
     void testDatabaseDroppedBeforeListingTables() throws Exception {
-        createDatabase("Sales");
-        ResolvedSchemaName schema = access.resolveSchema("sales").get();
-        admin.dropDatabase("Sales", false, true).get(30, TimeUnit.SECONDS);
+        createDatabase(databaseName("Sales"));
+        ResolvedSchemaName schema = access.resolveSchema(databaseName("sales")).get();
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
         assertThat(access.loadTableNameMapping(schema).listTableNames()).isEmpty();
     }
 
     @Test
     void testDiscoverySkipsDroppedTableOrDatabase() throws Exception {
-        createTable(PATH, usersTable().toTableDescriptor());
-        ResolvedTableName table = access.resolveTable(new SchemaTableName("sales", "users")).get();
-        admin.dropTable(PATH, false).get(30, TimeUnit.SECONDS);
+        createTable(tablePath, usersTable().toTableDescriptor());
+        ResolvedTableName table =
+                access.resolveTable(new SchemaTableName(databaseName("sales"), "users")).get();
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
         assertThat(access.findTableInfo(table)).isEmpty();
-        admin.dropDatabase("Sales", false, true).get(30, TimeUnit.SECONDS);
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
         assertThat(access.findTableInfo(table)).isEmpty();
     }
 
     @Test
     void testExistingHandleReportsDroppedTable() throws Exception {
-        FlussTableHandle handle = tableHandle(createTable(PATH, usersTable().toTableDescriptor()));
-        admin.dropTable(PATH, false).get(30, TimeUnit.SECONDS);
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
         assertThatThrownBy(() -> access.getTableInfo(handle))
                 .isInstanceOf(TableNotFoundException.class)
                 .hasCauseInstanceOf(TableNotExistException.class)
-                .hasMessageContaining("sales.users");
+                .hasMessageContaining(databaseName("sales") + ".users");
     }
 
     @Test
     void testValidateTableAndSchemaIdentity() throws Exception {
-        TableInfo info = createTable(PATH, usersTable().toTableDescriptor());
+        TableInfo info = createTable(tablePath, usersTable().toTableDescriptor());
         FlussTableHandle handle = tableHandle(info);
         assertThat(access.getTableInfo(handle)).isEqualTo(info);
         admin.alterTable(
-                        PATH,
+                        tablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "extra",
@@ -195,8 +214,8 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
                                 assertThat(failure.getErrorCode())
                                         .isEqualTo(FLUSS_METADATA_CHANGED.toErrorCode()))
                 .hasMessageContaining("changed");
-        admin.dropTable(PATH, false).get(30, TimeUnit.SECONDS);
-        createTable(PATH, usersTable().toTableDescriptor());
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
+        createTable(tablePath, usersTable().toTableDescriptor());
         assertThatThrownBy(() -> access.getTableInfo(handle))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("changed");
@@ -204,13 +223,19 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
 
     @Test
     void testListScanPartitionsPreservesPhysicalIdentityAndCounts() throws Exception {
-        FlussTableHandle handle = tableHandle(createTable(PATH, usersTable().toTableDescriptor()));
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
         PartitionSpec east = new PartitionSpec(Collections.singletonMap("Region", "east"));
-        admin.createPartition(PATH, east, false).get(30, TimeUnit.SECONDS);
-        admin.alterTable(PATH, Collections.singletonList(TableChange.modifyBucketCount(2)), false)
+        admin.createPartition(tablePath, east, false).get(30, TimeUnit.SECONDS);
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.modifyBucketCount(2)),
+                        false)
                 .get(30, TimeUnit.SECONDS);
         admin.createPartition(
-                        PATH, new PartitionSpec(Collections.singletonMap("Region", "west")), false)
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("Region", "west")),
+                        false)
                 .get(30, TimeUnit.SECONDS);
         List<PartitionInfo> partitions = access.listScanPartitions(handle, Optional.empty());
         assertThat(partitions)
@@ -219,18 +244,21 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
         assertThat(partitions).extracting(PartitionInfo::getPartitionId).doesNotHaveDuplicates();
         assertThatThrownBy(() -> partitions.add(partitionInfo(30, "north", 8)))
                 .isInstanceOf(UnsupportedOperationException.class);
-        admin.dropPartition(PATH, east, false).get(30, TimeUnit.SECONDS);
+        admin.dropPartition(tablePath, east, false).get(30, TimeUnit.SECONDS);
         assertThat(partitions).hasSize(2);
         assertThat(access.listScanPartitions(handle, Optional.empty())).hasSize(1);
     }
 
     @Test
     void testListScanPartitionsUsesPartitionSpec() throws Exception {
-        FlussTableHandle handle = tableHandle(createTable(PATH, usersTable().toTableDescriptor()));
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
         PartitionSpec spec = new PartitionSpec(Collections.singletonMap("Region", "east"));
-        admin.createPartition(PATH, spec, false).get(30, TimeUnit.SECONDS);
+        admin.createPartition(tablePath, spec, false).get(30, TimeUnit.SECONDS);
         admin.createPartition(
-                        PATH, new PartitionSpec(Collections.singletonMap("Region", "west")), false)
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("Region", "west")),
+                        false)
                 .get(30, TimeUnit.SECONDS);
         assertThat(access.listScanPartitions(handle, Optional.of(spec)))
                 .extracting(PartitionInfo::getPartitionName)
@@ -319,12 +347,13 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
 
     @Test
     void testListScanPartitionsReturnsEmptyList() throws Exception {
-        FlussTableHandle handle = tableHandle(createTable(PATH, usersTable().toTableDescriptor()));
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
         assertThat(access.listScanPartitions(handle, Optional.empty())).isEmpty();
-        admin.dropTable(PATH, false).get(30, TimeUnit.SECONDS);
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
         assertThatThrownBy(() -> access.listScanPartitions(handle, Optional.empty()))
                 .isInstanceOf(TableNotFoundException.class);
-        admin.dropDatabase("Sales", false, true).get(30, TimeUnit.SECONDS);
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
         assertThatThrownBy(() -> access.listScanPartitions(handle, Optional.empty()))
                 .isInstanceOf(TableNotFoundException.class);
     }
@@ -367,8 +396,8 @@ final class FlussMetadataAccessTest extends FlussTrinoTestBase {
                         () ->
                                 access.findTableInfo(
                                         new ResolvedTableName(
-                                                new SchemaTableName("sales", "users"),
-                                                "Sales",
+                                                new SchemaTableName(databaseName("sales"), "users"),
+                                                databaseName("Sales"),
                                                 "Users")))
                 .isInstanceOf(TrinoException.class)
                 .hasCause(failure);

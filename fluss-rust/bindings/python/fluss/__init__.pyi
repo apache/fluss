@@ -238,6 +238,10 @@ class Config:
     @scanner_log_fetch_max_bytes_for_bucket.setter
     def scanner_log_fetch_max_bytes_for_bucket(self, bytes: int) -> None: ...
     @property
+    def scanner_log_check_crc(self) -> bool: ...
+    @scanner_log_check_crc.setter
+    def scanner_log_check_crc(self, enabled: bool) -> None: ...
+    @property
     def lookup_queue_size(self) -> int: ...
     @lookup_queue_size.setter
     def lookup_queue_size(self, value: int) -> None: ...
@@ -923,6 +927,9 @@ class AppendWriter:
         """Write a PyArrow Table (one batch at a time).
 
         Rows are routed to their respective partitions within each batch.
+        No write handles are returned and flush() doesn't raise write errors, so
+        use write_arrow_batch() and wait on its handle when a failed write must
+        be noticed.
         """
         ...
     def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle:
@@ -933,7 +940,12 @@ class AppendWriter:
         """
         ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
-    async def flush(self) -> None: ...
+    async def flush(self) -> None:
+        """Flush all pending writes to the server.
+
+        Doesn't raise the error of a failed write, wait on its handle for that.
+        """
+        ...
     async def __aenter__(self) -> AppendWriter:
         """
         Enter the async context manager.
@@ -987,7 +999,10 @@ class UpsertWriter:
         """
         ...
     async def flush(self) -> None:
-        """Flush all pending upsert/delete operations to the server."""
+        """Flush all pending upsert/delete operations to the server.
+
+        Doesn't raise the error of a failed write, wait on its handle for that.
+        """
         ...
     async def __aenter__(self) -> UpsertWriter:
         """
@@ -1015,7 +1030,11 @@ class UpsertWriter:
 
 @final
 class WriteResultHandle:
-    """Handle for a pending write (append/upsert/delete). Ignore for fire-and-forget, or await handle.wait() for ack."""
+    """Handle for a pending write (append/upsert/delete). Ignore for fire-and-forget, or await handle.wait() for ack.
+
+    flush() doesn't raise the error of a failed write, so an ignored handle
+    means the failure goes unnoticed.
+    """
 
     async def wait(self) -> None:
         """Wait for server acknowledgment of this write."""

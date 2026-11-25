@@ -162,6 +162,7 @@ async fn lookups_recover_after_a_tablet_server_failure_in_a_real_cluster() {
             }
             let table = control.get_table(&table_path).await.unwrap();
             let writer = table.new_upsert().unwrap().create_writer().unwrap();
+            let mut acks = Vec::new();
             for id in 0..32 {
                 let mut row = GenericRow::new(if partitioned { 3 } else { 2 });
                 row.set_field(0, id);
@@ -169,12 +170,15 @@ async fn lookups_recover_after_a_tablet_server_failure_in_a_real_cluster() {
                 if partitioned {
                     row.set_field(2, "p1");
                 }
-                writer.upsert(&row).unwrap();
+                acks.push(writer.upsert(&row).unwrap());
             }
             tokio::time::timeout(TIMEOUT, writer.flush())
                 .await
                 .unwrap()
                 .unwrap();
+            for ack in acks {
+                ack.await.expect("upsert ack");
+            }
 
             let lookup_connection = FlussConnection::new(config.clone()).await.unwrap();
             let table = lookup_connection.get_table(&table_path).await.unwrap();

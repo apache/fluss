@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -72,7 +73,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Integration tests for source-table authorization of consumer-offset commits. */
+/** Integration tests for group and source-table authorization of consumer-offset commits. */
 class ConsumerOffsetCommitAuthorizationITCase {
 
     private static final String GROUP_ID = "commit-authorization";
@@ -154,7 +155,34 @@ class ConsumerOffsetCommitAuthorizationITCase {
     }
 
     @Test
-    void testSourceReadPermissionIsSufficient() throws Exception {
+    void testCommitRequiresGroupRead() throws Exception {
+        grant(READ, Resource.table(FIRST_TABLE));
+        assertThatThrownBy(
+                        () ->
+                                clientGateway
+                                        .commitConsumerOffsets(newCommitRequest(10L, firstBucket))
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("READ")
+                .hasMessageContaining(GROUP_ID);
+
+        grant(READ, Resource.group(GROUP_ID));
+        assertSuccessfulCommit(clientGateway, 10L, firstBucket);
+        assertStoredOffset(firstBucket, 10L);
+    }
+
+    @Test
+    void testClusterReadImpliesGroupRead() throws Exception {
+        grant(READ, Resource.cluster());
+        grant(READ, Resource.table(FIRST_TABLE));
+        assertSuccessfulCommit(clientGateway, 10L, firstBucket);
+        assertStoredOffset(firstBucket, 10L);
+    }
+
+    @Test
+    void testGroupReadAndSourceReadPermissionsAllowCommit() throws Exception {
+        grant(READ, Resource.group(GROUP_ID));
         grant(READ, Resource.table(FIRST_TABLE));
         grant(READ, Resource.table(SECOND_TABLE));
 
@@ -168,6 +196,7 @@ class ConsumerOffsetCommitAuthorizationITCase {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testUnauthorizedSourceRejectsEntireRequest(boolean hasClusterAlter) throws Exception {
+        grant(READ, Resource.group(GROUP_ID));
         grant(READ, Resource.table(FIRST_TABLE));
         grant(WRITE, Resource.table(SECOND_TABLE));
         if (hasClusterAlter) {
@@ -193,6 +222,7 @@ class ConsumerOffsetCommitAuthorizationITCase {
 
     @Test
     void testUnknownSourceTableIsRejected() throws Exception {
+        grant(READ, Resource.group(GROUP_ID));
         grant(READ, Resource.table(FIRST_TABLE));
         assertThatThrownBy(
                         () ->
@@ -208,7 +238,8 @@ class ConsumerOffsetCommitAuthorizationITCase {
     }
 
     @Test
-    void testEmptyRequestRequiresNoTablePermissions() throws Exception {
+    void testEmptyRequestRequiresGroupReadButNoTablePermissions() throws Exception {
+        grant(READ, Resource.group(GROUP_ID));
         CommitConsumerOffsetsRequest request =
                 new CommitConsumerOffsetsRequest().setGroupId(GROUP_ID);
         assertThat(clientGateway.commitConsumerOffsets(request).get().getTablesList()).isEmpty();
@@ -265,7 +296,7 @@ class ConsumerOffsetCommitAuthorizationITCase {
         byte[] key =
                 new ConsumerOffsetSchema()
                         .encodeOffsetKey(
-                                GROUP_ID,
+                                GroupId.of(GROUP_ID),
                                 sourceBucket.getTableId(),
                                 sourceBucket.getPartitionId(),
                                 sourceBucket.getBucket());

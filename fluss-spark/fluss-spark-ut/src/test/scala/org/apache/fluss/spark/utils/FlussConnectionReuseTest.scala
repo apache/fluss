@@ -39,7 +39,8 @@ import java.util.concurrent.CompletableFuture
 class FlussConnectionReuseTest extends FlussSparkTestBase {
 
   test("a completed writer returns a connection while another task continues writing") {
-    val path = createTablePath("shared_writers")
+    val tableName = scopedTableName("shared_writers")
+    val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val config = flussServer.getClientConfig
     val first = writer(path, config)
@@ -73,7 +74,8 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
   }
 
   test("aborting one writer replaces the cached connection without interrupting an active writer") {
-    val path = createTablePath("aborted_writer")
+    val tableName = scopedTableName("aborted_writer")
+    val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val config = flussServer.getClientConfig
     val aborted = writer(path, config)
@@ -101,7 +103,8 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
   }
 
   test("a writer for a recreated table uses a fresh connection") {
-    val path = createTablePath("recreated_writer")
+    val tableName = scopedTableName("recreated_writer")
+    val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val config = flussServer.getClientConfig
     val first = writer(path, config)
@@ -136,7 +139,8 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
   }
 
   test("an asynchronous write failure remains invalid after its exception is consumed") {
-    val path = createTablePath("failed_callback")
+    val tableName = scopedTableName("failed_callback")
+    val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val config = flussServer.getClientConfig
     val result = new CompletableFuture[AppendResult]()
@@ -169,7 +173,8 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
   }
 
   test("reader construction failures and interruptions return their connection borrow") {
-    val path = createTablePath("failed_reader")
+    val tableName = scopedTableName("failed_reader")
+    val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val info = admin.getTableInfo(path).get()
     val config = flussServer.getClientConfig
@@ -212,12 +217,14 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
   }
 
   test("writer construction failures and interruptions invalidate and return their borrow") {
-    val path = createTablePath("failed_writer")
+    val failedWriterTableName = scopedTableName("failed_writer")
+    val missingTableTableName = scopedTableName("missing_table")
+    val path = createTablePath(failedWriterTableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val config = flussServer.getClientConfig
     val schema = SparkConversions.toSparkDataType(SparkWriteTest.logSchema.getRowType)
     val failures: Seq[(() => FlussDataWriter[AppendResult], Class[_ <: Throwable])] = Seq(
-      (() => writer(createTablePath("missing_table"), config), classOf[Exception]),
+      (() => writer(createTablePath(missingTableTableName), config), classOf[Exception]),
       (
         () =>
           new FlussDataWriter[AppendResult](path, schema, config) {
@@ -245,7 +252,8 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
   }
 
   test("driver planning returns the lease without closing the shared connection") {
-    val path = createTablePath("shared_planners")
+    val tableName = scopedTableName("shared_planners")
+    val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
     val info = admin.getTableInfo(path).get()
     val config = flussServer.getClientConfig

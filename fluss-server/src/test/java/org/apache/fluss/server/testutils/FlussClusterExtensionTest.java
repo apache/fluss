@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -45,10 +46,12 @@ class FlussClusterExtensionTest {
     static final FlussClusterExtension CLUSTER =
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testWaitUntilTableReadyUsesActualPartitions(boolean automatic) throws Exception {
-        TablePath path = TablePath.of("ready", automatic ? "automatic" : "manual");
+        TablePath path = tableNames.tablePath("ready", automatic ? "automatic" : "manual");
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(

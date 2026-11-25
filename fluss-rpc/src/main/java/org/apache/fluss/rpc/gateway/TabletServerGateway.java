@@ -212,7 +212,10 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request);
 
-    /** Delete committed offsets for selected buckets of a consumer group. */
+    /**
+     * Deletes committed offsets for selected buckets of a consumer group. Requires Group {@code
+     * WRITE}; no source-table permission is required.
+     */
     @RPC(api = ApiKeys.DELETE_CONSUMER_OFFSETS)
     CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
             DeleteConsumerOffsetsRequest request);
@@ -220,14 +223,22 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     /**
      * Lists consumer groups currently owned by this tablet server.
      *
-     * <p>This is not a cluster-wide listing. Callers that need a cluster-wide view must query every
-     * tablet server and merge the responses.
+     * <p>Cluster {@code DESCRIBE} grants visibility to all locally owned groups; otherwise only
+     * groups with Group {@code DESCRIBE} are returned. This is not a cluster-wide listing. Callers
+     * that need a cluster-wide view must query every tablet server and merge the responses.
      */
     @RPC(api = ApiKeys.LIST_CONSUMER_GROUPS)
     CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
             ListConsumerGroupsRequest request);
 
-    /** Delete consumer groups and all of their committed offsets. */
+    /**
+     * Deletes consumer-group metadata and all committed offsets for each requested group. A later
+     * offset commit may recreate a deleted group.
+     *
+     * <p>No source-table permission is required. This is not a cluster-wide request. Callers must
+     * route each group to the tablet server that owns the group's consumer-offsets bucket; groups
+     * not owned by this server are reported with {@code NOT_CONSUMER_GROUP_OWNER}.
+     */
     @RPC(api = ApiKeys.DELETE_CONSUMER_GROUPS)
     CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
             DeleteConsumerGroupsRequest request);

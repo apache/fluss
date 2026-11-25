@@ -73,8 +73,8 @@ public class FlussSourceITCase extends FlinkTestBase {
     private static final Schema PK_SCHEMA = MockDataUtils.getOrdersSchemaPK();
     private static final Schema LOG_SCHEMA = MockDataUtils.getOrdersSchemaLog();
 
-    private final String pkTableName = "orders_test_pk";
-    private final String logTableName = "orders_test_log";
+    private final String pkTableName = tableNames.tableName("orders_test_pk");
+    private final String logTableName = tableNames.tableName("orders_test_log");
 
     private final TablePath ordersLogTablePath = new TablePath(DEFAULT_DB, logTableName);
     private final TablePath ordersPKTablePath = new TablePath(DEFAULT_DB, pkTableName);
@@ -311,7 +311,7 @@ public class FlussSourceITCase extends FlinkTestBase {
     @Test
     void testTimestamp() throws Exception {
         // 1. Create Fluss log table
-        String tableName = "wm_timestamp_test";
+        String tableName = tableNames.tableName("wm_timestamp_test");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Schema schema =
                 Schema.newBuilder()
@@ -365,7 +365,7 @@ public class FlussSourceITCase extends FlinkTestBase {
     @Test
     void testPerBucketWatermark() throws Exception {
         // 1. Create 2-bucket Fluss log table
-        String tableName = "wm_per_bucket_test";
+        String tableName = tableNames.tableName("wm_per_bucket_test");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Schema schema =
                 Schema.newBuilder()

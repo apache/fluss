@@ -25,7 +25,8 @@ use crate::client::table::remote_log::{
 use crate::error::{ApiError, Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::{
-    ChangeType, LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
+    BatchChangeTypes, ChangeType, LogRecordBatch, LogRecordIterator, LogRecordsBatches,
+    ReadContext, ScanRecord,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -67,6 +68,7 @@ pub(crate) struct FetchErrorContext {
 pub(crate) struct FetchedBatch {
     /// The decoded Arrow data, already sliced to the rows the caller asked for.
     pub(crate) batch: RecordBatch,
+    pub(crate) change_types: Option<Vec<ChangeType>>,
     /// Offset of the first record in [`Self::batch`], which is the log batch's
     /// base offset unless leading rows were sliced off.
     pub(crate) base_offset: i64,
@@ -547,7 +549,7 @@ impl DefaultCompletedFetch {
                 }
             } else {
                 if self.pending_record_batch.is_none() {
-                    let Some(batch_result) = self.log_record_batch.next() else {
+                    let Some(batch_result) = self.next_log_batch() else {
                         if let Some(batch) = self.current_record_batch.take() {
                             self.next_fetch_offset = batch.next_log_offset();
                         }
@@ -638,7 +640,7 @@ impl DefaultCompletedFetch {
     fn next_fetched_batch(&mut self) -> Result<FetchStep<FetchedBatch>> {
         loop {
             if self.pending_record_batch.is_none() {
-                let Some(log_batch_result) = self.log_record_batch.next() else {
+                let Some(log_batch_result) = self.next_log_batch() else {
                     self.skip_filtered_range();
                     self.drain();
                     return Ok(FetchStep::End);
@@ -658,37 +660,49 @@ impl DefaultCompletedFetch {
                 .pending_record_batch
                 .take()
                 .expect("pending batch must still be present after schema resolution");
-            let mut record_batch = log_batch.record_batch(&read_context)?;
-
-            // Skip empty batches
-            if record_batch.num_rows() == 0 {
+            let (batch, changes) = log_batch.record_batch_with_changes(&read_context)?;
+            let start = self.next_fetch_offset.max(log_batch.base_log_offset());
+            if log_batch.next_log_offset() <= self.next_fetch_offset {
                 continue;
             }
-
-            // Calculate the effective base offset for this batch
-            let log_base_offset = log_batch.base_log_offset();
-            let commit_timestamp = log_batch.commit_timestamp();
-            let schema_id = i32::from(log_batch.schema_id());
-            let effective_base_offset = if self.next_fetch_offset > log_base_offset {
-                let skip_count = (self.next_fetch_offset - log_base_offset) as usize;
-                if skip_count >= record_batch.num_rows() {
-                    continue;
-                }
-                // Slice the batch to skip the first skip_count rows
-                record_batch = record_batch.slice(skip_count, record_batch.num_rows() - skip_count);
-                self.next_fetch_offset
-            } else {
-                log_base_offset
-            };
-
             self.next_fetch_offset = log_batch.next_log_offset();
+            // A header-only CDC batch advances the scan without producing any rows.
+            let skip = ((start - log_batch.base_log_offset()) as usize).min(batch.num_rows());
+            let record_batch = if skip == 0 {
+                batch
+            } else {
+                batch.slice(skip, batch.num_rows() - skip)
+            };
+            let change_types = match changes {
+                BatchChangeTypes::Uniform(_) => None,
+                BatchChangeTypes::PerRecord(mut types) => {
+                    types.drain(..skip);
+                    Some(types)
+                }
+            };
             self.records_read += record_batch.num_rows();
             return Ok(FetchStep::InProgress(FetchedBatch {
                 batch: record_batch,
-                base_offset: effective_base_offset,
-                commit_timestamp,
-                schema_id,
+                base_offset: start,
+                change_types,
+                commit_timestamp: log_batch.commit_timestamp(),
+                schema_id: i32::from(log_batch.schema_id()),
             }));
+        }
+    }
+
+    fn next_log_batch(&mut self) -> Option<Result<LogRecordBatch>> {
+        let batch = self.log_record_batch.next()?;
+        Some(batch.and_then(|batch| self.maybe_ensure_valid(&batch).map(|()| batch)))
+    }
+
+    /// Java `CompletedFetch.maybeEnsureValid`, plus a header check when the CRC is
+    /// skipped: schema resolution reads the header.
+    fn maybe_ensure_valid(&self, batch: &LogRecordBatch) -> Result<()> {
+        if self.resolver.checks_crc(self.is_remote) {
+            batch.ensure_valid()
+        } else {
+            batch.ensure_header_complete().map(drop)
         }
     }
 
@@ -1091,13 +1105,14 @@ mod tests {
         TableInfo, TablePath,
     };
     use crate::record::{
-        APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, BASE_OFFSET_LENGTH, BASE_OFFSET_OFFSET,
-        COMMIT_TIMESTAMP_LENGTH, COMMIT_TIMESTAMP_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET,
-        LOG_OVERHEAD, MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
+        BASE_OFFSET_LENGTH, BASE_OFFSET_OFFSET, COMMIT_TIMESTAMP_LENGTH, COMMIT_TIMESTAMP_OFFSET,
+        LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD, MemoryLogRecordsArrowBuilder,
+        RECORD_BATCH_HEADER_SIZE, RECORDS_OFFSET, ReadContext, SCHEMA_ID_OFFSET, to_arrow_schema,
     };
     use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::{
-        build_table_info, build_table_info_with_columns, uncompressed_arrow_batch_config,
+        build_append_only_batch, build_table_info, build_table_info_with_columns,
+        splice_change_type_vector, uncompressed_arrow_batch_config, update_crc,
     };
     use arrow::array::{Array, Int32Array, StringArray};
     use std::future::Future;
@@ -1143,6 +1158,7 @@ mod tests {
         let mut corrupted = data.clone();
         corrupted[..8].copy_from_slice(&1_i64.to_le_bytes());
         corrupted[RECORDS_OFFSET..].fill(0);
+        update_crc(&mut corrupted);
         data.extend(corrupted);
 
         let mut fetch = DefaultCompletedFetch::new(
@@ -1196,7 +1212,163 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn corrupted_batch_fails_the_crc_check() -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = Arc::new(build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![DataField::new("id", DataTypes::int(), None)],
+        ));
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, table_info.get_row_type(), usize::MAX),
+            false,
+        )?;
+        let value = 0x0BAD_F00D_i32;
+        let mut row = GenericRow::new(1);
+        row.set_field(0, value);
+        builder.append(&WriteRecord::for_append(
+            table_info.clone(),
+            Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
+            1,
+            &row,
+        ))?;
+        let mut data = builder.build()?;
+        let position = data[RECORDS_OFFSET..]
+            .windows(4)
+            .position(|bytes| bytes == value.to_le_bytes())
+            .expect("the value is in the Arrow body");
+        data[RECORDS_OFFSET + position] ^= 1;
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("remote.log");
+        std::fs::write(&path, &data)?;
+        let fetch = |resolver, is_remote: bool| -> Result<DefaultCompletedFetch> {
+            let records = if is_remote {
+                LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path.clone())?
+            } else {
+                LogRecordsBatches::new(data.clone())
+            };
+            Ok(DefaultCompletedFetch::new(
+                TableBucket::new(1, 0),
+                records,
+                data.len(),
+                resolver,
+                is_remote,
+                0,
+                0,
+            ))
+        };
+        for is_remote in [false, true] {
+            let error = fetch(test_resolver()?, is_remote)?
+                .fetch_batches(1)
+                .err()
+                .expect("a corrupted batch must fail the fetch");
+            let Error::UnexpectedError { message, source } = &error else {
+                panic!("unexpected error {error}");
+            };
+            assert_eq!(
+                message,
+                "Failed to read log data at offset 0 for bucket TableBucket(table_id=1, bucket=0)"
+            );
+            let cause = source
+                .as_ref()
+                .expect("the CRC error is the cause")
+                .to_string();
+            assert!(
+                cause.contains("Record batch is corrupt (stored crc = "),
+                "{cause}"
+            );
+        }
+
+        let mut unchecked = fetch(test_resolver_with_check_crc(false)?, false)?;
+        let batches = expect_data(unchecked.fetch_batches(1)?);
+        let ids = batches[0]
+            .batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column");
+        assert_eq!(ids.value(0), value ^ 1);
+        assert!(LogRecordBatch::new(data.into()).ensure_valid().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn crc_is_checked_before_schema_resolution() -> Result<()> {
+        let (_, mut data) = build_append_only_batch(&[(1, "a")]);
+        data[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + 2].copy_from_slice(&99_i16.to_le_bytes());
+        for batches in [false, true] {
+            let mut fetch = DefaultCompletedFetch::new(
+                TableBucket::new(1, 0),
+                LogRecordsBatches::new(data.clone()),
+                data.len(),
+                test_resolver()?,
+                false,
+                0,
+                1,
+            );
+            let error = fetch_first(&mut fetch, batches).expect("crc error, not schema 99");
+            let cause = fetch_error_cause(&error);
+            assert!(
+                cause.contains("Record batch is corrupt (stored crc = "),
+                "{cause}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn truncated_batch_fails_without_crc_check() -> Result<()> {
+        let (_, valid) = build_append_only_batch(&[(1, "a")]);
+        let mut short_header = valid[..RECORD_BATCH_HEADER_SIZE - 8].to_vec();
+        let length = (short_header.len() - LOG_OVERHEAD) as i32;
+        short_header[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+            .copy_from_slice(&length.to_le_bytes());
+        for data in [vec![0; LOG_OVERHEAD], short_header] {
+            for batches in [false, true] {
+                let mut fetch = DefaultCompletedFetch::new(
+                    TableBucket::new(1, 0),
+                    LogRecordsBatches::new(data.clone()),
+                    data.len(),
+                    test_resolver_with_check_crc(false)?,
+                    false,
+                    0,
+                    1,
+                );
+                let error = fetch_first(&mut fetch, batches).expect("truncated batch must fail");
+                let cause = fetch_error_cause(&error);
+                assert!(cause.contains("Corrupt log record batch"), "{cause}");
+            }
+        }
+        Ok(())
+    }
+
+    fn fetch_first(fetch: &mut DefaultCompletedFetch, batches: bool) -> Option<Error> {
+        if batches {
+            fetch.fetch_batches(1).err()
+        } else {
+            fetch.fetch_records(1).err()
+        }
+    }
+
+    fn fetch_error_cause(error: &Error) -> String {
+        let Error::UnexpectedError {
+            source: Some(cause),
+            ..
+        } = error
+        else {
+            panic!("unexpected error {error}");
+        };
+        cause.to_string()
+    }
+
     fn test_resolver() -> Result<Arc<ReadContextResolver>> {
+        test_resolver_with_check_crc(true)
+    }
+
+    fn test_resolver_with_check_crc(check_crc: bool) -> Result<Arc<ReadContextResolver>> {
         let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
         let arrow_schema = to_arrow_schema(&row_type)?;
         let row_type_arc = Arc::new(row_type);
@@ -1206,9 +1378,9 @@ mod tests {
             false,
         ));
         let remote_ctx = Arc::new(ReadContext::new(arrow_schema, row_type_arc, true));
-        Ok(Arc::new(ReadContextResolver::new(
-            1, local_ctx, remote_ctx, None,
-        )))
+        Ok(Arc::new(
+            ReadContextResolver::new(1, local_ctx, remote_ctx, None).with_check_crc(check_crc),
+        ))
     }
 
     fn table_info_with_column_ids(
@@ -1510,6 +1682,10 @@ mod tests {
                 ))?;
             }
             let mut bytes = builder.build()?;
+            if offset == 0 {
+                bytes =
+                    splice_change_type_vector(&bytes, &[ChangeType::Insert, ChangeType::Delete]);
+            }
             // Stamp the header fields a leader assigns, which the client-side
             // builder leaves zeroed. Both of them sit before `CRC_OFFSET` and
             // the checksum only covers `SCHEMA_ID_OFFSET` onwards, so the batch
@@ -1555,6 +1731,10 @@ mod tests {
 
         let batches = expect_data(fetch.fetch_batches(10)?);
         assert_eq!(batches.len(), 2);
+        assert_eq!(
+            batches[0].change_types.as_deref(),
+            Some([ChangeType::Delete].as_slice())
+        );
         assert_eq!(batches[0].schema_id, 1);
         assert_eq!(batches[1].schema_id, 2);
         assert_eq!(
@@ -2107,13 +2287,7 @@ mod tests {
             ChangeType::UpdateBefore,
             ChangeType::UpdateAfter,
         ];
-        let mut data = Vec::with_capacity(append_only.len() + change_types.len());
-        data.extend_from_slice(&append_only[..RECORDS_OFFSET]);
-        data.extend(change_types.iter().map(ChangeType::to_byte_value));
-        data.extend_from_slice(&append_only[RECORDS_OFFSET..]);
-        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
-        let new_len = ((data.len() - LOG_OVERHEAD) as i32).to_le_bytes();
-        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_len);
+        let data = splice_change_type_vector(&append_only, &change_types);
 
         let read_context = Arc::new(ReadContext::new(
             to_arrow_schema(&row_type)?,

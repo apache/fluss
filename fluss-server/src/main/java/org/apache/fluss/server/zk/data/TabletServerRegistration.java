@@ -18,6 +18,8 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerResource;
 
 import javax.annotation.Nullable;
@@ -35,21 +37,20 @@ public class TabletServerRegistration {
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
     private final TabletServerResource resource;
+    private final @Nullable String softwareVersion;
 
-    public TabletServerRegistration(
-            @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
-        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown());
-    }
-
+    /** Creates a registration with the software version of this tablet server process. */
     public TabletServerRegistration(
             @Nullable String rack,
             List<Endpoint> endpoints,
             long registerTimestamp,
-            TabletServerResource resource) {
+            TabletServerResource resource,
+            @Nullable String softwareVersion) {
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
         this.resource = resource;
+        this.softwareVersion = softwareVersion;
     }
 
     public List<Endpoint> getEndpoints() {
@@ -68,6 +69,17 @@ public class TabletServerRegistration {
         return resource;
     }
 
+    /** Returns the software version, or null if the tablet server did not report it. */
+    public @Nullable String getSoftwareVersion() {
+        return softwareVersion;
+    }
+
+    /** Builds server metadata from this registration and its znode's server ID. */
+    public ServerInfo toServerInfo(int serverId) {
+        return new ServerInfo(
+                serverId, rack, endpoints, ServerType.TABLET_SERVER, resource, softwareVersion);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -80,12 +92,13 @@ public class TabletServerRegistration {
         return registerTimestamp == that.registerTimestamp
                 && Objects.equals(endpoints, that.endpoints)
                 && Objects.equals(rack, that.rack)
-                && Objects.equals(resource, that.resource);
+                && Objects.equals(resource, that.resource)
+                && Objects.equals(softwareVersion, that.softwareVersion);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp, rack, resource);
+        return Objects.hash(endpoints, registerTimestamp, rack, resource, softwareVersion);
     }
 
     @Override
@@ -99,6 +112,8 @@ public class TabletServerRegistration {
                 + rack
                 + "', resource="
                 + resource
+                + ", softwareVersion="
+                + softwareVersion
                 + '}';
     }
 }

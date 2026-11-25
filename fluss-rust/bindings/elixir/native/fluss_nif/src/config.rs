@@ -42,6 +42,7 @@ pub struct NifConfig {
     pub lookup_retry_max_backoff_ms: Option<u64>,
     pub remote_file_download_thread_num: Option<u64>,
     pub scanner_io_tmp_dir: Option<String>,
+    pub scanner_log_check_crc: Option<bool>,
     pub scanner_log_fetch_max_bytes: Option<i32>,
     pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
     pub scanner_log_fetch_min_bytes: Option<i32>,
@@ -86,6 +87,9 @@ impl NifConfig {
         }
         if let Some(n) = self.remote_file_download_thread_num {
             config.remote_file_download_thread_num = n as usize;
+        }
+        if let Some(enabled) = self.scanner_log_check_crc {
+            config.scanner_log_check_crc = enabled;
         }
         if let Some(size) = self.scanner_log_fetch_max_bytes {
             config.scanner_log_fetch_max_bytes = size;
@@ -214,6 +218,7 @@ mod tests {
             lookup_retry_max_backoff_ms: None,
             remote_file_download_thread_num: None,
             scanner_io_tmp_dir: None,
+            scanner_log_check_crc: None,
             scanner_log_fetch_max_bytes: None,
             scanner_log_fetch_max_bytes_for_bucket: None,
             scanner_log_fetch_min_bytes: None,

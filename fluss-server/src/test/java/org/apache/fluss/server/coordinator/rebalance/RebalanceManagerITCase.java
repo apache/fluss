@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
@@ -41,6 +42,7 @@ import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,7 +61,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
@@ -79,6 +80,9 @@ public class RebalanceManagerITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     private ZooKeeperClient zkClient;
     private RebalanceManager rebalanceManager;
 
@@ -92,9 +96,9 @@ public class RebalanceManagerITCase {
     void testBuildClusterModel() throws Exception {
         // one none-partitioned table.
         long tableId1 =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         // one partitioned table.
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
+        TablePath partitionTablePath = tableNames.tablePath("test_db_1", "test_partition_table_1");
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -154,7 +158,7 @@ public class RebalanceManagerITCase {
         RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
 
         RemoteLogManifest manifest = waitForRemoteLogManifestReady(remoteLogTablet);
-        assertThat(manifest.getPhysicalTablePath().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
+        assertThat(manifest.getPhysicalTablePath().getTablePath()).isEqualTo(data1TablePath);
         assertThat(manifest.getTableBucket()).isEqualTo(tb);
         int remoteLogSize = manifest.getRemoteLogSegmentList().size();
         assertThat(remoteLogSize).isGreaterThan(0);
@@ -233,7 +237,7 @@ public class RebalanceManagerITCase {
         RemoteLogTablet leaderRlt = leaderRm.remoteLogTablet(tb);
 
         RemoteLogManifest newManifest = leaderRlt.currentManifest();
-        assertThat(newManifest.getPhysicalTablePath().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
+        assertThat(newManifest.getPhysicalTablePath().getTablePath()).isEqualTo(data1TablePath);
         assertThat(newManifest.getTableBucket()).isEqualTo(tb);
         // remoteLogSize is captured when async copy may not finish all segments yet,
         // so the new leader's manifest can contain more segments than remoteLogSize.
@@ -282,8 +286,7 @@ public class RebalanceManagerITCase {
     }
 
     private TableBucket setupTableBucket() throws Exception {
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         return tb;

@@ -36,7 +36,9 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.columnar.ColumnarMap;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldCollectAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldLastNAgg;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.MapType;
@@ -275,6 +277,28 @@ class FieldCollectionAggregatorTest {
                     null,
                     BinaryString.fromString("b"),
                     null);
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
+    void testDistinctUsesElementEqualityAcrossRepresentations(KvFormat format) {
+        DataType elementType = DataTypes.ARRAY(DataTypes.INT());
+        Schema schema = schema(DataTypes.ARRAY(elementType), AggFunctions.COLLECT(true));
+        GenericArray first = GenericArray.of(1, 2);
+        GenericArray second = GenericArray.of(3, 4);
+        InternalArray binary = value(schema, format, GenericArray.of(first)).row.getArray(1);
+        for (FieldAggregator aggregator :
+                new FieldAggregator[] {
+                    new FieldCollectAgg(DataTypes.ARRAY(elementType), true),
+                    new FieldLastNAgg(DataTypes.ARRAY(elementType), 10, true)
+                }) {
+            assertCollectedValues(
+                    (InternalArray) aggregator.agg(binary, GenericArray.of(first, second)),
+                    elementType,
+                    first,
+                    first,
+                    second);
         }
     }
 

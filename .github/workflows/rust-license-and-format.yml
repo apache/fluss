@@ -66,11 +66,10 @@ defaults:
   run:
     working-directory: fluss-rust
 
-# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
-# on x86, so a merge that breaks only x86 still shows up there.
+# Runs on arm64, whose queue stays short at peak hours.
 jobs:
   check-license-and-formatting:
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
 
@@ -115,6 +114,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Format
         run: cargo fmt --all -- --check

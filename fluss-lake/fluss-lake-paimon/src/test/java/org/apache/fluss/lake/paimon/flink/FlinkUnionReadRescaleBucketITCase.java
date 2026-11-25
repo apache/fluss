@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -68,6 +69,8 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
     private static final int NEW_BUCKET_NUM = 4;
     private static final int RECORDS_PER_ROUND = 16;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
@@ -75,7 +78,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testUnionReadAcrossPartitionsWithDifferentBucketCounts() throws Exception {
-        String tableName = "rescale_bucket_log_table";
+        String tableName = tableNames.tableName("rescale_bucket_log_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedLogTable(tablePath, OLD_BUCKET_NUM);
 
@@ -145,7 +148,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testUnionReadPkTableAcrossPartitionsWithDifferentBucketCounts() throws Exception {
-        String tableName = "rescale_bucket_pk_table";
+        String tableName = tableNames.tableName("rescale_bucket_pk_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedPkTable(tablePath, OLD_BUCKET_NUM);
 
@@ -222,7 +225,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testStreamUnionReadAcrossPartitionsWithDifferentBucketCounts() throws Exception {
-        String tableName = "rescale_bucket_stream_log_table";
+        String tableName = tableNames.tableName("rescale_bucket_stream_log_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedLogTable(tablePath, OLD_BUCKET_NUM);
 
@@ -266,7 +269,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testStreamUnionReadPkTableAcrossPartitionsWithDifferentBucketCounts() throws Exception {
-        String tableName = "rescale_bucket_stream_pk_table";
+        String tableName = tableNames.tableName("rescale_bucket_stream_pk_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedPkTable(tablePath, OLD_BUCKET_NUM);
 
@@ -326,7 +329,7 @@ class FlinkUnionReadRescaleBucketITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testUnionReadLakeOnlyExpiredPartitionAfterRescale() throws Exception {
-        String tableName = "rescale_bucket_expired_log_table";
+        String tableName = tableNames.tableName("rescale_bucket_expired_log_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPartitionedLogTable(tablePath, OLD_BUCKET_NUM);
 

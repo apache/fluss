@@ -26,6 +26,7 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -65,6 +66,8 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
     @TempDir public static File savepointDir;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
@@ -75,7 +78,9 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
     void testReadLogTableFullType(boolean isPartitioned) throws Exception {
         JobClient jobClient = buildCheckpointedTieringJob();
 
-        String tableName = "logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "logTable_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         List<Row> writtenRows = new ArrayList<>();
@@ -133,7 +138,9 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
     void testReadLogTableInStreamMode(boolean isPartitioned) throws Exception {
         JobClient jobClient = buildCheckpointedTieringJob();
 
-        String tableName = "stream_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "stream_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         List<Row> writtenRows = new LinkedList<>();
@@ -169,9 +176,11 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         JobClient jobClient = buildCheckpointedTieringJob();
 
         String tableName =
-                "restore_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "restore_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         String resultTableName =
-                "result_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "result_table_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         TablePath resultTablePath = TablePath.of(DEFAULT_DB, resultTableName);

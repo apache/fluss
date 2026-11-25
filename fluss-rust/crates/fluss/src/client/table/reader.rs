@@ -32,6 +32,7 @@
 
 use crate::client::admin::FlussAdmin;
 use crate::client::table::RecordBatchLogScanner;
+use crate::client::table::scanner::DEFAULT_POLL_TIMEOUT;
 use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TablePath};
 use crate::record::ScanBatch;
@@ -42,8 +43,6 @@ use arrow_schema::SchemaRef;
 use futures::{Stream, future::try_join_all};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
-
-const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Outcome of a bounded record-batch read with a caller-supplied timeout.
 #[derive(Debug)]
@@ -484,13 +483,13 @@ impl RecordBatchLogReader {
                 return Ok(RecordBatchReadOutcome::TimedOut);
             }
 
-            let scan_batches = self.scanner.poll(timeout - elapsed).await?;
-            let polled_nothing = scan_batches.is_empty();
+            let poll = self.scanner.poll_with_progress(timeout - elapsed).await?;
+            let polled_nothing = poll.batches.is_empty() && poll.consumed_up_to_offsets.is_empty();
 
             let mut completed =
-                filter_batches(scan_batches, &mut self.stopping_offsets, &mut self.buffer);
+                filter_batches(poll.batches, &mut self.stopping_offsets, &mut self.buffer);
             completed.extend(complete_at_position(&mut self.stopping_offsets, |bucket| {
-                self.scanner.bucket_offset(bucket)
+                poll.consumed_up_to_offsets.get(bucket).copied()
             }));
 
             // Use the `_sync` unsubscribe variants here: the active-reader
@@ -963,7 +962,7 @@ fn filter_batches(
 ) -> Vec<TableBucket> {
     let mut completed = Vec::new();
 
-    for scan_batch in scan_batches {
+    for mut scan_batch in scan_batches {
         let bucket = scan_batch.bucket().clone();
         let Some(&stop_at) = stopping_offsets.get(&bucket) else {
             continue;
@@ -978,21 +977,11 @@ fn filter_batches(
             continue;
         }
 
-        let kept_batch = if last_offset >= stop_at {
-            let num_to_keep = (stop_at - base_offset) as usize;
-            let commit_timestamp = scan_batch.commit_timestamp();
-            let schema_id = scan_batch.schema_id();
-            let b = scan_batch.into_batch();
-            let limit = num_to_keep.min(b.num_rows());
-            ScanBatch::new(bucket.clone(), b.slice(0, limit), base_offset)
-                .with_commit_timestamp(commit_timestamp)
-                .with_schema_id(schema_id)
-        } else {
-            scan_batch
-        };
-
-        if kept_batch.batch().num_rows() > 0 {
-            buffer.push_back(kept_batch);
+        if last_offset >= stop_at {
+            scan_batch.truncate((stop_at - base_offset) as usize);
+        }
+        if scan_batch.num_records() > 0 {
+            buffer.push_back(scan_batch);
         }
 
         if last_offset >= stop_at - 1 {
@@ -1366,7 +1355,8 @@ mod tests {
     fn filter_preserves_batch_metadata_across_buckets_and_slicing() {
         let mut offsets = HashMap::from([(bucket(0), 12), (bucket(1), 10)]);
         let mut buffer = VecDeque::new();
-        let batches = vec![
+        use crate::record::ChangeType::{Delete, Insert, UpdateAfter};
+        let mut batches = vec![
             ScanBatch::new(bucket(0), make_batch(&[1, 2, 3]), 10)
                 .with_commit_timestamp(1234)
                 .with_schema_id(1),
@@ -1375,8 +1365,13 @@ mod tests {
                 .with_schema_id(2),
         ];
 
+        batches[0].change_types = Some(vec![Insert, UpdateAfter, Delete]);
         filter_batches(batches, &mut offsets, &mut buffer);
 
+        assert_eq!(
+            buffer[0].change_types(),
+            Some([Insert, UpdateAfter].as_slice())
+        );
         assert_eq!(buffer[0].batch().num_rows(), 2);
         assert_eq!(buffer[0].commit_timestamp(), 1234);
         assert_eq!(buffer[1].batch().num_rows(), 2);

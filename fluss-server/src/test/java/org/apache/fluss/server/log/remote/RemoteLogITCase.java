@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
@@ -50,6 +51,7 @@ import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -80,7 +82,6 @@ import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
@@ -111,6 +112,9 @@ public class RemoteLogITCase {
                     .setRemoteDirNames(REMOTE_DIR_NAMES)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     private ZooKeeperClient zkClient;
 
     @BeforeEach
@@ -119,8 +123,7 @@ public class RemoteLogITCase {
     }
 
     private TableBucket setupTableBucket() throws Exception {
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         return tb;
@@ -146,8 +149,19 @@ public class RemoteLogITCase {
                     0,
                     baseOffset + i * 10L);
         }
-        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
-                new TableBucket(tb.getTableId(), 0));
+        int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        RemoteLogTablet remoteLogTablet =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leaderId)
+                        .getReplicaManager()
+                        .getRemoteLogManager()
+                        .remoteLogTablet(tb);
+        // The leader loads its manifest after the ZooKeeper commit becomes visible.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(remoteLogTablet.currentManifest().getRemoteLogEndOffset())
+                                .isGreaterThan(baseOffset));
     }
 
     @Test
@@ -168,7 +182,7 @@ public class RemoteLogITCase {
         RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
 
         RemoteLogManifest manifest = remoteLogTablet.currentManifest();
-        assertThat(manifest.getPhysicalTablePath().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
+        assertThat(manifest.getPhysicalTablePath().getTablePath()).isEqualTo(data1TablePath);
         assertThat(manifest.getTableBucket()).isEqualTo(tb);
         assertThat(manifest.getRemoteLogSegmentList().size()).isGreaterThan(0);
 
@@ -176,7 +190,7 @@ public class RemoteLogITCase {
         FsPath fsPath =
                 FlussPaths.remoteLogTabletDir(
                         remoteLogTablet.getRemoteLogDir(),
-                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        PhysicalTablePath.of(data1TablePath),
                         tb);
         FileSystem fileSystem = fsPath.getFileSystem();
         assertThat(fileSystem.exists(fsPath)).isTrue();
@@ -206,8 +220,8 @@ public class RemoteLogITCase {
         coordinatorGateway
                 .dropTable(
                         newDropTableRequest(
-                                DATA1_TABLE_PATH.getDatabaseName(),
-                                DATA1_TABLE_PATH.getTableName(),
+                                data1TablePath.getDatabaseName(),
+                                data1TablePath.getTableName(),
                                 true))
                 .get();
         retry(Duration.ofMinutes(2), () -> assertThat(fileSystem.exists(fsPath)).isFalse());
@@ -221,7 +235,7 @@ public class RemoteLogITCase {
         Long selectedTableId = null;
         // Select by persisted assignment rather than relying on the selector's current position.
         for (int i = 0; i < REMOTE_DIR_NAMES.size(); i++) {
-            TablePath tablePath = TablePath.of("test_db", "follower_recovery_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "follower_recovery_" + i);
             long candidateTableId =
                     createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR);
             TableRegistration registration = zkClient.getTable(tablePath).get();
@@ -483,7 +497,7 @@ public class RemoteLogITCase {
         // different remote dirs.
         int partitionCount = 6;
         String tablePrefix = isPrimaryTable ? "partitioned_pk_" : "partitioned_log_";
-        TablePath tablePath = TablePath.of("test_db", tablePrefix + "remote_table");
+        TablePath tablePath = tableNames.tablePath("test_db", tablePrefix + "remote_table");
 
         // Create partitioned table
         Schema.Builder schemaBuilder =
@@ -621,7 +635,7 @@ public class RemoteLogITCase {
 
     @Test
     void testRemoteLogTTLWithDynamicLakeToggle() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_remote_log_ttl_dynamic_lake");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_remote_log_ttl_dynamic_lake");
         // ==================== Stage A: Lake Disabled (Initial) ====================
         // Create table without data lake enabled
         TableDescriptor tableDescriptor =
@@ -647,8 +661,13 @@ public class RemoteLogITCase {
         RemoteLogManager remoteLogManager = tabletServer.getReplicaManager().getRemoteLogManager();
         RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
 
-        assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(0);
-        assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0L);
+        // The manifest becomes visible in ZooKeeper before the leader loads it locally.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(remoteLogTablet.allRemoteLogSegments()).isNotEmpty();
+                    assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0L);
+                });
 
         Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
         LogTablet logTablet = leaderReplica.getLogTablet();
@@ -787,7 +806,7 @@ public class RemoteLogITCase {
 
     @Test
     void testAlterTableLogTtlEndToEnd() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_alter_table_log_ttl_e2e");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_alter_table_log_ttl_e2e");
 
         // Keep enough local segments so that only TTL cleanup can advance local-log start offsets.
         TableDescriptor tableDescriptor =

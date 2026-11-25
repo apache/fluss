@@ -705,6 +705,10 @@ public class TableBucketStateMachine {
 
     private boolean checkValidTableBucketStateChange(
             TableBucket tableBucket, BucketState targetState) {
+        if (targetState == BucketState.OnlineBucket
+                && coordinatorContext.isBulkLoadPublicationPending(tableBucket)) {
+            return false;
+        }
         BucketState curState = coordinatorContext.getBucketState(tableBucket);
         if (isValidReplicaStateTransition(curState, targetState)) {
             return true;

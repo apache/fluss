@@ -37,7 +37,6 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -64,6 +63,10 @@ public class LogFetchBuffer implements AutoCloseable {
 
     private final Lock lock = new ReentrantLock();
     private final Condition notEmptyCondition = lock.newCondition();
+
+    @GuardedBy("lock")
+    private boolean offsetResetCompleted;
+
     private final AtomicBoolean wokenup = new AtomicBoolean(false);
 
     @GuardedBy("lock")
@@ -207,20 +210,31 @@ public class LogFetchBuffer implements AutoCloseable {
                         if (wokenup.compareAndSet(true, false)) {
                             throw new WakeupException("The await is wakeup.");
                         }
+                        if (offsetResetCompleted) {
+                            offsetResetCompleted = false;
+                            return true;
+                        }
                         long remainingNanos = deadlineNanos - System.nanoTime();
                         if (remainingNanos <= 0) {
                             // false for timeout
                             return false;
                         }
 
-                        if (notEmptyCondition.await(remainingNanos, TimeUnit.NANOSECONDS)) {
-                            // true for signal
-                            return true;
-                        }
+                        notEmptyCondition.awaitNanos(remainingNanos);
                     }
 
                     // true for wakeup or we have data to return
                     return true;
+                });
+    }
+
+    /** Let poll prepare new fetches even if the reset completed just before it began waiting. */
+    void signalOffsetReset() {
+        inLock(
+                lock,
+                () -> {
+                    offsetResetCompleted = true;
+                    notEmptyCondition.signalAll();
                 });
     }
 

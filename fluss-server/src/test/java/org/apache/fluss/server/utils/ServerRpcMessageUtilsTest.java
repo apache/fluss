@@ -36,19 +36,30 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListAclsResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbDeletedGroup;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbListedGroup;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
@@ -60,8 +71,17 @@ import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -135,6 +155,27 @@ class ServerRpcMessageUtilsTest {
     }
 
     @Test
+    void testCommitConsumerOffsetsRequestRejectsNegativeOffset() {
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setOffset(-1L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("offset");
+
+        request.getTableAt(0).addBucket().setBucketId(1).setOffset(0L);
+        assertThat(ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .containsOnly(
+                        entry(new TableBucket(2L, 1), new ConsumerOffsetAndMetadata(0L, null)));
+
+        request.getTableAt(0).getBucketAt(1).setOffset(-2L);
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("offset");
+    }
+
+    @Test
     void testCommitConsumerOffsetsRequestRejectsReservedPartitionId() {
         CommitConsumerOffsetsRequest request =
                 new CommitConsumerOffsetsRequest().setGroupId("group-1");
@@ -174,6 +215,17 @@ class ServerRpcMessageUtilsTest {
                         .addAllTables(Collections.singletonList(table));
         assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(selected))
                 .containsExactly(new TableBucket(3L, 2));
+    }
+
+    @Test
+    void testGetConsumerOffsetsRequestRejectsReservedPartitionId() {
+        GetConsumerOffsetsRequest request = new GetConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setPartitionId(-1L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1")
+                .hasMessageContaining("omit partition_id");
     }
 
     @Test
@@ -230,6 +282,102 @@ class ServerRpcMessageUtilsTest {
         assertThat(buckets.get(0).getMetadata()).isEqualTo("metadata");
         assertThat(buckets.get(1).hasOffset()).isFalse();
         assertThat(buckets.get(1).hasMetadata()).isFalse();
+    }
+
+    @Test
+    void testMakeListConsumerGroupsResponsePreservesOrder() {
+        ListConsumerGroupsResponse response =
+                ServerRpcMessageUtils.makeListConsumerGroupsResponse(
+                        Arrays.asList("group-b", "group-a"));
+        assertThat(response.getGroupsList())
+                .extracting(PbListedGroup::getGroupId)
+                .containsExactly("group-b", "group-a");
+    }
+
+    @Test
+    void testDecodeDeleteConsumerOffsetsRequestRejectsDuplicateBucket() {
+        PbDeleteConsumerOffsetsRequestBucket bucket =
+                new PbDeleteConsumerOffsetsRequestBucket().setBucketId(2);
+        PbDeleteConsumerOffsetsRequestTable table =
+                new PbDeleteConsumerOffsetsRequestTable()
+                        .setTableId(3L)
+                        .addAllBuckets(Arrays.asList(bucket, bucket));
+        DeleteConsumerOffsetsRequest request =
+                new DeleteConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .addAllTables(Collections.singletonList(table));
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("Duplicate table bucket");
+    }
+
+    @Test
+    void testDeleteConsumerOffsetsRequestRejectsReservedPartitionId() {
+        DeleteConsumerOffsetsRequest request =
+                new DeleteConsumerOffsetsRequest().setGroupId("group-1");
+        PbDeleteConsumerOffsetsRequestBucket bucket =
+                request.addTable().setTableId(2L).addBucket().setBucketId(1);
+        assertThat(ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
+                .containsExactly(new TableBucket(2L, 1));
+
+        bucket.setPartitionId(-1L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1")
+                .hasMessageContaining("omit partition_id");
+    }
+
+    @Test
+    void testMakeDeleteConsumerGroupsResponseReturnsAllResults() {
+        Map<String, Errors> results = new HashMap<>();
+        results.put("group-b", Errors.NONE);
+        results.put("group-a", Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+
+        DeleteConsumerGroupsResponse response =
+                ServerRpcMessageUtils.makeDeleteConsumerGroupsResponse(results);
+        List<PbDeletedGroup> groups = response.getGroupsList();
+        assertThat(groups)
+                .extracting(PbDeletedGroup::getGroupId)
+                .containsExactlyInAnyOrder("group-a", "group-b");
+        assertThat(groups)
+                .anySatisfy(
+                        group -> {
+                            assertThat(group.getGroupId()).isEqualTo("group-b");
+                            assertThat(group.hasErrorCode()).isFalse();
+                        });
+        assertThat(groups)
+                .anySatisfy(
+                        group -> {
+                            assertThat(group.getGroupId()).isEqualTo("group-a");
+                            assertThat(group.getErrorCode())
+                                    .isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+                        });
+    }
+
+    @Test
+    void testMakeDeleteConsumerOffsetsResponseReportsEveryRequestedBucket() {
+        TableBucket successful = new TableBucket(2L, 3);
+        TableBucket missing = new TableBucket(2L, 1);
+        TableBucket failed = new TableBucket(2L, 5);
+        Map<TableBucket, Errors> bucketErrors = new LinkedHashMap<>();
+        bucketErrors.put(successful, Errors.NONE);
+        bucketErrors.put(missing, Errors.NONE);
+        bucketErrors.put(failed, Errors.NOT_CONSUMER_GROUP_OWNER);
+
+        DeleteConsumerOffsetsResponse response =
+                ServerRpcMessageUtils.makeDeleteConsumerOffsetsResponse(bucketErrors);
+
+        assertThat(response.getTablesList().get(0).getBucketsList())
+                .extracting(bucket -> bucket.getBucketId())
+                .containsExactly(3, 1, 5);
+        assertThat(response.getTablesList().get(0).getBucketsList().get(0).hasErrorCode())
+                .isFalse();
+        assertThat(response.getTablesList().get(0).getBucketsList().get(1).hasErrorCode())
+                .isFalse();
+        assertThat(response.getTablesList().get(0).getBucketsList().get(2).getErrorCode())
+                .isEqualTo(Errors.NOT_CONSUMER_GROUP_OWNER.code());
     }
 
     @ParameterizedTest
@@ -578,6 +726,76 @@ class ServerRpcMessageUtilsTest {
                         .get(0);
         assertThat(decoded).isEqualTo(legacy);
         assertThat(decoded.getBucketEpoch()).isNull();
+    }
+
+    @Test
+    void testListAclsResponseFiltersGroupAclsForVersionZero() {
+        AclBinding databaseAcl = aclBinding(Resource.database("db1"));
+        AclBinding groupAcl = aclBinding(Resource.group("group1"));
+
+        ListAclsResponse versionZero =
+                ServerRpcMessageUtils.makeListAclsResponse(
+                        Arrays.asList(databaseAcl, groupAcl), false);
+        assertThat(versionZero.getAclsList())
+                .extracting(PbAclInfo::getResourceType)
+                .containsExactly((int) ResourceType.DATABASE.getCode());
+
+        ListAclsResponse versionOne =
+                ServerRpcMessageUtils.makeListAclsResponse(
+                        Arrays.asList(databaseAcl, groupAcl), true);
+        assertThat(versionOne.getAclsList())
+                .extracting(PbAclInfo::getResourceType)
+                .containsExactlyInAnyOrder(
+                        (int) ResourceType.DATABASE.getCode(), (int) ResourceType.GROUP.getCode());
+    }
+
+    @Test
+    void testDropAclsResponseFiltersGroupAclsForVersionZero() {
+        assertThat(ApiKeys.DROP_ACLS.highestSupportedVersion).isEqualTo((short) 1);
+        AclDeleteResult result =
+                new AclDeleteResult(
+                        Arrays.asList(
+                                new AclDeleteResult.AclBindingDeleteResult(
+                                        aclBinding(Resource.database("db1")), null),
+                                new AclDeleteResult.AclBindingDeleteResult(
+                                        aclBinding(Resource.group("group1")), null)));
+
+        DropAclsResponse versionZero =
+                ServerRpcMessageUtils.makeDropAclsResponse(
+                        Collections.singletonList(result), false);
+        assertThat(versionZero.getFilterResultsList())
+                .singleElement()
+                .satisfies(
+                        filterResult ->
+                                assertThat(filterResult.getMatchingAclsList())
+                                        .extracting(
+                                                matchingAcl ->
+                                                        matchingAcl.getAcl().getResourceType())
+                                        .containsExactly((int) ResourceType.DATABASE.getCode()));
+
+        DropAclsResponse versionOne =
+                ServerRpcMessageUtils.makeDropAclsResponse(Collections.singletonList(result), true);
+        assertThat(versionOne.getFilterResultsList())
+                .singleElement()
+                .satisfies(
+                        filterResult ->
+                                assertThat(filterResult.getMatchingAclsList())
+                                        .extracting(
+                                                matchingAcl ->
+                                                        matchingAcl.getAcl().getResourceType())
+                                        .containsExactlyInAnyOrder(
+                                                (int) ResourceType.DATABASE.getCode(),
+                                                (int) ResourceType.GROUP.getCode()));
+    }
+
+    private static AclBinding aclBinding(Resource resource) {
+        return new AclBinding(
+                resource,
+                new AccessControlEntry(
+                        new FlussPrincipal("consumer", "User"),
+                        "*",
+                        OperationType.DESCRIBE,
+                        PermissionType.ALLOW));
     }
 
     private static void assertAuthoritativeWireMetadata(List<PbBucketMetadata> bucketMetadata) {

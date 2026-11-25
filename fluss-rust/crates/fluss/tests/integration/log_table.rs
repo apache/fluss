@@ -149,7 +149,7 @@ mod table_test {
             ("c3", Int64, [10, 20, 30])
         )
         .unwrap();
-        append_writer
+        let ack1 = append_writer
             .append_arrow_batch(batch1)
             .expect("Failed to append batch with mixed nullability");
 
@@ -167,12 +167,15 @@ mod table_test {
             ],
         )
         .expect("nullable-metadata batch without nulls");
-        append_writer
+        let ack2 = append_writer
             .append_arrow_batch(batch2)
             .expect("Failed to append nullable-metadata batch without null values");
 
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         // Create scanner to verify appended records
         let table = connection
@@ -395,10 +398,11 @@ mod table_test {
                 .expect_err("null ROW value in NOT NULL column"),
         );
 
-        writer
+        let ack = writer
             .append_arrow_batch(nested_batch(ok_list, ok_map, ok_struct))
             .expect("populated nested values must be accepted");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let records = scan_table(&table, |scan| scan).await;
         assert_eq!(records.len(), 1);
@@ -513,10 +517,11 @@ mod table_test {
                 .expect_err("null ROW field in ROW<seq INT NOT NULL>"),
         );
 
-        writer
+        let ack = writer
             .append_arrow_batch(batch(ok_list, ok_struct))
             .expect("null-free nested values must be accepted");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
     }
 
     #[tokio::test]
@@ -551,15 +556,21 @@ mod table_test {
             .create_writer()
             .expect("Failed to create Iceberg writer");
 
+        let mut acks = Vec::new();
         for (id, name) in [(34, "Frost"), (35, "Ember"), (36, "Gale")] {
             let mut row = GenericRow::new(2);
             row.set_field(0, id);
             row.set_field(1, name);
-            append_writer
-                .append(&row)
-                .expect("Failed to append Iceberg row");
+            acks.push(
+                append_writer
+                    .append(&row)
+                    .expect("Failed to append Iceberg row"),
+            );
         }
         append_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let log_scanner = table
             .new_scan()
@@ -673,12 +684,13 @@ mod table_test {
             ("name", Utf8, ["alice", "bob", "charlie"])
         )
         .unwrap();
-        append_writer
+        let ack = append_writer
             .append_arrow_batch(batch)
             .expect("Failed to append batch");
 
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         // Test latest offset after appending (should be 3)
         let latest_offsets_after = admin
@@ -805,10 +817,11 @@ mod table_test {
             ("col_c", Int32, [10, 20, 30])
         )
         .unwrap();
-        append_writer
+        let ack = append_writer
             .append_arrow_batch(batch)
             .expect("Failed to append batch");
         append_writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         // Test project_by_name: select col_b and col_c only
         let records = scan_table(&table, |scan| {
@@ -963,7 +976,7 @@ mod table_test {
 
         // Three wire batches with disjoint id ranges, so min/max pruning is
         // deterministic: a batch either fully matches the filter or cannot match.
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3, 4, 5]),
@@ -972,7 +985,7 @@ mod table_test {
                 .unwrap(),
             )
             .expect("Failed to append batch 1");
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [100, 101, 102, 103, 104]),
@@ -981,7 +994,7 @@ mod table_test {
                 .unwrap(),
             )
             .expect("Failed to append batch 2");
-        writer
+        let ack3 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [200, 201, 202, 203, 204]),
@@ -991,6 +1004,9 @@ mod table_test {
             )
             .expect("Failed to append batch 3");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2, ack3] {
+            ack.await.expect("append ack");
+        }
 
         let log_scanner = table
             .new_scan()
@@ -1075,7 +1091,7 @@ mod table_test {
             .create_writer()
             .expect("Failed to create writer");
 
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3, 4, 5]),
@@ -1084,7 +1100,7 @@ mod table_test {
                 .unwrap(),
             )
             .expect("Failed to append non-matching batch");
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 6, 3, 8, 2]),
@@ -1094,6 +1110,9 @@ mod table_test {
             )
             .expect("Failed to append mixed batch");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         let log_scanner = table
             .new_scan()
@@ -1149,20 +1168,28 @@ mod table_test {
             .expect("Failed to create writer");
 
         // Flush between the groups so each becomes its own wire batch.
+        let mut acks = Vec::new();
         for id in 1..=5 {
             let mut row = GenericRow::new(2);
             row.set_field(0, id);
             row.set_field(1, format!("low{id}"));
-            writer.append(&row).expect("Failed to append row");
+            acks.push(writer.append(&row).expect("Failed to append row"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
+        let mut acks = Vec::new();
         for id in 200..=204 {
             let mut row = GenericRow::new(2);
             row.set_field(0, id);
             row.set_field(1, format!("v{id}"));
-            writer.append(&row).expect("Failed to append row");
+            acks.push(writer.append(&row).expect("Failed to append row"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let log_scanner = table
             .new_scan()
@@ -1230,6 +1257,7 @@ mod table_test {
             .expect("Failed to create writer");
 
         // Names exceed 7 bytes so the string bounds spill to the stats row tail.
+        let mut acks = Vec::new();
         for id in 1..=3 {
             let mut row = GenericRow::new(8);
             row.set_field(0, id);
@@ -1253,9 +1281,13 @@ mod table_test {
             );
             row.set_field(6, Time::new(32_400_000 + id * 1_000));
             row.set_field(7, Datum::Null);
-            writer.append(&row).expect("Failed to append low row");
+            acks.push(writer.append(&row).expect("Failed to append low row"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
+        let mut acks = Vec::new();
         for id in 101..=103 {
             let mut row = GenericRow::new(8);
             row.set_field(0, id);
@@ -1283,9 +1315,12 @@ mod table_test {
             );
             row.set_field(6, Time::new(72_000_000 + id * 1_000));
             row.set_field(7, id);
-            writer.append(&row).expect("Failed to append high row");
+            acks.push(writer.append(&row).expect("Failed to append high row"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let low_ids = vec![1, 2, 3];
         let high_ids = vec![101, 102, 103];
@@ -1371,19 +1406,25 @@ mod table_test {
             .create_writer()
             .expect("Failed to create writer");
 
+        let mut acks = Vec::new();
         for (ids, names) in [
             ([1, 2, 3, 4, 5], ["a1", "a2", "a3", "a4", "a5"]),
             ([6, 7, 8, 9, 10], ["a6", "a7", "a8", "a9", "a10"]),
             ([11, 12, 13, 14, 15], ["a11", "a12", "a13", "a14", "a15"]),
         ] {
-            writer
-                .append_arrow_batch(
-                    record_batch!(("id", Int32, ids.to_vec()), ("name", Utf8, names.to_vec()))
-                        .unwrap(),
-                )
-                .expect("Failed to append batch");
+            acks.push(
+                writer
+                    .append_arrow_batch(
+                        record_batch!(("id", Int32, ids.to_vec()), ("name", Utf8, names.to_vec()))
+                            .unwrap(),
+                    )
+                    .expect("Failed to append batch"),
+            );
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         // Prove the data is fetchable before asserting the filtered scan sees none.
         let unfiltered = table
@@ -1428,7 +1469,7 @@ mod table_test {
         );
 
         // New matching data appended after the pruned range must be reachable.
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [2001, 2002, 2003, 2004, 2005]),
@@ -1438,6 +1479,7 @@ mod table_test {
             )
             .expect("Failed to append matching batch");
         writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let collected = poll_ids_and_names(&log_scanner, 5).await;
         let collected_ids: Vec<i32> = collected.iter().map(|(id, _)| *id).collect();
@@ -1486,13 +1528,13 @@ mod table_test {
             .expect("Failed to create append")
             .create_writer()
             .expect("Failed to create writer");
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["x1", "x2", "x3"]))
                     .unwrap(),
             )
             .expect("Failed to append batch 1");
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [100, 101, 102]),
@@ -1502,6 +1544,9 @@ mod table_test {
             )
             .expect("Failed to append batch 2");
         writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         let log_scanner = table
             .new_scan()
@@ -1593,22 +1638,25 @@ mod table_test {
         );
 
         let writer = table.new_append().unwrap().create_writer().unwrap();
-        writer
+        let ack1 = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
             )
             .unwrap();
-        writer
+        let ack2 = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [3, 4]), ("name", Utf8, ["c", "d"])).unwrap(),
             )
             .unwrap();
-        writer
+        let ack3 = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [5, 6]), ("name", Utf8, ["e", "f"])).unwrap(),
             )
             .unwrap();
         writer.flush().await.unwrap();
+        for ack in [ack1, ack2, ack3] {
+            ack.await.unwrap();
+        }
 
         // poll may return partial results if not all batches are available yet,
         // so we accumulate across multiple polls until we have the expected count.
@@ -1622,12 +1670,13 @@ mod table_test {
         // Test 2: Order should be preserved across multiple batches
         assert_eq!(all_ids, vec![1, 2, 3, 4, 5, 6]);
 
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [7, 8]), ("name", Utf8, ["g", "h"])).unwrap(),
             )
             .unwrap();
         writer.flush().await.unwrap();
+        ack.await.unwrap();
 
         let new_ids =
             poll_until_count(2, DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
@@ -1744,24 +1793,27 @@ mod table_test {
         let writer = table.new_append().unwrap().create_writer().unwrap();
         // Flush between appends so the leader stores three separate log
         // batches, each stamped with its own commit timestamp.
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
             )
             .unwrap();
         writer.flush().await.unwrap();
-        writer
+        ack.await.unwrap();
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [3, 4]), ("name", Utf8, ["c", "d"])).unwrap(),
             )
             .unwrap();
         writer.flush().await.unwrap();
-        writer
+        ack.await.unwrap();
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [5, 6]), ("name", Utf8, ["e", "f"])).unwrap(),
             )
             .unwrap();
         writer.flush().await.unwrap();
+        ack.await.unwrap();
 
         // Reference: the timestamp the record path reports for each offset.
         let record_scanner = table.new_scan().create_log_scanner().unwrap();
@@ -1854,12 +1906,13 @@ mod table_test {
 
         let table_v1 = connection.get_table(&table_path).await.unwrap();
         let writer = table_v1.new_append().unwrap().create_writer().unwrap();
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
             )
             .unwrap();
         writer.flush().await.unwrap();
+        ack.await.unwrap();
 
         let age_type_json =
             serde_json::to_vec(&DataTypes::int().serialize_json().unwrap()).unwrap();
@@ -1882,7 +1935,7 @@ mod table_test {
 
         let table_v2 = connection.get_table(&table_path).await.unwrap();
         let writer = table_v2.new_append().unwrap().create_writer().unwrap();
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [3]),
@@ -1893,6 +1946,7 @@ mod table_test {
             )
             .unwrap();
         writer.flush().await.unwrap();
+        ack.await.unwrap();
 
         let old_id = table_v1.get_table_info().get_schema_id();
         let new_id = table_v2.get_table_info().get_schema_id();
@@ -2067,15 +2121,19 @@ mod table_test {
             (4, "EU", 400i64),
         ];
 
+        let mut acks = Vec::new();
         for (id, region, value) in &test_data {
             let mut row = GenericRow::new(3);
             row.set_field(0, *id);
             row.set_field(1, *region);
             row.set_field(2, *value);
-            append_writer.append(&row).expect("Failed to append row");
+            acks.push(append_writer.append(&row).expect("Failed to append row"));
         }
 
         append_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         // Test append_arrow_batch for partitioned tables
         let us_batch = record_batch!(
@@ -2084,7 +2142,7 @@ mod table_test {
             ("value", Int64, [500, 600])
         )
         .unwrap();
-        append_writer
+        let ack1 = append_writer
             .append_arrow_batch(us_batch)
             .expect("Failed to append US batch");
 
@@ -2094,7 +2152,7 @@ mod table_test {
             ("value", Int64, [700, 800])
         )
         .unwrap();
-        append_writer
+        let ack2 = append_writer
             .append_arrow_batch(eu_batch)
             .expect("Failed to append EU batch");
 
@@ -2102,6 +2160,9 @@ mod table_test {
             .flush()
             .await
             .expect("Failed to flush batches");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         // Test list_offsets_for_partition
         // US partition has 4 records: 2 from row append + 2 from batch append
@@ -2366,8 +2427,9 @@ mod table_test {
         row.set_field(0, 1);
         row.set_field(1, "US");
         row.set_field(2, 100_i64);
-        append_writer.append(&row).expect("Failed to append row");
+        let ack = append_writer.append(&row).expect("Failed to append row");
         append_writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let partition_infos = admin
             .list_partition_infos(&table_path)
@@ -2427,8 +2489,9 @@ mod table_test {
         row.set_field(0, 2);
         row.set_field(1, "US");
         row.set_field(2, 200_i64);
-        append_writer.append(&row).expect("Failed to append row");
+        let ack = append_writer.append(&row).expect("Failed to append row");
         append_writer.flush().await.expect("Failed to flush");
+        ack.await.expect("append ack");
 
         let ids = poll_until_count(
             1,
@@ -2524,8 +2587,9 @@ mod table_test {
         row.set_field(2, Datum::Map(attrs));
         row.set_field(3, tags);
         row.set_field(4, "ignore-me");
-        writer.append(&row).expect("append");
+        let ack = writer.append(&row).expect("append");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         // Project columns in reordered form, dropping `extra`.
         let records = scan_table(&table, |scan| {
@@ -3113,10 +3177,13 @@ mod table_test {
             row2.set_field(i, Datum::Null);
         }
 
-        writer.append(&row0).expect("append row0");
-        writer.append(&row1).expect("append row1");
-        writer.append(&row2).expect("append row2");
+        let ack1 = writer.append(&row0).expect("append row0");
+        let ack2 = writer.append(&row1).expect("append row1");
+        let ack3 = writer.append(&row2).expect("append row2");
         writer.flush().await.expect("flush");
+        for ack in [ack1, ack2, ack3] {
+            ack.await.expect("append ack");
+        }
 
         let records = scan_table(&table, |scan| scan).await;
         assert_eq!(records.len(), 3);
@@ -3615,7 +3682,7 @@ mod table_test {
             .expect("append")
             .create_writer()
             .expect("writer");
-        writer_v0
+        let ack = writer_v0
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [1, 2, 3]),
@@ -3625,6 +3692,7 @@ mod table_test {
             )
             .expect("Failed to append old-schema batch");
         writer_v0.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         // 4. Poll old-schema records
         let mut old_records = poll_until_count(
@@ -3693,7 +3761,7 @@ mod table_test {
             .expect("append")
             .create_writer()
             .expect("writer");
-        writer_v1
+        let ack = writer_v1
             .append_arrow_batch(
                 record_batch!(
                     ("id", Int32, [4, 5, 6]),
@@ -3704,6 +3772,7 @@ mod table_test {
             )
             .expect("Failed to append new-schema batch");
         writer_v1.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         // 7. Continue reading from the SAME scanner — it should handle schema
         //    evolution and return the new-schema records with the extra column.
@@ -3780,16 +3849,22 @@ mod table_test {
             .expect("writer");
 
         let row_count: i32 = 30;
+        let mut acks = Vec::new();
         for id in 1..=row_count {
             let mut row = GenericRow::new(3);
             row.set_field(0, id);
             row.set_field(1, "x");
             row.set_field(2, id as i64 * 10);
-            writer
-                .append(&row)
-                .expect("append row with mixed nullability");
+            acks.push(
+                writer
+                    .append(&row)
+                    .expect("append row with mixed nullability"),
+            );
         }
         writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let offsets = admin
             .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
@@ -3839,13 +3914,17 @@ mod table_test {
             .create_writer()
             .expect("writer");
 
+        let mut acks = Vec::new();
         for _ in 0..5 {
             let mut row = GenericRow::new(2);
             row.set_field(0, 42);
             row.set_field(1, "x");
-            writer.append(&row).expect("append row");
+            acks.push(writer.append(&row).expect("append row"));
         }
         writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let offsets = admin
             .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
@@ -3899,8 +3978,9 @@ mod table_test {
             ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
         )
         .unwrap();
-        writer.append_arrow_batch(batch).expect("append batch");
+        let ack = writer.append_arrow_batch(batch).expect("append batch");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let offsets = admin
             .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
@@ -3950,7 +4030,7 @@ mod table_test {
         let empty = record_batch!(("c1", Int32, [1]), ("c2", Utf8, ["x"]))
             .unwrap()
             .slice(0, 0);
-        writer
+        let ack1 = writer
             .append_arrow_batch(empty)
             .expect("append empty batch");
 
@@ -3959,8 +4039,11 @@ mod table_test {
             ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
         )
         .unwrap();
-        writer.append_arrow_batch(batch).expect("append batch");
+        let ack2 = writer.append_arrow_batch(batch).expect("append batch");
         writer.flush().await.expect("flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("append ack");
+        }
 
         let offsets = admin
             .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
@@ -4099,8 +4182,9 @@ mod table_test {
             ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
         )
         .unwrap();
-        writer.append_arrow_batch(batch).expect("append batch");
+        let ack = writer.append_arrow_batch(batch).expect("append batch");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
         let offsets = admin
             .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
             .await
@@ -4167,10 +4251,11 @@ mod table_test {
             ("c2", Utf8, ["j", "k", "l", "m"])
         )
         .unwrap();
-        fresh_writer
+        let ack = fresh_writer
             .append_arrow_batch(batch2)
             .expect("append batch");
         fresh_writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let offsets = admin
             .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)

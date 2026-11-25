@@ -71,6 +71,7 @@ import javax.annotation.concurrent.GuardedBy;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -104,6 +105,7 @@ public class LogFetcher implements Closeable {
     private final boolean isCheckCrcs;
     private final LogScannerStatus logScannerStatus;
     private final LogFetchBuffer logFetchBuffer;
+    private final OffsetFetcher offsetFetcher;
     private final LogFetchCollector logFetchCollector;
     private final ArrowLogFetchCollector arrowLogFetchCollector;
     private final RemoteLogDownloader remoteLogDownloader;
@@ -144,6 +146,12 @@ public class LogFetcher implements Closeable {
 
         this.isCheckCrcs = conf.getBoolean(ConfigOptions.CLIENT_SCANNER_LOG_CHECK_CRC);
         this.logFetchBuffer = new LogFetchBuffer();
+        this.offsetFetcher =
+                new OffsetFetcher(
+                        logScannerStatus,
+                        metadataUpdater,
+                        this::checkAndUpdateMetadata,
+                        logFetchBuffer);
         this.nodesWithPendingFetchRequests = new HashSet<>();
         this.metadataUpdater = metadataUpdater;
         this.logFetchCollector = new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
@@ -250,7 +258,11 @@ public class LogFetcher implements Closeable {
         logFetchBuffer.wakeup();
     }
 
-    private void checkAndUpdateMetadata(List<TableBucket> tableBuckets) {
+    void resetPositionsIfNeeded() {
+        offsetFetcher.resetPositionsIfNeeded();
+    }
+
+    private void checkAndUpdateMetadata(Collection<TableBucket> tableBuckets) {
         // Group buckets (without a leader) by tableId to support multi-table fetching.
         Map<Long, List<TableBucket>> bucketsByTable = new HashMap<>();
         for (TableBucket tb : tableBuckets) {
@@ -357,6 +369,7 @@ public class LogFetcher implements Closeable {
             }
         }
         return new FetchRequestContext(
+                logScannerStatus.assignmentVersion(),
                 requestedTableContexts,
                 new TableOrPartitions(
                         tableIdsInFetchRequest.isEmpty() ? null : tableIdsInFetchRequest,
@@ -447,6 +460,13 @@ public class LogFetcher implements Closeable {
                                             ? respForBucket.getPartitionId()
                                             : null,
                                     respForBucket.getBucketId());
+                    Long fetchOffset =
+                            logScannerStatus.getBucketOffset(
+                                    tb, fetchRequestContext.assignmentVersion);
+                    if (fetchOffset == null) {
+                        LOG.debug("Ignoring fetch response for a previous assignment of {}.", tb);
+                        continue;
+                    }
                     FetchLogResultForBucket fetchResultForBucket =
                             getFetchLogResultForBucket(tb, tablePathForResp, respForBucket);
 
@@ -457,45 +477,35 @@ public class LogFetcher implements Closeable {
                         handleFetchLogExceptionForBucket(tb, destination, error);
                     }
 
-                    Long fetchOffset = logScannerStatus.getBucketOffset(tb);
-                    // if the offset is null, it means the bucket has been unsubscribed,
-                    // we just set a Long.MAX_VALUE as the next fetch offset
-                    if (fetchOffset == null) {
-                        LOG.debug(
-                                "Ignoring fetch log response for bucket {} because the bucket has been "
-                                        + "unsubscribed.",
-                                tb);
+                    if (fetchResultForBucket.fetchFromRemote()) {
+                        pendRemoteFetches(
+                                trc,
+                                fetchResultForBucket.remoteLogFetchInfo(),
+                                fetchOffset,
+                                fetchResultForBucket.getHighWatermark());
                     } else {
-                        if (fetchResultForBucket.fetchFromRemote()) {
-                            pendRemoteFetches(
-                                    trc,
-                                    fetchResultForBucket.remoteLogFetchInfo(),
-                                    fetchOffset,
-                                    fetchResultForBucket.getHighWatermark());
-                        } else {
-                            LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
-                            boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
-                            if (hasRecords
-                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()
-                                    || fetchResultForBucket.hasFilteredEndOffset()) {
-                                // Retain the parsed buffer so it stays alive while
-                                // this CompletedFetch's records are being consumed.
-                                if (hasRecords && parsedByteBuf != null) {
-                                    parsedByteBuf.retain();
-                                }
-                                logFetchBuffer.add(
-                                        new DefaultCompletedFetch(
-                                                tb,
-                                                tablePathForResp,
-                                                fetchResultForBucket,
-                                                trc.readContext,
-                                                logScannerStatus,
-                                                // skipping CRC check if projection push downed as
-                                                // the data is pruned
-                                                isCheckCrcs,
-                                                fetchOffset,
-                                                hasRecords ? parsedByteBuf : null));
+                        LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
+                        boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
+                        if (hasRecords
+                                || fetchResultForBucket.getErrorCode() != Errors.NONE.code()
+                                || fetchResultForBucket.hasFilteredEndOffset()) {
+                            // Retain the parsed buffer so it stays alive while
+                            // this CompletedFetch's records are being consumed.
+                            if (hasRecords && parsedByteBuf != null) {
+                                parsedByteBuf.retain();
                             }
+                            logFetchBuffer.add(
+                                    new DefaultCompletedFetch(
+                                            tb,
+                                            tablePathForResp,
+                                            fetchResultForBucket,
+                                            trc.readContext,
+                                            logScannerStatus,
+                                            // skipping CRC check if projection push downed as
+                                            // the data is pruned
+                                            isCheckCrcs,
+                                            fetchOffset,
+                                            hasRecords ? parsedByteBuf : null));
                         }
                     }
                 }
@@ -707,6 +717,7 @@ public class LogFetcher implements Closeable {
     public synchronized void close() throws IOException {
         if (!isClosed) {
             isClosed = true;
+            offsetFetcher.close();
             IOUtils.closeQuietly(logFetchBuffer, "logFetchBuffer");
             IOUtils.closeQuietly(remoteLogDownloader, "remoteLogDownloader");
             for (TableReadContext tableReadContext : tableReadContexts.values()) {
@@ -734,12 +745,15 @@ public class LogFetcher implements Closeable {
 
     /** Request-scoped context snapshot. */
     private static class FetchRequestContext {
+        private final long assignmentVersion;
         private final Map<Long, TableReadContext> requestedTableContexts;
         private final TableOrPartitions tableOrPartitions;
 
         private FetchRequestContext(
+                long assignmentVersion,
                 Map<Long, TableReadContext> requestedTableContexts,
                 TableOrPartitions tableOrPartitions) {
+            this.assignmentVersion = assignmentVersion;
             this.requestedTableContexts = requestedTableContexts;
             this.tableOrPartitions = tableOrPartitions;
         }

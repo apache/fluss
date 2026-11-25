@@ -40,6 +40,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
@@ -53,10 +54,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT Case for {@link BatchScanner}. */
@@ -85,6 +88,8 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     private static final String DEFAULT_DB = "test-snapshot-scan-db";
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private RemoteFileDownloader remoteFileDownloader;
 
     @BeforeEach
@@ -104,7 +109,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testScanSnapshot() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-snapshot");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-table-snapshot");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // scan the snapshot
@@ -128,7 +133,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testScanTaggedSnapshot() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-tagged-table-snapshot");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-tagged-table-snapshot");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA)
@@ -145,7 +150,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testScanSnapshotDuringSchemaChange() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-snapshot-schema-change");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-table-snapshot-schema-change");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // put into values with old schema.
@@ -207,7 +212,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     public void testKvSnapshotLease() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-snapshot-lease");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-kv-snapshot-lease");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         String kvSnapshotLeaseId1 = "test-lease";
@@ -281,14 +286,17 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
 
         expectedRowByBuckets = putRows(tableId, tablePath, 10);
-        // wait snapshot2 finish
-        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
-        // as all leases are dropped, and new snapshot is generated, all old snapshot are
-        // cleared.
-        for (TableBucket tb : expectedRowByBuckets.keySet()) {
-            assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isFalse();
-            assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
-        }
+        Set<TableBucket> tableBuckets = expectedRowByBuckets.keySet();
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(tableBuckets);
+        // Publishing the new snapshot precedes cleanup of snapshots whose leases were dropped.
+        retry(
+                Duration.ofSeconds(30),
+                () -> {
+                    for (TableBucket tb : tableBuckets) {
+                        assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isFalse();
+                        assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
+                    }
+                });
 
         // drop no exist lease, no exception.
         admin.createKvSnapshotLease("no-exist-lease", Duration.ofDays(1).toMillis())
@@ -344,7 +352,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTableLevelScanRespectsLimit() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-level-scan-limit");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-table-level-scan-limit");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // insert 3 rows per bucket (9 total across 3 buckets)

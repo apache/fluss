@@ -32,6 +32,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
@@ -76,6 +77,8 @@ public class TabletServerShutdownITCase {
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testIOExceptionShouldStopTabletServer(boolean isLogTable) throws Exception {
@@ -99,7 +102,7 @@ public class TabletServerShutdownITCase {
                         .build();
 
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "test_failover", "test_ioexception_table_" + (isLogTable ? "log" : "pk"));
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
@@ -189,7 +192,7 @@ public class TabletServerShutdownITCase {
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
                         .build();
-        TablePath tablePath = TablePath.of("test_shutdown", "test_controlled_shutdown");
+        TablePath tablePath = tableNames.tablePath("test_shutdown", "test_controlled_shutdown");
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
 
@@ -214,7 +217,7 @@ public class TabletServerShutdownITCase {
 
     @Test
     void testControlledShutdownCleansKvWhenRestartedAsFollower() throws Exception {
-        TablePath tablePath = TablePath.of("test_shutdown", "kv_orphan_cleanup");
+        TablePath tablePath = tableNames.tablePath("test_shutdown", "kv_orphan_cleanup");
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
@@ -268,7 +271,7 @@ public class TabletServerShutdownITCase {
     void testKvRecoveryAfterStartupCleanup(boolean withSnapshot, boolean failCleanup)
             throws Exception {
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "test_shutdown", "kv_startup_recovery_" + withSnapshot + "_" + failCleanup);
         long tableId =
                 createTable(
@@ -373,7 +376,8 @@ public class TabletServerShutdownITCase {
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 2)
                         .build();
-        TablePath tablePath = TablePath.of("test_failover", "test_controlled_shutdown_failed");
+        TablePath tablePath =
+                tableNames.tablePath("test_failover", "test_controlled_shutdown_failed");
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
 

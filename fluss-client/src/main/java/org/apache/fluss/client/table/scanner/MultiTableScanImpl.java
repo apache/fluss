@@ -44,7 +44,7 @@ public class MultiTableScanImpl implements MultiTableScan {
 
     @Override
     public MultiTableLogScanner createLogScanner() {
-        return new MultiTableLogScannerImpl(
+        return MultiTableLogScannerImpl.create(
                 "multi-table-log-scanner",
                 connection.getMetadataUpdater(),
                 connection.getConfiguration(),

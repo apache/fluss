@@ -44,6 +44,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -88,6 +89,8 @@ class FlussLakeTableITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     protected Connection conn;
     protected Admin admin;
     protected Configuration clientConf;
@@ -129,7 +132,7 @@ class FlussLakeTableITCase {
 
     @Test
     void testDeleteOnPrimaryKeyTable() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_pk_table_1");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_pk_table_1");
         createTable(tablePath, TestData.DATA1_TABLE_DESCRIPTOR_PK, false);
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter tableWriter = table.newUpsert().createWriter();
@@ -158,7 +161,7 @@ class FlussLakeTableITCase {
     @ParameterizedTest
     @MethodSource("testPrimaryKeyTableArgs")
     void testPrimaryKeyTable(boolean isPartitioned, boolean isDefaultBucketKey) throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_primary_key_lake_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_primary_key_lake_table");
         Schema pkTableSchema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -228,7 +231,7 @@ class FlussLakeTableITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testLogTable(boolean isPartitioned) throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_log_lake_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_log_lake_table");
         Schema logTableSchema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -377,7 +380,7 @@ class FlussLakeTableITCase {
     @Test
     void testLegacyPKTableUsePaimonEncoder() throws Exception {
         // Create a PK table with bucket key as subset of primary key
-        TablePath tablePath = TablePath.of("fluss", "test_legacy_pk_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_legacy_pk_table");
         Schema pkTableSchema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())

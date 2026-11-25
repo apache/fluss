@@ -38,7 +38,7 @@ CALL [catalog_name.]sys.add_acl(
 
 **Parameters:**
 
-- `resource` (required): The resource to grant permissions on. Can be `'CLUSTER'` for cluster-level permissions or a specific resource name (e.g., database or table name).
+- `resource` (required): The resource to grant permissions on. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. Legacy forms such as `cluster.<database_name>` remain supported. A concrete group ID uses the same naming rules as a table name: 1–200 ASCII letters, digits, underscores, or hyphens, and must not start with `__`.
 - `permission` (required): The permission type to grant. Valid values are `'ALLOW'` or `'DENY'`.
 - `principal` (required): The principal to grant permissions to, in the format `'Type:Name'` (e.g., `'User:Alice'`).
 - `operation` (required): The operation type to grant. Valid values include `'READ'`, `'WRITE'`, `'CREATE'`, `'DELETE'`, `'ALTER'`, `'DESCRIBE'`, `'CLUSTER_ACTION'`, `'IDEMPOTENT_WRITE'`.
@@ -61,7 +61,7 @@ CALL sys.add_acl(
 
 -- Grant write permission to user Bob from a specific host
 CALL sys.add_acl(
-  resource => 'my_database.my_table',
+  resource => 'table:my_database.my_table',
   permission => 'ALLOW',
   principal => 'User:Bob',
   operation => 'WRITE',

@@ -1075,6 +1075,73 @@ double estimatedDistinctCount = HllSketch.heapify(bytes).getEstimate();
 </TabItem>
 </Tabs>
 
+### kll_double_sketch
+
+Aggregates serialized Apache DataSketches KLL doubles sketch values by merge. This is useful for
+maintaining approximate percentile or quantile state, such as latency, transaction amount, or model
+feature distributions.
+
+- **Supported Data Types**: `BYTES`
+- **Behavior**: Merges incoming KLL doubles sketches with the accumulator and stores serialized sketch bytes
+- **Null Handling**: Null values are ignored
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE daily_latency_metrics (
+    metric_day STRING,
+    latency_kll BYTES,
+    PRIMARY KEY (metric_day) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.latency_kll.agg' = 'kll_double_sketch'
+);
+```
+
+:::note
+`kll_double_sketch` expects values to be serialized Apache DataSketches KLL doubles sketches. It
+does not build sketches from raw `DOUBLE` values by itself. Users should insert serialized sketch
+bytes, and Fluss merges those sketches internally when rows with the same primary key are updated.
+Spark `approx_percentile` returns percentile values, not serialized KLL sketch bytes, so it cannot
+feed this merge engine. Flink/Spark SQL helper functions for building sketches and reading quantiles
+can be added separately.
+:::
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("metric_day", DataTypes.STRING())
+    .column("latency_kll", DataTypes.BYTES(), AggFunctions.KLL_DOUBLE_SKETCH())
+    .primaryKey("metric_day")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize KLL sketches using the Apache DataSketches library
+// KllDoublesSketch sketch1 = KllDoublesSketch.newHeapInstance();
+// sketch1.update(10.0);
+// sketch1.update(20.0);
+// byte[] bytes1 = sketch1.toByteArray();
+//
+// KllDoublesSketch sketch2 = KllDoublesSketch.newHeapInstance();
+// sketch2.update(30.0);
+// byte[] bytes2 = sketch2.toByteArray();
+
+// Input: (2026-05-16, kll{10.0,20.0}), (2026-05-16, kll{30.0})
+// Result: (2026-05-16, kll{10.0,20.0,30.0}) -- merge of the two sketches
+// To query percentiles, read the BYTES value and heapify it as a KllDoublesSketch.
+```
+
+</TabItem>
+</Tabs>
+
 ### bool_and
 
 Evaluates whether all boolean values in a set are true (logical AND).
@@ -1198,6 +1265,11 @@ Appends input arrays to the stored array and keeps the last `size` elements.
 - **Ordering**: Elements are kept in the order writes reach the server. With the default `'sink.distribution-mode'`, Flink writes for the same key go through a single sink task, so the order follows the input. Independent clients writing to the same key may interleave
 - **Null Handling**: A null input leaves the column unchanged
 - **Size**: Required, a positive integer. Creating a table without it fails
+- **Distinct**: Optional `distinct` parameter, default `false`. When `true`, removes duplicates before keeping the last `size` distinct elements. Elements are ordered by their last occurrence, including duplicates within an input array. Null elements count as one distinct value. Element equality follows `collect(distinct)`
+
+For example, with `size=3` and `distinct=true`, inputs `['a', 'b', 'c', 'c']` produce `['a', 'b', 'c']`. Appending `['b']` then produces `['a', 'c', 'b']`.
+
+Enable deduplication with `'fields.recent_events.last_n.distinct' = 'true'`, or `AggFunctions.LAST_N(3, true)` in the Java API. Upgrade the CoordinatorServer and all TabletServers before enabling this parameter. Older servers do not support this option and must not serve tables using it, including after a rollback.
 
 :::note
 Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. Keep `size` small.

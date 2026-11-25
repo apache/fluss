@@ -145,6 +145,17 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.log.check-crc" => {
+                        config.scanner_log_check_crc = match value.as_str() {
+                            "true" => true,
+                            "false" => false,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Invalid value '{other}' for '{key}', expected 'true' or 'false'"
+                                )));
+                            }
+                        };
+                    }
                     "writer.enable-idempotence" => {
                         config.writer_enable_idempotence = match value.as_str() {
                             "true" => true,
@@ -675,6 +686,18 @@ impl Config {
     #[setter]
     fn set_scanner_log_fetch_max_bytes_for_bucket(&mut self, bytes: i32) {
         self.inner.scanner_log_fetch_max_bytes_for_bucket = bytes;
+    }
+
+    /// Get whether the CRC of fetched log batches is checked
+    #[getter]
+    fn scanner_log_check_crc(&self) -> bool {
+        self.inner.scanner_log_check_crc
+    }
+
+    /// Set whether the CRC of fetched log batches is checked
+    #[setter]
+    fn set_scanner_log_check_crc(&mut self, enabled: bool) {
+        self.inner.scanner_log_check_crc = enabled;
     }
 
     /// Get the send queue capacity; new lookups wait when it is full.

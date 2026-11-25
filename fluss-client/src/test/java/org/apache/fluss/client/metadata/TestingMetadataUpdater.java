@@ -175,6 +175,15 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         }
     }
 
+    @Override
+    public TabletServerGateway newTabletServerClientForNode(ServerNode serverNode) {
+        TabletServerGateway gateway = tabletServerGatewayMap.get(serverNode.id());
+        if (gateway == null) {
+            throw new IllegalStateException("No test gateway for tablet server " + serverNode);
+        }
+        return gateway;
+    }
+
     private void initializeCluster(
             ServerNode coordinatorServer,
             List<ServerNode> tabletServers,

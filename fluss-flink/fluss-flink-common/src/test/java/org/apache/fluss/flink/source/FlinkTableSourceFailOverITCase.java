@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -83,6 +84,10 @@ abstract class FlinkTableSourceFailOverITCase {
                     .setNumOfTabletServers(3)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final String scopedTestRecreateTable = tableNames.tableName("test_recreate_table");
+    private final String resultTable = tableNames.tableName("result_table");
+
     org.apache.fluss.config.Configuration clientConf;
     ZooKeeperClient zkClient;
     Connection conn;
@@ -133,7 +138,7 @@ abstract class FlinkTableSourceFailOverITCase {
     @Test
     @MultiVersionTest
     void testRestore() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_recreate_table");
+        TablePath tablePath = TablePath.of("fluss", scopedTestRecreateTable);
         Tuple2<String, CloseableIterator<Row>> savepointPathAndResults =
                 runWithSavepoint(tablePath);
         StreamTableEnvironment tEnv = initTableEnvironment(savepointPathAndResults.f0);
@@ -141,8 +146,8 @@ abstract class FlinkTableSourceFailOverITCase {
         TableResult insertResult =
                 tEnv.executeSql(
                         String.format(
-                                "insert into result_table select * from %s",
-                                tablePath.getTableName()));
+                                "insert into %s select * from %s",
+                                resultTable, tablePath.getTableName()));
         // append a new row again to check if the source can restore the state correctly
         Table table = conn.getTable(tablePath);
         AppendWriter writer = table.newAppend().createWriter();
@@ -156,9 +161,10 @@ abstract class FlinkTableSourceFailOverITCase {
 
     @Test
     void testRestoreWithRecreateTable() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_recreate_table");
+        TablePath tablePath = TablePath.of("fluss", scopedTestRecreateTable);
         Tuple2<String, CloseableIterator<Row>> savepointPathAndResults =
                 runWithSavepoint(tablePath);
+        long oldTableId = zkClient.getTable(tablePath).get().tableId;
         StreamTableEnvironment tEnv = initTableEnvironment(savepointPathAndResults.f0);
 
         // drop and recreate the table.
@@ -167,16 +173,23 @@ abstract class FlinkTableSourceFailOverITCase {
                 String.format(
                         "create table %s (" + "a int, b varchar" + ") partitioned by (b) ",
                         tablePath.getTableName()));
+        long newTableId = zkClient.getTable(tablePath).get().tableId;
 
         TableResult insertResult =
                 tEnv.executeSql(
                         String.format(
-                                "insert into result_table select * from %s",
-                                tablePath.getTableName()));
+                                "insert into %s select * from %s",
+                                resultTable, tablePath.getTableName()));
         assertThatThrownBy(() -> insertResult.getJobClient().get().getJobExecutionResult().get())
                 .rootCause()
                 .hasMessageContaining(
-                        "Table ID mismatch: expected 2, but split contains 0 for table 'fluss.test_recreate_table'. "
+                        "Table ID mismatch: expected "
+                                + newTableId
+                                + ", but split contains "
+                                + oldTableId
+                                + " for table '"
+                                + tablePath
+                                + "'. "
                                 + "This usually happens when a table with the same name was dropped and recreated between job runs, "
                                 + "causing metadata inconsistency. To resolve this, please restart the job **without** "
                                 + "using the previous savepoint or checkpoint.");
@@ -196,7 +209,7 @@ abstract class FlinkTableSourceFailOverITCase {
                                 + "'scan.partition.discovery.interval' = '100ms',"
                                 + "'table.auto-partition.num-precreate' = '1')",
                         tablePath.getTableName()));
-        tEnv.executeSql("create table result_table (a int, b varchar)");
+        tEnv.executeSql("create table " + resultTable + " (a int, b varchar)");
 
         // create a partition manually
         createPartitions(zkClient, tablePath, Collections.singletonList("4000"));
@@ -219,11 +232,11 @@ abstract class FlinkTableSourceFailOverITCase {
         TableResult insertResult =
                 tEnv.executeSql(
                         String.format(
-                                "insert into result_table select * from %s",
-                                tablePath.getTableName()));
+                                "insert into %s select * from %s",
+                                resultTable, tablePath.getTableName()));
         // we have to create an intermediate table to collect result,
         // because CollectSink can't be restored from savepoint
-        CloseableIterator<Row> results = tEnv.executeSql("select * from result_table").collect();
+        CloseableIterator<Row> results = tEnv.executeSql("select * from " + resultTable).collect();
         assertResultsIgnoreOrder(results, expected, false);
         expected.clear();
 

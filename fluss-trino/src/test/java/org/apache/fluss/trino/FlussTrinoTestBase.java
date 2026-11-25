@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.IOUtils;
 
 import io.trino.spi.predicate.TupleDomain;
@@ -69,6 +70,7 @@ abstract class FlussTrinoTestBase {
     Admin admin;
     FlussMetadataAccess access;
 
+    private TestTableNames tableNames;
     private Connection catalogConnection;
     private RpcClient sharedRpcClient;
     private MetadataUpdater testMetadataUpdater;
@@ -92,6 +94,8 @@ abstract class FlussTrinoTestBase {
 
     @BeforeEach
     void openClients() {
+        // PER_CLASS fixtures need a new namespace for each test invocation.
+        tableNames = new TestTableNames();
         testMetadataUpdater = null;
         dataConnection = null;
 
@@ -218,6 +222,10 @@ abstract class FlussTrinoTestBase {
                         clientConfig(), ignored -> adminOnlyConnection(() -> replacement));
         clients.getAdmin();
         access = new FlussMetadataAccess(clients);
+    }
+
+    String databaseName(String name) {
+        return tableNames.tableName(name);
     }
 
     void createDatabase(String name) throws Exception {

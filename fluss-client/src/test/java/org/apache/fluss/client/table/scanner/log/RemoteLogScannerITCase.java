@@ -37,9 +37,11 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.clock.ManualClock;
 
@@ -58,9 +60,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
-import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -79,6 +79,10 @@ public class RemoteLogScannerITCase {
                     .setClock(MANUAL_CLOCK)
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data2TablePath = tableNames.tablePath(TestData.DATA2_TABLE_PATH);
+
     private Connection conn;
     private Admin admin;
 
@@ -93,12 +97,12 @@ public class RemoteLogScannerITCase {
     void testScanFromRemote() throws Exception {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
-        long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor);
+        long tableId = createTable(data1TablePath, tableDescriptor);
 
         // append a batch of data.
         int recordSize = 20;
         List<GenericRow> expectedRows = new ArrayList<>();
-        Table table = conn.getTable(DATA1_TABLE_PATH);
+        Table table = conn.getTable(data1TablePath);
         AppendWriter appendWriter = table.newAppend().createWriter();
         for (int i = 0; i < recordSize; i++) {
             GenericRow row = row(i, "aaaaa");
@@ -127,7 +131,8 @@ public class RemoteLogScannerITCase {
 
     @Test
     void testAlterTableLogTtlAffectsFetch() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_alter_table_log_ttl_affects_fetch");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_alter_table_log_ttl_affects_fetch");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -204,10 +209,10 @@ public class RemoteLogScannerITCase {
                         .distributedBy(1)
                         .logFormat(LogFormat.fromString(format))
                         .build();
-        long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor);
+        long tableId = createTable(data1TablePath, tableDescriptor);
 
         // append a batch of data.
-        Table table = conn.getTable(DATA1_TABLE_PATH);
+        Table table = conn.getTable(data1TablePath);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int expectedSize = 30;
         for (int i = 0; i < expectedSize; i++) {
@@ -280,7 +285,7 @@ public class RemoteLogScannerITCase {
                         .column("c", DataTypes.STRING())
                         .withComment("c is adding column")
                         .build();
-        final TablePath tablePath = DATA2_TABLE_PATH;
+        final TablePath tablePath = data2TablePath;
 
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder()

@@ -30,6 +30,7 @@ Complete API reference for the Fluss Python client.
 | `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
 | `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
 | `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
+| `scanner_log_check_crc`               | `scanner.log.check-crc`               | Get/set whether the CRC of fetched log batches is checked (default `true`); batches the server projected are not checked |
 | `lookup_queue_size`                   | `lookup.queue-size`                   | Get/set send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error (default `25600`) |
 | `lookup_max_batch_size`               | `lookup.max-batch-size`               | Get/set maximum number of lookups merged into one request (default `128`)               |
 | `lookup_batch_timeout_ms`             | `lookup.batch-timeout-ms`             | Get/set maximum time in ms a lookup waits for its batch to fill (default `100`)         |

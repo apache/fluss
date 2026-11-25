@@ -806,6 +806,15 @@ public class ConfigOptions {
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
+    public static final ConfigOption<String> TABLET_SERVER_SOFTWARE_VERSION =
+            key("tablet-server.software-version")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The software version this tablet server reports in Admin.describeCluster(). "
+                                    + "If unset or blank, the server uses the Implementation-Version "
+                                    + "from its JAR manifest. If neither is available, the version is omitted.");
+
     public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
             key("tablet-server.advertised-resource.cpu-cores")
                     .doubleType()
@@ -1415,7 +1424,9 @@ public class ConfigOptions {
             key("client.connect-timeout")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(15))
-                    .withDescription("The Netty client connect timeout.");
+                    .withDescription(
+                            "The Netty client connect timeout. With TLS enabled, this option is also used "
+                                    + "for the TLS handshake timeout.");
 
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
             key("bootstrap.servers")
@@ -1711,7 +1722,10 @@ public class ConfigOptions {
                     .defaultValue(false)
                     .withDescription(
                             "Whether the client connects over TLS. Must match the listener it "
-                                    + "connects to (`security.ssl.enabled.listeners`).");
+                                    + "connects to (`security.ssl.enabled.listeners`). In the "
+                                    + "server configuration it controls the connections between "
+                                    + "servers, so it must be true exactly when the internal "
+                                    + "listener (`internal.listener.name`) is TLS-enabled.");
 
     public static final ConfigOption<List<String>> CLIENT_SSL_ENABLED_PROTOCOLS =
             key("client.security.ssl.enabled.protocols")
@@ -1940,6 +1954,34 @@ public class ConfigOptions {
                             "Local directory that is used by client for"
                                     + " storing the data files (like kv snapshot, log segment files) to read temporarily");
 
+    public static final ConfigOption<String> CLIENT_CONSUMER_GROUP_ID =
+            key("client.consumer.group.id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A unique identifier for the consumer group used to store offsets.");
+
+    public static final ConfigOption<Boolean> CLIENT_CONSUMER_AUTO_COMMIT_ENABLED =
+            key("client.consumer.auto-commit.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether consumed offsets are committed periodically in the background.");
+
+    public static final ConfigOption<Duration> CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL =
+            key("client.consumer.auto-commit.interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(5))
+                    .withDescription("The interval between automatic consumer offset commits.");
+
+    public static final ConfigOption<ConsumerOffsetReset> CLIENT_CONSUMER_AUTO_OFFSET_RESET =
+            key("client.consumer.auto-offset-reset")
+                    .enumType(ConsumerOffsetReset.class)
+                    .defaultValue(ConsumerOffsetReset.EARLIEST)
+                    .withDescription(
+                            "Controls the starting position when no committed offset exists. "
+                                    + "Supported values are earliest, latest, and none.");
+
     public static final ConfigOption<Integer> REMOTE_FILE_DOWNLOAD_THREAD_NUM =
             key("client.remote-file.download-thread-num")
                     .intType()
@@ -2029,6 +2071,18 @@ public class ConfigOptions {
                                     + ". It should be a positive number and not larger than the number of tablet servers in the "
                                     + "Fluss cluster. A value larger than the number of tablet servers in Fluss cluster "
                                     + "will result in an error when the new table is created.");
+
+    public static final ConfigOption<Integer> TABLE_MIN_IN_SYNC_REPLICAS =
+            key("table.min-in-sync-replicas")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The minimum number of in-sync replicas, including the leader, required for writes to "
+                                    + "both primary-key and log tables with client.writer.acks set to all (-1). "
+                                    + "If not configured, the table uses the current value of "
+                                    + LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()
+                                    + ". The value must be positive and not larger than table.replication.factor. "
+                                    + "This option can only be configured when creating a table.");
 
     public static final ConfigOption<LogFormat> TABLE_LOG_FORMAT =
             key("table.log.format")

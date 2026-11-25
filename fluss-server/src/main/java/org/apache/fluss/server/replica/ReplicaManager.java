@@ -31,6 +31,7 @@ import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -667,6 +668,9 @@ public class ReplicaManager implements ServerReconfigurable {
     private void updateReplicaTableInfo(ClusterMetadata clusterMetadata) {
         Map<Long, TableInfo> tableInfosById = new HashMap<>();
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
+            if (tableMetadata.isDeleted()) {
+                continue;
+            }
             TableInfo tableInfo = tableMetadata.getTableInfo();
             tableInfosById.put(tableInfo.getTableId(), tableInfo);
         }
@@ -1491,6 +1495,21 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
+                // An import always advances the leader epoch. Observe that publication before
+                // reading its recovery snapshot on this ZooKeeper session.
+                if (replica.isKvTable()
+                        && !replica.isHistoricalPartition()
+                        && data.getLeaderEpoch() > LeaderAndIsr.INITIAL_LEADER_EPOCH
+                        && replica.requiresLeaderActivation(data.getLeaderEpoch())
+                        && !zkClient.getLeaderAndIsr(tb)
+                                .filter(role -> role.leaderEpoch() >= data.getLeaderEpoch())
+                                .isPresent()) {
+                    throw new LeaderNotAvailableException(
+                            "Leader epoch "
+                                    + data.getLeaderEpoch()
+                                    + " is not yet visible for "
+                                    + tb);
+                }
                 replica.makeLeader(data);
 
                 // start the remote log tiering tasks for leaders
@@ -2307,7 +2326,7 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private void ensureWritableForNewKvLeader(Replica replica, int requestLeaderEpoch) {
-        if (!replica.isKvTable() || requestLeaderEpoch <= replica.getLeaderEpoch()) {
+        if (!replica.isKvTable() || !replica.requiresLeaderActivation(requestLeaderEpoch)) {
             return;
         }
 

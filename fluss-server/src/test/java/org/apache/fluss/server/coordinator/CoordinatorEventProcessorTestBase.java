@@ -31,6 +31,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -130,7 +131,9 @@ class CoordinatorEventProcessorTestBase {
                             "rack" + i,
                             Collections.singletonList(
                                     new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
-                            System.currentTimeMillis()));
+                            System.currentTimeMillis(),
+                            TabletServerResource.unknown(),
+                            null));
         }
     }
 
@@ -245,7 +248,9 @@ class CoordinatorEventProcessorTestBase {
                         "rack" + serverId,
                         Collections.singletonList(
                                 new Endpoint("host" + serverId, 1001, DEFAULT_LISTENER_NAME)),
-                        System.currentTimeMillis()));
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null));
     }
 
     /** Retries assertions against state read on the coordinator event thread. */

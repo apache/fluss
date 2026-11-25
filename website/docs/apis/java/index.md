@@ -147,16 +147,24 @@ System.out.println(tableInfo);
 ## Cluster Inspection
 
 Since Fluss 1.1, `Admin.describeCluster()` returns a `ClusterDescription` containing the coordinator,
-live tablet server nodes (addresses, racks and server tags), and replica loads. Both tablet server
+live tablet server nodes (addresses, racks, server tags and software versions), and replica loads. Both tablet server
 maps are keyed by server ID:
 
 ```java
 ClusterDescription cluster = admin.describeCluster().get();
 int serverId = 1;
 ServerNode node = cluster.getTabletServers().get(serverId);
+String softwareVersion = node == null ? null : node.softwareVersion();
 TabletServerDescription load = cluster.getTabletServerLoads().get(serverId);
 boolean hasNoAssignedReplicas = load != null && load.getNumReplicas() == 0;
 ```
+
+Each tablet server reports its configured `tablet-server.software-version`, or its server JAR's
+`Implementation-Version` when the option is unset or blank. For example, start one instance with
+`bin/tablet-server.sh start -Dtablet-server.software-version=1.1.0-vendor.2` to override the JAR
+version for that process. The version is `null` if unavailable
+or when an older server omits it. To track a rolling upgrade, compare each expected server ID's
+reported version with the target. Keep IDs missing from the live node map in the expected count.
 
 The load map also includes offline servers that still have assigned replicas, so a server may have
 a load entry without a live node entry. Live servers with no replicas have explicit zero counts.
@@ -173,7 +181,7 @@ This API requires `DESCRIBE` permission on the cluster and refreshes metadata an
 retriable failures, including coordinator address changes. Servers that do not support it return
 `UnsupportedVersionException`. For basic discovery, `Admin.getServerNodes()` continues to return
 the coordinator and live tablet servers without requiring cluster `DESCRIBE` permission; it does
-not include server tags or replica loads.
+not include server tags, software versions or replica loads.
 
 ## Table Statistics
 
@@ -272,6 +280,22 @@ while (true) {
     }
     scanned += scanRecords.count();
 }
+```
+
+#### Consumer Group Configuration
+
+For group IDs, automatic commits, and the starting position when a bucket has no committed
+offset, see [Client consumer groups](../../maintenance/configuration.md#client-consumer-groups).
+
+For example, configure a group and disable automatic commits if the application commits offsets
+explicitly with `scanner.commitSync()` or `scanner.commitAsync()`:
+
+```java
+Configuration conf = new Configuration();
+conf.setString("bootstrap.servers", "localhost:9123");
+conf.setString("client.consumer.group.id", "orders-reader");
+conf.setBoolean("client.consumer.auto-commit.enabled", false);
+Connection connection = ConnectionFactory.createConnection(conf);
 ```
 
 #### Filter Pushdown

@@ -27,6 +27,7 @@ import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -109,9 +110,12 @@ class FlinkCatalogTest {
     private static final FlinkConversionsTest.TestRefreshHandler REFRESH_HANDLER =
             new FlinkConversionsTest.TestRefreshHandler("jobID: xxx, clusterId: yyy");
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private Catalog catalog;
     private MockLakeFlinkCatalog mockLakeCatalog;
-    private final ObjectPath tableInDefaultDb = new ObjectPath(DEFAULT_DB, "t1");
+    private final ObjectPath tableInDefaultDb =
+            new ObjectPath(DEFAULT_DB, tableNames.tableName("t1"));
 
     private static Configuration initConfig() {
         Configuration configuration = new Configuration();
@@ -511,7 +515,7 @@ class FlinkCatalogTest {
 
     @Test
     void testCreateAndDropMaterializedTable() throws Exception {
-        ObjectPath mt1 = new ObjectPath(DEFAULT_DB, "mt1");
+        ObjectPath mt1 = new ObjectPath(DEFAULT_DB, tableNames.tableName("mt1"));
         CatalogMaterializedTable materializedTable =
                 newCatalogMaterializedTable(
                         this.createSchema(),
@@ -582,12 +586,19 @@ class FlinkCatalogTest {
                         this.createSchema(),
                         CatalogMaterializedTable.RefreshMode.CONTINUOUS,
                         Collections.emptyMap());
-        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt1"), materializedTable, false);
-        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt2"), materializedTable, false);
+        catalog.createTable(
+                new ObjectPath(DEFAULT_DB, tableNames.tableName("mt1")), materializedTable, false);
+        catalog.createTable(
+                new ObjectPath(DEFAULT_DB, tableNames.tableName("mt2")), materializedTable, false);
 
         assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB))
-                .containsExactlyInAnyOrder("mt1", "mt2");
-        assertThat(catalog.listTables(DEFAULT_DB)).containsExactlyInAnyOrder("t1", "mt1", "mt2");
+                .containsExactlyInAnyOrder(
+                        tableNames.tableName("mt1"), tableNames.tableName("mt2"));
+        assertThat(catalog.listTables(DEFAULT_DB))
+                .containsExactlyInAnyOrder(
+                        tableInDefaultDb.getObjectName(),
+                        tableNames.tableName("mt1"),
+                        tableNames.tableName("mt2"));
 
         assertThatThrownBy(() -> flinkCatalog.listMaterializedTables("non_exist_db"))
                 .isInstanceOf(DatabaseNotExistException.class)
@@ -597,7 +608,7 @@ class FlinkCatalogTest {
 
     @Test
     void testAlterMaterializedTable() throws Exception {
-        ObjectPath mt2 = new ObjectPath(DEFAULT_DB, "mt2");
+        ObjectPath mt2 = new ObjectPath(DEFAULT_DB, tableNames.tableName("mt2"));
         CatalogMaterializedTable materializedTable =
                 newCatalogMaterializedTable(
                         this.createSchema(),
@@ -830,11 +841,13 @@ class FlinkCatalogTest {
 
         // create a none partitioned table.
         CatalogTable table = this.newCatalogTable(Collections.emptyMap());
-        ObjectPath path1 = new ObjectPath(DEFAULT_DB, "t1");
+        ObjectPath path1 = new ObjectPath(DEFAULT_DB, tableNames.tableName("t1"));
         catalog.createTable(path1, table, false);
         assertThatThrownBy(() -> catalog.listPartitions(path1))
                 .isInstanceOf(TableNotPartitionedException.class)
-                .hasMessage("Table fluss.t1 in catalog test-catalog is not partitioned.");
+                .hasMessage(
+                        "Table %s in catalog test-catalog is not partitioned.",
+                        path1.getFullName());
 
         // create partition table and list partitions.
         ObjectPath path2 = new ObjectPath(DEFAULT_DB, "partitioned_t1");
