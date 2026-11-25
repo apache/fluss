@@ -1511,11 +1511,13 @@ However, when using the Fluss client API directly (outside of Flink), exactly-on
 
 For detailed information about Exactly-Once implementation, please refer to: [FIP-21: Aggregation Merge Engine](https://cwiki.apache.org/confluence/display/FLUSS/FIP-21%3A+Aggregation+Merge+Engine)
 
-### Single Writer with Flink
+### Undo Recovery for Full-Row Writes
 
-A Flink job writing an aggregation table must be the table's only writer. On recovery, the job rolls back every change in each bucket since its last checkpointed write, including changes from other jobs or clients. Partitions created after the checkpoint are rolled back in full.
+When a Flink job writes full rows to an aggregation table, restoring the job from a checkpoint can undo other writers’ changes in the same bucket. The checkpoint records the job’s own write position in each bucket. Another writer’s changes after that position can be undone even if they were written before the checkpoint was taken.
 
-For example, with `v` aggregated by `sum`: the job writes `(1, 10)` and checkpoints. Another client then writes `(1, 100)` and `(1001, 7)`, so id 1 sums to 110. If the job fails and restarts, id 1 goes back to 10 and id 1001 is deleted.
+For example, a Flink job writes a row with key `1` and takes a checkpoint. Another writer then inserts key `1001` in the same bucket. Restoring the job from that checkpoint deletes key `1001`, even though the job never wrote that key.
+
+Multiple Flink jobs can write the same key when each uses explicit partial updates and their non-key target columns do not overlap. If one job updates `price` and another updates `stock`, recovering the `price` job preserves the `stock` update.
 
 :::
 
