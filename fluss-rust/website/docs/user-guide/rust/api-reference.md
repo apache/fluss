@@ -231,7 +231,7 @@ for (bucket, outcome) in outcomes {
 | `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
 | `commit_sync().await` | Commit progress from completed polls, including ranges skipped by the filter even when no rows were returned. Prefetch is excluded. Process all returned records first. |
 | `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
-| `commit_async()` / `commit_offsets_async(offsets)` | Return an `OffsetCommitHandle`, capturing the offsets at invocation. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
+| `commit_async()` / `commit_offsets_async(offsets)` | Call from a Tokio runtime to enqueue and capture the offsets. Outside a runtime, the call returns an error. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
 
 `OffsetsInitializer::committed(group_id)` uses `earliest()` for missing commits. Use
 `committed_with_fallback(group_id, strategy)` to choose `latest()`, `timestamp(ms)`, `offset(n)`
@@ -252,8 +252,7 @@ digits, underscores or hyphens, without a `__` prefix. For nonpartitioned bucket
 Offset operations reuse the connection's authentication credentials. Selected-offset queries need
 DESCRIBE on each source table; commits need READ. Servers with group ACLs also enforce permissions
 on the group. Authorization failures are returned to the caller and never trigger offset fallback.
-Reading after processing without a successful commit can replay records after reconnecting;
-closing a scanner or connection does not commit automatically.
+Records processed after the last successful commit can replay after reconnecting.
 
 On a broken connection or an owner change, the scanner rediscovers the owner and retries the same
 offsets and metadata within the operation deadline. Inspect every bucket in a partial response;
@@ -276,15 +275,16 @@ not atomic with writes to an external sink. No cross-process fencing token is se
 consumer requires stopping the previous writer before the replacement starts committing.
 
 `ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
-after preceding queued commits finish. A scanner admits up to 64 pending commits. If admission returns
+after preceding queued commits finish. If the owner does not answer before this deadline, the next
+commit discovers the owner again. A scanner admits up to 64 pending commits. If admission returns
 `Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A deadline reached before any attempt starts writing rejects only that commit.  Existing scanners with
 no group retain their behavior. Offset persistence requires a server implementing discovery,
 commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
 consumer offsets. A committed offset that has expired from log retention is not silently reset.
 
 Use `subscribe_from_committed(buckets, fallback)` to resolve this scanner's group on poll.
-A short poll can return empty while lookup continues. Use `subscribe_with_initializer` when
-subscription must finish resolving the entire selection before returning.
+A short poll can return empty while lookup continues. Use `OffsetsInitializer::latest()` to capture the end during subscription. Use `LATEST_OFFSET` or
+`OffsetsInitializer::latest_on_poll()` to resolve each bucket’s end independently during poll.
 
 ### Periodic commits and multiple tables
 
@@ -293,9 +293,9 @@ using the current positions, including explicit seeks. Process the whole previou
 polling again. There is no timer writing offsets while the application is processing a batch.
 Poll does not wait for a periodic commit. Failures are logged. After an unknown outcome, the same per-bucket rewind rules apply as for explicit commits.
 
-A multi-table scanner accepts an empty initial table list; call `register_table(path)` to obtain its table ID and schema before assigning buckets.
+A multi-table scanner accepts an empty initial table list; call `register_table(path)` to obtain its table ID and schema before assigning buckets. Unsubscribing the last bucket releases that table’s scanner. If a table is recreated, unsubscribe its old buckets and register the path again to obtain the new ID.
 
-For shutdown, finish processing the last result, await `scanner.close()` to commit the final positions when auto-commit is enabled. Drop alone does not commit. Applications
+For shutdown, finish processing the last result, call `commit_sync()` and inspect each bucket to confirm the final positions, then await `scanner.close()`. Close submits a periodic commit only if due and waits up to the group timeout for outstanding commits. Drop alone does not commit. Applications
 that dispatch work to another thread should use explicit commits after that work completes.
 
 ```rust,ignore

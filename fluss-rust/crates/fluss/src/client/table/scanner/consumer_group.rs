@@ -31,6 +31,7 @@ pub struct OffsetsInitializer(Initializer);
 #[derive(Debug, Clone, PartialEq)]
 enum Initializer {
     Earliest,
+    LatestOnPoll,
     Offset(i64),
     Lookup(crate::rpc::message::OffsetSpec),
     Fail,
@@ -45,6 +46,10 @@ impl OffsetsInitializer {
     /// Starts at the current end of each bucket.
     pub fn latest() -> Self {
         Self(Initializer::Lookup(crate::rpc::message::OffsetSpec::Latest))
+    }
+    /// Resolves each bucket's end independently during poll.
+    pub fn latest_on_poll() -> Self {
+        Self(Initializer::LatestOnPoll)
     }
     /// Starts at the first offset at or after a Unix timestamp in milliseconds.
     pub fn timestamp(timestamp_ms: i64) -> Self {
@@ -71,7 +76,7 @@ impl OffsetsInitializer {
     }
 }
 
-/// Failure while persisting the final offset snapshot.
+/// Failure while committing an automatic offset snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum AutoCommitError {
     /// Request failure. A possibly late write restricts rewinds on its buckets.
@@ -133,16 +138,11 @@ impl AutoCommit {
         }
     }
 
-    pub(super) async fn finish(
-        group: &Arc<ConsumerGroup>,
-    ) -> std::result::Result<(), AutoCommitError> {
-        let snapshot = group.delivered.lock().clone();
-        Self::check(
-            group
-                .enqueue(snapshot)
-                .map_err(OffsetCommitError::Rejected)?,
-        )
-        .await
+    pub(super) async fn finish(auto: Option<&Self>, group: &Arc<ConsumerGroup>) {
+        if let Some(auto) = auto {
+            auto.before_poll(group);
+        }
+        group.await_pending_commits().await;
     }
 }
 
@@ -225,7 +225,12 @@ impl LogScannerInner {
                         }
                     }
                     for (fallback, ids) in missing {
-                        offsets.extend(scanner.resolve_initializer(&ids, &fallback).await?);
+                        if fallback == OffsetsInitializer::latest() {
+                            offsets
+                                .extend(ids.into_iter().map(|b| (b, crate::client::LATEST_OFFSET)));
+                        } else {
+                            offsets.extend(scanner.resolve_initializer(&ids, &fallback).await?);
+                        }
                     }
                     scanner.prepare_bucket_metadata(&offsets).await?;
                     Ok(offsets)
@@ -317,6 +322,9 @@ impl LogScannerInner {
                 Initializer::Fail => {
                     return Err(invalid("No committed offset and no fallback provided"));
                 }
+                Initializer::LatestOnPoll => {
+                    offsets.extend(pending.drain(..).map(|b| (b, crate::client::LATEST_OFFSET)));
+                }
                 Initializer::Earliest => {
                     offsets.extend(
                         pending
@@ -407,12 +415,12 @@ macro_rules! group_methods {
 
             /// Commits current positions, including seeks and ranges skipped by the filter.
             /// Process all returned records first; use `commit_offsets_async` for partial batches.
-            /// Subscriptions, seeks and polls must be driven by one consumer task.
+            /// Call from a Tokio runtime. Drive subscriptions, seeks and polls from one consumer task.
             pub fn commit_async(&self) -> Result<OffsetCommitHandle> {
                 self.commit_offsets_async(self.inner.delivered_offsets()?)
             }
 
-            /// Enqueues explicit next offsets. The scanner submits commits in call order.
+            /// Enqueues explicit next offsets from a Tokio runtime, in call order.
             /// Dropping or aborting the handle does not cancel the commit. No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
             /// At most 64 commits may be pending per scanner. A full queue returns
@@ -428,13 +436,12 @@ macro_rules! group_methods {
                 self.inner.group()?.enqueue(offsets)
             }
 
-            /// Closes the scanner, waiting for a final snapshot if automatic commits are enabled.
+            /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
+            /// To confirm the final position, call `commit_sync` and inspect its result before close.
             /// Dropping the scanner without closing it does not commit.
             pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
-                if let (Some(_), Some(group)) =
-                    (&self.inner.auto_commit, &self.inner.consumer_group)
-                {
-                    AutoCommit::finish(group).await?;
+                if let Some(group) = &self.inner.consumer_group {
+                    AutoCommit::finish(self.inner.auto_commit.as_ref(), group).await;
                 }
                 Ok(())
             }

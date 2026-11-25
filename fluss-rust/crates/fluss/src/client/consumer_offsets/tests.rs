@@ -380,3 +380,48 @@ async fn empty_admin_selections_complete_without_a_server() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn draining_commits_uses_one_deadline_even_when_a_reply_is_missing() {
+    use futures::FutureExt;
+    let peer = CommitPeer::start([Reply::Withhold]).await;
+    let handle = peer.enqueue(5).unwrap();
+    let drain = peer.group.await_pending_commits();
+    tokio::pin!(drain);
+    assert!(drain.as_mut().now_or_never().is_none());
+    drain.await;
+    assert!(matches!(
+        handle.await.unwrap(),
+        Err(OffsetCommitError::Unknown(_))
+    ));
+}
+
+#[tokio::test]
+async fn handshake_timeout_discards_stale_owner_before_next_commit() {
+    let peer = CommitPeer::start([]).await;
+    // TCP connects, but the old owner never answers ApiVersions.
+    let old = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    *peer.group.client.owner.lock() = Some(ServerNode::new(
+        2,
+        "127.0.0.1".into(),
+        old.local_addr().unwrap().port().into(),
+        ServerType::TabletServer,
+    ));
+    assert!(matches!(
+        peer.commit(10).await,
+        Err(OffsetCommitError::Rejected(_))
+    ));
+    peer.commit(9).await.unwrap();
+    assert_eq!(*peer.received.lock(), [9]);
+}
+
+#[tokio::test]
+async fn enqueue_without_runtime_returns_an_error() {
+    let peer = CommitPeer::start([]).await;
+    let group = peer.group.clone();
+    let result = std::thread::spawn(move || group.enqueue(HashMap::new()))
+        .join()
+        .unwrap();
+    assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+    peer.commit(10).await.unwrap();
+}

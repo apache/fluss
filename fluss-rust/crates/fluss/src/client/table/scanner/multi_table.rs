@@ -72,7 +72,7 @@ impl MultiTableScan<'_> {
         Ok(self)
     }
 
-    /// Disables periodic and final commits.
+    /// Disables automatic commits.
     pub fn without_auto_commit(mut self) -> Self {
         self.auto_commit = None;
         self
@@ -85,7 +85,8 @@ impl MultiTableScan<'_> {
             self.connection.get_metadata(),
         ));
         let mut inner = MultiTableInner {
-            scanners: Vec::new(),
+            scanners: RwLock::new(Arc::default()),
+            initial_tables: self.tables.iter().map(|t| t.table_path.clone()).collect(),
             group,
             batch,
             config: self.connection.config().clone(),
@@ -96,7 +97,8 @@ impl MultiTableScan<'_> {
             next: AtomicUsize::new(0),
         };
         for info in self.tables {
-            inner.add_table(&info)?;
+            let scanner = inner.build_table(&info)?;
+            Arc::make_mut(inner.scanners.get_mut()).push(scanner);
         }
         Ok(inner)
     }
@@ -123,14 +125,15 @@ struct MultiTableInner {
     metadata: Arc<Metadata>,
     connections: Arc<RpcClient>,
     admin: Arc<crate::client::FlussAdmin>,
-    scanners: Vec<Arc<LogScannerInner>>,
+    scanners: RwLock<Arc<Vec<Arc<LogScannerInner>>>>,
+    initial_tables: HashSet<TablePath>,
     group: Arc<ConsumerGroup>,
     auto_commit: Option<AutoCommit>,
     next: AtomicUsize,
 }
 
 impl MultiTableInner {
-    fn add_table(&mut self, info: &TableInfo) -> Result<()> {
+    fn build_table(&self, info: &TableInfo) -> Result<Arc<LogScannerInner>> {
         validate_scan_support_inner(&info.table_path, info, !self.batch)?;
         let mut scanner = LogScannerInner::new(
             info,
@@ -143,37 +146,78 @@ impl MultiTableInner {
             self.admin.clone(),
         )?;
         scanner.consumer_group = Some(self.group.clone());
-        self.scanners.push(Arc::new(scanner));
-        Ok(())
+        Ok(Arc::new(scanner))
     }
 
     async fn register(&mut self, path: &TablePath) -> Result<&TableInfo> {
-        if let Some(index) = self.scanners.iter().position(|s| &s.table_path == path) {
-            let s = &self.scanners[index];
-            if !s.log_scanner_status.get_all_subscriptions().is_empty()
-                || !s.pending_starts.lock().buckets.is_empty()
-            {
-                return Ok(&self.scanners[index].table_info);
+        if let Some(index) = self
+            .scanners
+            .get_mut()
+            .iter()
+            .position(|s| &s.table_path == path)
+        {
+            let s = self.scanners.get_mut()[index].clone();
+            if s.has_subscriptions() {
+                self.check_identity(&s)?;
+                return Ok(&self.scanners.get_mut()[index].table_info);
             }
             let info = self.admin.get_table_info(path).await?;
-            if info.table_id == s.table_id && info.get_schema_id() == s.table_info.get_schema_id() {
-                return Ok(&self.scanners[index].table_info);
+            if info.table_id != s.table_id || info.get_schema_id() != s.table_info.get_schema_id() {
+                let scanner = self.build_table(&info)?;
+                Arc::make_mut(self.scanners.get_mut())[index] = scanner;
             }
-            self.add_table(&info)?;
-            self.scanners.swap_remove(index);
-            return Ok(&self.scanners[index].table_info);
+            return Ok(&self.scanners.get_mut()[index].table_info);
         }
         let info = self.admin.get_table_info(path).await?;
-        self.add_table(&info)?;
-        Ok(&self.scanners.last().unwrap().table_info)
+        let scanner = self.build_table(&info)?;
+        let scanners = Arc::make_mut(self.scanners.get_mut());
+        scanners.push(scanner);
+        Ok(&scanners.last().unwrap().table_info)
     }
 
-    fn scanner(&self, id: i64) -> Result<&LogScannerInner> {
-        self.scanners
+    fn check_identity(&self, scanner: &LogScannerInner) -> Result<()> {
+        if self
+            .metadata
+            .get_cluster()
+            .get_table_id(&scanner.table_path)
+            .is_some_and(|id| id != scanner.table_id)
+        {
+            return Err(invalid(&format!(
+                "Table {} was recreated; unsubscribe its old buckets and register the table again",
+                scanner.table_path
+            )));
+        }
+        Ok(())
+    }
+
+    fn scanner(&self, id: i64) -> Result<Arc<LogScannerInner>> {
+        if let Some(s) = self.scanners.read().iter().find(|s| s.table_id == id) {
+            self.check_identity(s)?;
+            return Ok(s.clone());
+        }
+        // Initial tables may be subscribed again by ID after their last bucket was released.
+        let cluster = self.metadata.get_cluster();
+        let info = cluster
+            .get_table_path_by_id(id)
+            .filter(|p| self.initial_tables.contains(*p))
+            .and_then(|p| cluster.opt_get_table(p))
+            .filter(|t| t.table_id == id)
+            .ok_or_else(|| {
+                invalid("Table is not registered; register its path before subscribing")
+            })?;
+        if self
+            .scanners
+            .read()
             .iter()
-            .find(|scanner| scanner.table_id == id)
-            .map(AsRef::as_ref)
-            .ok_or_else(|| invalid("Bucket table is not part of this multi-table scanner"))
+            .any(|s| s.table_path == info.table_path)
+        {
+            return Err(invalid(
+                "Table was recreated; unsubscribe its old buckets first",
+            ));
+        }
+        let scanner = self.build_table(info)?;
+        Arc::make_mut(&mut self.scanners.write()).push(scanner.clone());
+        Ok(scanner)
     }
 
     async fn subscribe(
@@ -225,7 +269,8 @@ macro_rules! multi_methods {
             /// when auto-commit is enabled. An error never discards another table's returned data.
             pub async fn poll(&self, timeout: Duration) -> Result<$result> {
                 let deadline = tokio::time::Instant::now() + timeout;
-                for scanner in &self.inner.scanners {
+                let scanners = self.inner.scanners.read().clone();
+                for scanner in scanners.iter() {
                     if !scanner
                         .prepare_positions(
                             deadline.saturating_duration_since(tokio::time::Instant::now()),
@@ -239,10 +284,10 @@ macro_rules! multi_methods {
                     auto.before_poll(&self.inner.group);
                 }
                 loop {
-                    for _ in 0..self.inner.scanners.len() {
-                        let index = self.inner.next.fetch_add(1, Ordering::Relaxed)
-                            % self.inner.scanners.len();
-                        let result = self.inner.scanners[index].$poll(Duration::ZERO).await?;
+                    for _ in 0..scanners.len() {
+                        let index =
+                            self.inner.next.fetch_add(1, Ordering::Relaxed) % scanners.len();
+                        let result = scanners[index].$poll(Duration::ZERO).await?;
                         if !result.is_empty() {
                             return Ok(($output)(result));
                         }
@@ -253,6 +298,16 @@ macro_rules! multi_methods {
                     }
                     tokio::time::sleep((deadline - now).min(Duration::from_millis(10))).await;
                 }
+            }
+
+            /// Returns the schema used by this scanner for a registered table.
+            pub fn registered_table_info(&self, id: i64) -> Option<Arc<TableInfo>> {
+                self.inner
+                    .scanners
+                    .read()
+                    .iter()
+                    .find(|s| s.table_id == id)
+                    .map(|s| s.table_info.clone())
             }
 
             /// Registers a table by path on demand, returning the schema used to decode its rows.
@@ -291,7 +346,16 @@ macro_rules! multi_methods {
 
             /// Removes one bucket from the manual assignment without committing it.
             pub async fn unsubscribe(&self, bucket: &TableBucket) -> Result<()> {
-                let scanner = self.inner.scanner(bucket.table_id())?;
+                let scanner = self
+                    .inner
+                    .scanners
+                    .read()
+                    .iter()
+                    .find(|s| s.table_id == bucket.table_id())
+                    .cloned();
+                let Some(scanner) = scanner else {
+                    return Ok(());
+                };
                 match bucket.partition_id() {
                     Some(partition) => {
                         scanner
@@ -299,7 +363,12 @@ macro_rules! multi_methods {
                             .await
                     }
                     None => scanner.unsubscribe(bucket.bucket_id()).await,
+                }?;
+                if !scanner.has_subscriptions() {
+                    Arc::make_mut(&mut self.inner.scanners.write())
+                        .retain(|s| !Arc::ptr_eq(s, &scanner));
                 }
+                Ok(())
             }
 
             /// Enqueues all delivered next offsets across assigned tables, in scanner call order.
@@ -307,7 +376,7 @@ macro_rules! multi_methods {
                 self.commit_offsets_async(self.inner.group.delivered.lock().clone())
             }
 
-            /// Enqueues explicit offsets across tables, preserving partial failures and unknown
+            /// Enqueues explicit offsets from a Tokio runtime, preserving partial failures and unknown
             /// outcomes. No fencing is provided against other scanners or processes.
             pub fn commit_offsets_async(
                 &self,
@@ -326,11 +395,9 @@ macro_rules! multi_methods {
                     .await?
             }
 
-            /// Waits for the final automatic commit, if enabled, and closes the scanner.
+            /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
             pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
-                if self.inner.auto_commit.is_some() {
-                    AutoCommit::finish(&self.inner.group).await?;
-                }
+                AutoCommit::finish(self.inner.auto_commit.as_ref(), &self.inner.group).await;
                 Ok(())
             }
 

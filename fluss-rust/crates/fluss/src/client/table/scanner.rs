@@ -68,6 +68,7 @@ use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
 
 mod consumer_group;
 pub use consumer_group::{AutoCommitError, OffsetsInitializer};
+mod latest_resets;
 mod multi_table;
 pub use multi_table::{MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan};
 
@@ -128,14 +129,14 @@ impl<'a> TableScan<'a> {
 
     /// Sets the interval for poll-triggered asynchronous commits.
     /// Process the previous poll completely before polling again. The interval is checked
-    /// only on poll; failures are logged. Close the scanner to persist its final position.
+    /// on poll and close; failures are logged. Use `commit_sync` to confirm the final position.
     pub fn with_auto_commit(mut self, interval: Duration) -> Result<Self> {
         consumer_group::AutoCommit::new(interval)?;
         self.auto_commit_interval = Some(interval);
         Ok(self)
     }
 
-    /// Disables periodic and final commits on this group scanner.
+    /// Disables automatic commits on this group scanner.
     pub fn without_auto_commit(mut self) -> Self {
         self.auto_commit_interval = Some(Duration::ZERO);
         self
@@ -582,9 +583,10 @@ struct LogScannerInner {
     consumer_group: Option<Arc<ConsumerGroup>>,
     auto_commit: Option<consumer_group::AutoCommit>,
     pending_starts: Mutex<consumer_group::PendingStarts>,
+    latest_resets: Mutex<latest_resets::LatestResets>,
     table_path: TablePath,
     table_id: TableId,
-    table_info: TableInfo,
+    table_info: Arc<TableInfo>,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
@@ -783,9 +785,10 @@ impl LogScannerInner {
             consumer_group: None,
             auto_commit: None,
             pending_starts: Default::default(),
+            latest_resets: Default::default(),
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
-            table_info: table_info.clone(),
+            table_info: Arc::new(table_info.clone()),
             is_partitioned_table: table_info.is_partitioned(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
@@ -839,6 +842,7 @@ impl LogScannerInner {
 
         loop {
             // Try to collect fetches
+            self.drive_latest_resets()?;
             let fetch_result = self.poll_for_fetches().await?;
 
             if !fetch_result.is_empty() {
@@ -859,11 +863,7 @@ impl LogScannerInner {
 
             // Wait for buffer to become non-empty with remaining time
             let remaining = deadline - now;
-            let has_data = self
-                .log_fetcher
-                .log_fetch_buffer
-                .await_not_empty(remaining)
-                .await?;
+            let has_data = self.wait_for_data_or_reset(remaining).await?;
 
             if !has_data {
                 // Timeout while waiting
@@ -1148,6 +1148,20 @@ impl LogScannerInner {
     }
 
     fn assign_buckets(&self, bucket_offsets: HashMap<TableBucket, i64>) {
+        let mut epoch = self.log_scanner_status.assignment_epoch.write();
+        *epoch += 1;
+        self.log_fetcher
+            .log_fetch_buffer
+            .discard_buckets(|b| bucket_offsets.contains_key(b));
+        {
+            let mut resets = self.latest_resets.lock();
+            for (bucket, offset) in &bucket_offsets {
+                resets.forget(bucket);
+                if *offset == crate::client::LATEST_OFFSET {
+                    resets.queue(bucket.clone());
+                }
+            }
+        }
         if let Some(group) = &self.consumer_group {
             let mut delivered = group.delivered.lock();
             let mut pending = self.pending_starts.lock();
@@ -1160,10 +1174,19 @@ impl LogScannerInner {
                 }
             }
         }
-        self.log_scanner_status.assign_scan_buckets(bucket_offsets);
+        self.log_scanner_status.assign_at(bucket_offsets, *epoch);
+    }
+
+    fn has_subscriptions(&self) -> bool {
+        self.log_scanner_status.prepare_to_poll() || !self.pending_starts.lock().buckets.is_empty()
     }
 
     fn unassign_bucket(&self, bucket: &TableBucket) {
+        let _epoch = self.log_scanner_status.assignment_epoch.write();
+        self.log_fetcher
+            .log_fetch_buffer
+            .discard_buckets(|b| b == bucket);
+        self.latest_resets.lock().forget(bucket);
         self.log_scanner_status
             .unassign_scan_buckets(from_ref(bucket));
         if let Some(group) = &self.consumer_group {
@@ -1235,6 +1258,7 @@ impl LogScannerInner {
         self.maybe_auto_commit();
 
         loop {
+            self.drive_latest_resets()?;
             let batches = self.poll_for_batches().await?;
 
             if !batches.is_empty() {
@@ -1251,11 +1275,7 @@ impl LogScannerInner {
             }
 
             let remaining = deadline - now;
-            let has_data = self
-                .log_fetcher
-                .log_fetch_buffer
-                .await_not_empty(remaining)
-                .await?;
+            let has_data = self.wait_for_data_or_reset(remaining).await?;
 
             if !has_data {
                 return Ok(PolledBatches::default());
@@ -1577,6 +1597,7 @@ struct LogFetcher {
 }
 
 struct FetchResponseContext {
+    assignment_epoch: u64,
     metadata: Arc<Metadata>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     log_scanner_status: Arc<LogScannerStatus>,
@@ -1905,7 +1926,10 @@ impl LogFetcher {
 
     // Scheduling with cached metadata cannot suspend or fail after data has been collected.
     fn send_fetches_without_metadata_refresh(&self) {
-        let fetch_request = self.prepare_fetch_log_requests();
+        let (assignment_epoch, fetch_request) = {
+            let epoch = self.log_scanner_status.assignment_epoch.read();
+            (*epoch, self.prepare_fetch_log_requests())
+        };
 
         for (leader, fetch_request) in fetch_request {
             debug!("Adding pending request for node id {leader}");
@@ -1978,6 +2002,7 @@ impl LogFetcher {
                 // — not tablet-server lookup or connection acquisition, which is matching Java's bebaviour
                 // Building it here also skips the allocation on the early-return error paths above.
                 let response_context = FetchResponseContext {
+                    assignment_epoch,
                     metadata: metadata.clone(),
                     log_fetch_buffer,
                     log_scanner_status,
@@ -2006,6 +2031,7 @@ impl LogFetcher {
         context: FetchResponseContext,
     ) {
         let FetchResponseContext {
+            assignment_epoch,
             metadata,
             log_fetch_buffer,
             log_scanner_status,
@@ -2034,14 +2060,19 @@ impl LogFetcher {
                     bucket,
                 );
 
-                // todo: check fetch result code for per-bucket
-                let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
+                // Keep validation and enqueue atomic with a seek that clears the old buffer.
+                let _assignment = log_scanner_status.assignment_epoch.read();
+                let Some(status) = log_scanner_status
+                    .get_status(&table_bucket)
+                    .filter(|s| s.epoch <= assignment_epoch)
+                else {
                     debug!(
                         "Ignoring fetch log response for bucket {table_bucket} because the bucket has been unsubscribed."
                     );
                     continue;
                 };
 
+                let fetch_offset = status.offset();
                 if let Some(error_code) = fetch_log_for_bucket.error_code
                     && error_code != FlussError::None.code()
                 {
@@ -2784,6 +2815,7 @@ impl LogFetcher {
 }
 
 pub struct LogScannerStatus {
+    assignment_epoch: RwLock<u64>,
     bucket_status_map: Arc<RwLock<FairBucketStatusMap<BucketScanStatus>>>,
 }
 
@@ -2792,6 +2824,7 @@ impl LogScannerStatus {
     pub fn new() -> Self {
         Self {
             bucket_status_map: Arc::new(RwLock::new(FairBucketStatusMap::new())),
+            assignment_epoch: Default::default(),
         }
     }
 
@@ -2824,20 +2857,20 @@ impl LogScannerStatus {
     }
 
     pub fn assign_scan_buckets(&self, scan_bucket_offsets: HashMap<TableBucket, i64>) {
+        let mut epoch = self.assignment_epoch.write();
+        *epoch += 1;
+        self.assign_at(scan_bucket_offsets, *epoch);
+    }
+
+    fn assign_at(&self, offsets: HashMap<TableBucket, i64>, epoch: u64) {
         let mut map = self.bucket_status_map.write();
-        for (bucket, offset) in scan_bucket_offsets {
-            let status = map
-                .status_value(&bucket)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(BucketScanStatus::new(offset)));
-            status.set_offset(offset);
-            map.update(bucket, status);
+        for (bucket, offset) in offsets {
+            map.update(bucket, Arc::new(BucketScanStatus::new(offset, epoch)));
         }
     }
 
     pub fn assign_scan_bucket(&self, table_bucket: TableBucket, offset: i64) {
-        let status = Arc::new(BucketScanStatus::new(offset));
-        self.bucket_status_map.write().update(table_bucket, status);
+        self.assign_scan_buckets(HashMap::from([(table_bucket, offset)]));
     }
 
     /// Unassigns scan buckets
@@ -2855,8 +2888,8 @@ impl LogScannerStatus {
     {
         let map = self.bucket_status_map.read();
         let mut result = Vec::new();
-        map.for_each(|bucket, _| {
-            if is_available(bucket) {
+        map.for_each(|bucket, status| {
+            if status.offset() != crate::client::LATEST_OFFSET && is_available(bucket) {
                 result.push(bucket.clone());
             }
         });
@@ -2889,14 +2922,16 @@ impl Default for LogScannerStatus {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct BucketScanStatus {
+    epoch: u64,
     offset: RwLock<i64>,
     high_watermark: RwLock<i64>,
 }
 
 #[allow(dead_code)]
 impl BucketScanStatus {
-    pub fn new(offset: i64) -> Self {
+    fn new(offset: i64, epoch: u64) -> Self {
         Self {
+            epoch,
             offset: RwLock::new(offset),
             high_watermark: RwLock::new(0),
         }
@@ -3411,7 +3446,9 @@ mod tests {
         Ok(())
     }
 
-    fn scanner_fixture(known_leader: bool) -> Result<(Arc<LogScannerInner>, TableInfo, Vec<u8>)> {
+    pub(super) fn scanner_fixture(
+        known_leader: bool,
+    ) -> Result<(Arc<LogScannerInner>, TableInfo, Vec<u8>)> {
         let path = TablePath::new("db", "tbl");
         let info = build_table_info(path.clone(), 1, 1);
         let cluster = if known_leader {
@@ -4813,6 +4850,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn late_filtered_response_does_not_advance_a_new_assignment() -> Result<()> {
+        let (inner, _, _) = scanner_fixture(false)?;
+        let bucket = TableBucket::new(1, 0);
+        inner.assign_buckets(HashMap::from([(bucket.clone(), 8)]));
+        let old = test_response_context(&inner.log_fetcher, &inner.metadata);
+        inner.assign_buckets(HashMap::from([(bucket.clone(), 2)]));
+        LogFetcher::handle_fetch_response(filtered_response(Some(11), Some(11)), old).await;
+        assert!(inner.log_fetcher.log_fetch_buffer.is_empty());
+        assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn ready_record_does_not_wait_for_auto_commit_ack() -> Result<()> {
         use futures::FutureExt;
         let (mut inner, _, data) = scanner_fixture(true)?;
@@ -4971,6 +5021,7 @@ mod tests {
         metadata: &Arc<Metadata>,
     ) -> FetchResponseContext {
         FetchResponseContext {
+            assignment_epoch: *fetcher.log_scanner_status.assignment_epoch.read(),
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -5021,6 +5072,7 @@ mod tests {
         };
 
         let response_context = FetchResponseContext {
+            assignment_epoch: *fetcher.log_scanner_status.assignment_epoch.read(),
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -5081,6 +5133,7 @@ mod tests {
         };
 
         let response_context = FetchResponseContext {
+            assignment_epoch: *fetcher.log_scanner_status.assignment_epoch.read(),
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -5431,6 +5484,7 @@ mod tests {
                 };
                 let expected_bytes = response.encoded_len() as f64;
                 let response_context = FetchResponseContext {
+                    assignment_epoch: *fetcher.log_scanner_status.assignment_epoch.read(),
                     metadata: metadata.clone(),
                     log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
                     log_scanner_status: fetcher.log_scanner_status.clone(),

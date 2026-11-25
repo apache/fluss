@@ -368,6 +368,8 @@ async fn arrow_commits_track_delivered_batches_and_explicit_seek_positions() {
         .new_scan()
         .with_consumer_group(ConsumerGroupOptions::new(&group))
         .unwrap()
+        .with_auto_commit(Duration::from_secs(3600))
+        .unwrap()
         .create_record_batch_log_scanner()
         .unwrap();
     for start in [
@@ -404,11 +406,37 @@ async fn arrow_commits_track_delivered_batches_and_explicit_seek_positions() {
         admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
         Some(OffsetAndMetadata::new(8))
     );
+    scanner
+        .subscribe(0, fluss::client::LATEST_OFFSET)
+        .await
+        .unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    let mut row = GenericRow::new(1);
+    row.set_field(0, 8);
+    writer.append(&row).unwrap();
+    writer.flush().await.unwrap();
+    // The append between subscribe and the first poll belongs before the resolved end.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            assert!(
+                scanner
+                    .poll(Duration::from_millis(20))
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            if scanner.get_subscribed_buckets() == [(bucket.clone(), 9)] {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
     scanner.subscribe(0, 0).await.unwrap();
     scanner.close().await.unwrap();
     assert_eq!(
         admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
-        Some(OffsetAndMetadata::new(0))
+        Some(OffsetAndMetadata::new(8))
     );
     admin.drop_table(&path, false).await.unwrap();
     connection.close(Duration::from_secs(10)).await.unwrap();
@@ -581,7 +609,7 @@ async fn multi_table_assignment_failure_and_partial_commits_do_not_hide_progress
     let (first, a) = log_table(&connection).await;
     let (second, b) = log_table(&connection).await;
     let group = format!("partial-{}", a.table_id());
-    let scanner = connection
+    let mut scanner = connection
         .new_multi_table_scan(
             &[first.clone(), second.clone()],
             ConsumerGroupOptions::new(&group),
@@ -630,14 +658,39 @@ async fn multi_table_assignment_failure_and_partial_commits_do_not_hide_progress
         .unwrap();
     assert!(matches!(results[&a], OffsetCommitOutcome::Committed));
     assert!(matches!(results[&b], OffsetCommitOutcome::Rejected(_)));
-    scanner.unsubscribe(&a).await.unwrap();
-    assert!(scanner.commit_sync().await.unwrap().is_empty());
     let saved = admin
         .get_consumer_offsets(&group, &[a.clone(), b.clone()])
         .await
         .unwrap();
     assert_eq!(saved[&a], Some(OffsetAndMetadata::new(5)));
     assert_eq!(saved[&b], None);
+    let descriptor = admin
+        .get_table_info(&first)
+        .await
+        .unwrap()
+        .to_table_descriptor()
+        .unwrap();
+    admin.drop_table(&first, false).await.unwrap();
+    admin
+        .create_table(&first, &descriptor, false)
+        .await
+        .unwrap();
+    let replacement = admin.get_table_info(&first).await.unwrap().table_id;
+    assert_ne!(replacement, a.table_id());
+    assert!(
+        scanner
+            .register_table(&first)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("recreated")
+    );
+    scanner.unsubscribe(&a).await.unwrap();
+    assert!(scanner.commit_sync().await.unwrap().is_empty());
+    assert_eq!(
+        scanner.register_table(&first).await.unwrap().table_id,
+        replacement
+    );
     admin.delete_consumer_groups(&[group]).await.unwrap();
     admin.drop_table(&first, false).await.unwrap();
     admin.drop_table(&second, false).await.unwrap();
