@@ -1515,7 +1515,7 @@ For detailed information about Exactly-Once implementation, please refer to: [FI
 
 When a Flink job writes full rows to an aggregation table, restoring the job from a checkpoint can undo other writers’ changes in the same bucket. For each bucket, undo starts at the recovery offset. That offset can already be behind the end of the bucket log when the checkpoint is taken, so recovery can undo another writer’s changes made before the checkpoint.
 
-For example, a Flink job writes a row with key `1` and takes a checkpoint. Another writer then inserts key `1001` in the same bucket. Restoring the job from that checkpoint deletes key `1001`, even though the job never wrote that key.
+For example, Job A writes a row with key `1` and takes a checkpoint. Job B then inserts a row with key `1001` in the same bucket. When Job A recovers from its checkpoint, it deletes the row Job B inserted.
 
 Multiple Flink jobs can write the same key when each uses explicit partial updates and their non-key target columns do not overlap. If one job updates `price` and another updates `stock`, recovering the `price` job preserves the `stock` update.
 
