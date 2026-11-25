@@ -1517,7 +1517,7 @@ When a Flink job writes full rows to an aggregation table, restoring the job fro
 
 For example, Job A writes a row with key `1` and takes a checkpoint. Job B then inserts a row with key `1001` in the same bucket. When Job A recovers from its checkpoint, it deletes the row Job B inserted.
 
-Multiple Flink jobs can write the same key when each uses explicit partial updates and their non-key target columns do not overlap. If one job updates `price` and another updates `stock`, recovering the `price` job preserves the `stock` update.
+When two Flink jobs use explicit partial updates on the same key, recovering one job preserves the other job’s updates if they update separate sets of non-key columns. For example, if Job A updates only `price` and Job B updates only `stock`, recovering Job A preserves Job B’s `stock` update.
 
 :::
 
