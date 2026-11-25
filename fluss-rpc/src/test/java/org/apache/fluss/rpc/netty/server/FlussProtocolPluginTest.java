@@ -27,17 +27,26 @@ import org.apache.fluss.rpc.netty.ssl.TestSslUtils;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 
 /** Tests for {@link FlussProtocolPlugin}. */
 class FlussProtocolPluginTest {
@@ -179,6 +188,65 @@ class FlussProtocolPluginTest {
                 .isInstanceOf(ConfigException.class)
                 .hasMessageContaining(error)
                 .hasMessageContaining(proxyUsersKey);
+    }
+
+    @Test
+    void testWarnSaslListenerWithoutTls(@TempDir Path tempDir) throws Exception {
+        SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(
+                conf, TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert), null);
+        // CLIENT has TLS, INTERNAL does not, and KAFKA is served by another protocol plugin.
+        conf.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                TestSslUtils.TLS_LISTENER + ":SASL,INTERNAL:sasl,KAFKA:SASL");
+
+        // the warning must not fail startup
+        List<String> warnings = setupAndCaptureWarnings(tlsPlugin(), conf);
+
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0))
+                .contains("Listener 'INTERNAL'")
+                .contains(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key())
+                .contains(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+    }
+
+    @Test
+    void testNoWarningWithoutSaslListener() {
+        Configuration conf = new Configuration();
+        conf.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                TestSslUtils.TLS_LISTENER + ":PLAINTEXT");
+
+        assertThat(setupAndCaptureWarnings(tlsPlugin(), conf)).isEmpty();
+    }
+
+    /** Runs {@link FlussProtocolPlugin#setup} and returns the warnings it logged. */
+    private static List<String> setupAndCaptureWarnings(
+            FlussProtocolPlugin plugin, Configuration conf) {
+        List<String> warnings = new ArrayList<>();
+        AbstractAppender appender =
+                new AbstractAppender("plugin-warnings", null, null, true, Property.EMPTY_ARRAY) {
+                    @Override
+                    public void append(LogEvent event) {
+                        if (event.getLevel() == Level.WARN) {
+                            warnings.add(event.getMessage().getFormattedMessage());
+                        }
+                    }
+                };
+        Logger logger = (Logger) LogManager.getLogger(FlussProtocolPlugin.class);
+        Level previousLevel = logger.getLevel();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(Level.WARN);
+        try {
+            plugin.setup(conf);
+        } finally {
+            logger.removeAppender(appender);
+            logger.setLevel(previousLevel);
+            appender.stop();
+        }
+        return warnings;
     }
 
     private static FlussProtocolPlugin tlsPlugin() {
