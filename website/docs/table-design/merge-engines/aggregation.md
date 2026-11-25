@@ -1513,7 +1513,7 @@ For detailed information about Exactly-Once implementation, please refer to: [FI
 
 ### Undo Recovery for Full-Row Writes
 
-When a Flink job writes full rows to an aggregation table, restoring the job from a checkpoint can undo other writers’ changes in the same bucket. The checkpoint records the job’s own write position in each bucket. Another writer’s changes after that position can be undone even if they were written before the checkpoint was taken.
+When a Flink job writes full rows to an aggregation table, restoring the job from a checkpoint can undo other writers’ changes in the same bucket. For each bucket, undo starts at the recovery offset. That offset can already be behind the end of the bucket log when the checkpoint is taken, so recovery can undo another writer’s changes made before the checkpoint.
 
 For example, a Flink job writes a row with key `1` and takes a checkpoint. Another writer then inserts key `1001` in the same bucket. Restoring the job from that checkpoint deletes key `1001`, even though the job never wrote that key.
 
