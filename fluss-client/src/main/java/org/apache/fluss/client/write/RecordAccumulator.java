@@ -603,6 +603,9 @@ public final class RecordAccumulator {
             synchronized (deque) {
                 for (WriteBatch batch : deque) {
                     if (idempotenceManager.idempotenceEnabled() && batch.hasBatchSequence()) {
+                        if (batch.hasUncertainDelivery()) {
+                            idempotenceManager.preventWriterIdRecovery();
+                        }
                         idempotenceManager.removeInFlightBatch(
                                 new ReadyWriteBatch(
                                         new TableBucket(
@@ -641,6 +644,10 @@ public final class RecordAccumulator {
         synchronized (deque) {
             aborted = batch.trySetAborted();
             if (aborted) {
+                if (idempotenceManager.recoveryEnabled() && batch.hasBatchSequence()) {
+                    // The target can be aborted while its old request is still at the server.
+                    idempotenceManager.preventWriterIdRecovery();
+                }
                 batch.abortRecordAppends();
             }
             deque.remove(batch);
@@ -1276,40 +1283,12 @@ public final class RecordAccumulator {
                         continue;
                     }
 
-                    batch = deque.pollFirst();
-                    long writerId =
-                            idempotenceManager.idempotenceEnabled()
-                                    ? idempotenceManager.writerId()
-                                    : NO_WRITER_ID;
-                    if (writerId != NO_WRITER_ID && !batch.hasBatchSequence()) {
-                        // If writer id of the bucket do not match the latest one of writer,
-                        // we update it and reset the batch sequence. This should be only done when
-                        // all
-                        // its in-flight batches have completed. This is guarantee in
-                        // `shouldSkipBucket`.
-                        idempotenceManager.maybeUpdateWriterId(tableBucket);
-
-                        // If the batch already has an assigned batch sequence, then we should not
-                        // change writer id and batch sequence, since this may introduce
-                        // duplicates. In particular, the previous attempt may actually have been
-                        // accepted, and if we change writer id and sequence here, this attempt
-                        // will also be accepted, causing a duplicate.
-                        //
-                        // Additionally, we update the next batch sequence bound for the table
-                        // bucket,
-                        // and also have the writerStateManager track the batch to ensure
-                        // that sequence ordering is maintained even if we receive out of order
-                        // responses.
-                        batch.setWriterState(
-                                writerId, idempotenceManager.nextSequence(tableBucket));
-                        idempotenceManager.incrementBatchSequence(tableBucket);
-                        LOG.debug(
-                                "Assigner writerId {} to batch with batch sequence {} being sent to table bucket {}",
-                                writerId,
-                                batch.batchSequence(),
-                                tableBucket);
-                        idempotenceManager.addInFlightBatch(batch, tableBucket);
+                    if (idempotenceManager.idempotenceEnabled()
+                            && !first.hasBatchSequence()
+                            && !idempotenceManager.tryAssignSequence(first, tableBucket)) {
+                        continue;
                     }
+                    batch = deque.pollFirst();
                 }
             }
 
@@ -1360,7 +1339,8 @@ public final class RecordAccumulator {
             return true;
         }
         if (idempotenceManager.idempotenceEnabled()) {
-            if (!idempotenceManager.isWriterIdValid()) {
+            if (!idempotenceManager.isWriterIdValid()
+                    || idempotenceManager.isRecoveringWriterId()) {
                 // we cannot send the batch until we have refreshed writer id.
                 return true;
             }

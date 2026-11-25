@@ -194,6 +194,40 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         }
     }
 
+    @Test
+    void testRecoverIdleWriterOnPrimaryKeyTable() throws Exception {
+        TablePath path = tableNames.tablePath("test_db", "idle_pk");
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1).build(),
+                        false);
+        waitAllReplicasReady(tableId, 1);
+        int schemaId = currentSchemaId(path);
+        Configuration writerConf = new Configuration(clientConf);
+        writerConf.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, true);
+        writerConf.set(ConfigOptions.CLIENT_WRITER_RECOVER_ON_OUT_OF_ORDER_SEQUENCE, true);
+        try (Connection connection = ConnectionFactory.createConnection(writerConf);
+                MultiTableWriter writer =
+                        connection.getMultiTable().newMultiTableWrite().createWriter();
+                Table table = connection.getTable(path)) {
+            writer.write(MultiTableWriteRecord.forUpsert(path, row(7, "v1"), schemaId)).get();
+            FLUSS_CLUSTER_EXTENSION
+                    .waitAndGetLeaderReplica(new TableBucket(tableId, 0))
+                    .getLogTablet()
+                    .removeExpiredWriter(Long.MAX_VALUE);
+            CompletableFuture<?> update =
+                    writer.write(MultiTableWriteRecord.forUpsert(path, row(7, "v2"), schemaId));
+            writer.flush();
+            assertThat(update).isCompleted();
+            assertThat(
+                            lookupRow(table.newLookup().createLookuper(), row(7))
+                                    .getString(1)
+                                    .toString())
+                    .isEqualTo("v2");
+        }
+    }
+
     // ---------------------------------------------------------------- mix
 
     @Test

@@ -73,6 +73,8 @@ public abstract class WriteBatch {
     // from a genuine one (no progress since send).
     private int lastAckedSequenceAtSend = IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE;
 
+    private volatile boolean deliveryUncertain;
+
     public WriteBatch(
             long tableId,
             int bucketId,
@@ -326,6 +328,14 @@ public abstract class WriteBatch {
     /** Returns whether the current thread is running the write callbacks of a batch. */
     static boolean isInCallback() {
         return IN_CALLBACK.get();
+    }
+
+    void markDeliveryUncertain() {
+        deliveryUncertain = true;
+    }
+
+    boolean hasUncertainDelivery() {
+        return deliveryUncertain;
     }
 
     int attempts() {

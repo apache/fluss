@@ -57,6 +57,14 @@ public class IdempotenceBucketMap {
         return tableBuckets.containsKey(tableBucket);
     }
 
+    boolean canRecoverWriterId() {
+        return tableBuckets.values().stream().allMatch(IdempotenceBucketEntry::canRecoverWriterId);
+    }
+
+    void restartSequences(long newWriterId) {
+        tableBuckets.values().forEach(entry -> entry.startBatchSequencesAtBeginning(newWriterId));
+    }
+
     void reset() {
         tableBuckets.clear();
     }

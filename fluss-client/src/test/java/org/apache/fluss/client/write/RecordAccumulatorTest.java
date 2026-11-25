@@ -812,7 +812,7 @@ class RecordAccumulatorTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(batchSize));
 
         IdempotenceManager idempotenceManager =
-                new IdempotenceManager(true, /* maxInflightPerBucket */ 1, null, null);
+                new IdempotenceManager(true, /* maxInflightPerBucket */ 1, null, null, false);
         idempotenceManager.setWriterId(1L);
 
         RecordAccumulator accum =
@@ -917,7 +917,8 @@ class RecordAccumulatorTest {
                                 () -> cluster.getRandomTabletServer(),
                                 RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                                 TabletServerGateway.class),
-                        null),
+                        null,
+                        false),
                 metrics,
                 clock,
                 (tableInfo, path) -> assigner);
@@ -1295,7 +1296,7 @@ class RecordAccumulatorTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(1024 * 1024));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(1024));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(256));
-        IdempotenceManager manager = new IdempotenceManager(false, 5, null, null);
+        IdempotenceManager manager = new IdempotenceManager(false, 5, null, null, false);
         return backoff == null
                 ? new RecordAccumulator(
                         conf,
@@ -1318,7 +1319,7 @@ class RecordAccumulatorTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(1024 * 1024));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(1024));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(256));
-        IdempotenceManager manager = new IdempotenceManager(false, 5, null, null);
+        IdempotenceManager manager = new IdempotenceManager(false, 5, null, null, false);
         return new RecordAccumulator(
                 conf,
                 manager,

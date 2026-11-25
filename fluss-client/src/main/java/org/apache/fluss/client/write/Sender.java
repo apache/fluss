@@ -78,6 +78,12 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class Sender implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(Sender.class);
 
+    private enum WriteFailureSource {
+        BEFORE_SEND,
+        REQUEST,
+        BUCKET
+    }
+
     /** the record accumulator that batches records. */
     private final RecordAccumulator accumulator;
 
@@ -218,13 +224,26 @@ public class Sender implements Runnable {
             Set<PhysicalTablePath> targetTables = accumulator.getPhysicalTablePathsInBatches();
             // TODO: only request to init writer_id when we have valid target tables
             try {
-                idempotenceManager.maybeWaitForWriterId(targetTables);
+                if (idempotenceManager.isRecoveringWriterId()) {
+                    if (hasOutstandingWriteAttempts()) {
+                        awaitNextReadyCheck(maxRequestTimeoutMs);
+                        return;
+                    }
+                    idempotenceManager.recoverWriterId(targetTables);
+                } else {
+                    idempotenceManager.maybeWaitForWriterId(targetTables);
+                }
             } catch (Throwable t) {
                 if (t instanceof Error) {
                     throw (Error) t;
                 }
                 // TODO: If 'only request to init writer_id when we have valid target tables' have
                 // been down, this if check can be removed.
+                if (idempotenceManager.isRecoveringWriterId()) {
+                    recordFatalError(t);
+                    maybeAbortBatches(t);
+                    return;
+                }
                 if (!targetTables.isEmpty()) {
                     maybeAbortBatches(t);
                 } else {
@@ -233,8 +252,9 @@ public class Sender implements Runnable {
             }
         }
 
-        // do send.
-        sendWriteData();
+        if (!forceClose) {
+            sendWriteData();
+        }
     }
 
     public boolean isRunning() {
@@ -244,6 +264,12 @@ public class Sender implements Runnable {
     @Nullable
     Throwable getFatalError() {
         return fatalError.get();
+    }
+
+    private boolean hasOutstandingWriteAttempts() {
+        synchronized (inFlightBatchesLock) {
+            return !inFlightBatches.isEmpty();
+        }
     }
 
     private void addToInflightBatches(Map<Integer, List<ReadyWriteBatch>> batches) {
@@ -307,7 +333,7 @@ public class Sender implements Runnable {
     }
 
     private void completeBatch(ReadyWriteBatch readyWriteBatch) {
-        if (fatalError.get() != null) {
+        if (fatalError.get() != null || readyWriteBatch.writeBatch().isDone()) {
             return;
         }
         if (idempotenceManager.idempotenceEnabled()) {
@@ -321,7 +347,7 @@ public class Sender implements Runnable {
     /** Complete batch with bucket and log end offset info (for KV batches). */
     private void completeBatch(
             ReadyWriteBatch readyWriteBatch, TableBucket bucket, long logEndOffset) {
-        if (fatalError.get() != null) {
+        if (fatalError.get() != null || readyWriteBatch.writeBatch().isDone()) {
             return;
         }
         if (idempotenceManager.idempotenceEnabled()) {
@@ -335,7 +361,7 @@ public class Sender implements Runnable {
     private void failBatch(
             ReadyWriteBatch batch, Exception exception, boolean adjustBatchSequences) {
         if (batch.writeBatch().completeExceptionally(exception)) {
-            if (idempotenceManager.idempotenceEnabled()) {
+            if (idempotenceManager.idempotenceEnabled() && fatalError.get() == null) {
                 try {
                     // This call can throw an exception in the rare case that there's an invalid
                     // state
@@ -415,6 +441,9 @@ public class Sender implements Runnable {
                 batches.remove(batch);
                 if (batches.isEmpty()) {
                     inFlightBatches.remove(batch.tableBucket());
+                    if (inFlightBatches.isEmpty() && idempotenceManager.isRecoveringWriterId()) {
+                        wakeup();
+                    }
                 }
             }
         }
@@ -475,7 +504,8 @@ public class Sender implements Runnable {
             handleWriteRequestException(
                     new LeaderNotAvailableException(
                             "Server " + destination + " is not found in metadata cache."),
-                    batches);
+                    batches,
+                    WriteFailureSource.BEFORE_SEND);
         } else {
             writeBatchByTable.forEach(
                     (tableId, writeBatches) ->
@@ -536,7 +566,7 @@ public class Sender implements Runnable {
             }
         } catch (Exception e) {
             // A synchronous failure belongs only to the batches in this individual RPC.
-            handleWriteRequestException(e, writeBatches);
+            handleWriteRequestException(e, writeBatches, WriteFailureSource.REQUEST);
         }
     }
 
@@ -584,7 +614,8 @@ public class Sender implements Runnable {
                             writerMetricGroup.setSendLatencyInMs(
                                     System.currentTimeMillis() - startTime);
                             if (e != null) {
-                                handleWriteRequestException(e, writeBatches);
+                                handleWriteRequestException(
+                                        e, writeBatches, WriteFailureSource.REQUEST);
                             } else {
                                 handleProduceLogResponse(
                                         produceLogResponse, tableId, writeBatchesByKey);
@@ -605,7 +636,8 @@ public class Sender implements Runnable {
                             writerMetricGroup.setSendLatencyInMs(
                                     System.currentTimeMillis() - startTime);
                             if (e != null) {
-                                handleWriteRequestException(e, writeBatches);
+                                handleWriteRequestException(
+                                        e, writeBatches, WriteFailureSource.REQUEST);
                             } else {
                                 handlePutKvResponse(putKvResponse, tableId, writeBatchesByKey);
                             }
@@ -637,6 +669,7 @@ public class Sender implements Runnable {
                 handleWriteBatchException(
                         writeBatch,
                         ApiError.fromErrorMessage(logRespForBucket),
+                        WriteFailureSource.BUCKET,
                         invalidMetadataTablesSet,
                         batchesToRetry);
             } else {
@@ -679,6 +712,7 @@ public class Sender implements Runnable {
                 handleWriteBatchException(
                         writeBatch,
                         ApiError.fromErrorMessage(respForBucket),
+                        WriteFailureSource.BUCKET,
                         invalidMetadataTablesSet,
                         batchesToRetry);
             } else {
@@ -697,7 +731,8 @@ public class Sender implements Runnable {
         }
     }
 
-    private void handleWriteRequestException(Throwable t, List<ReadyWriteBatch> writeBatches) {
+    private void handleWriteRequestException(
+            Throwable t, List<ReadyWriteBatch> writeBatches, WriteFailureSource source) {
         Throwable cause = Errors.maybeUnwrapException(t);
         if (cause instanceof Error) {
             recordFatalError(cause);
@@ -711,7 +746,8 @@ public class Sender implements Runnable {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         List<ReadyWriteBatch> batchesToRetry = new ArrayList<>();
         for (ReadyWriteBatch batch : writeBatches) {
-            handleWriteBatchException(batch, error, invalidMetadataTablesSet, batchesToRetry);
+            handleWriteBatchException(
+                    batch, error, source, invalidMetadataTablesSet, batchesToRetry);
         }
 
         invalidateMetadataAndRetry(invalidMetadataTablesSet, batchesToRetry);
@@ -746,9 +782,19 @@ public class Sender implements Runnable {
     private void handleWriteBatchException(
             ReadyWriteBatch readyWriteBatch,
             ApiError error,
+            WriteFailureSource source,
             Set<PhysicalTablePath> invalidMetadataTables,
             List<ReadyWriteBatch> batchesToRetry) {
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
+        if (writeBatch.isDone() || fatalError.get() != null) {
+            return;
+        }
+        boolean outOfOrder = error.error() == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION;
+        boolean sequenceRejected = source == WriteFailureSource.BUCKET && outOfOrder;
+        boolean rejectedBeforeWrite =
+                source == WriteFailureSource.BEFORE_SEND
+                        || error.error() == Errors.DISK_WRITE_LOCKED
+                        || error.error() == Errors.HISTORICAL_PARTITION_THROTTLED;
         // Historical queues use the original path as their accumulator key, so capture the actual
         // RPC target before any retry handling.
         PhysicalTablePath writeTargetPath = writeBatch.writeTargetPath();
@@ -773,19 +819,20 @@ public class Sender implements Runnable {
             // sequence has advanced beyond the sequence of the current batch.
             // The only thing we can do is to return success to the user.
             completeBatch(readyWriteBatch);
-        } else if (error.error() == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
+        } else if (outOfOrder
                 && idempotenceManager.idempotenceEnabled()
-                && idempotenceManager.isAlreadyCommitted(
-                        writeBatch, readyWriteBatch.tableBucket())) {
-            // The batch received OUT_OF_ORDER_SEQUENCE_EXCEPTION but its sequence is already
-            // <= lastAckedBatchSequence, which means it was successfully written on the server
-            // but the response was lost. Complete it as success to avoid infinite retry loop.
+                && idempotenceManager.hasCoveringAck(writeBatch, readyWriteBatch.tableBucket())) {
+            // After expiry, the leader can ACK a later batch even if this one was never appended.
+            if (idempotenceManager.recoveryEnabled()) {
+                recordFatalError(error.exception());
+                failBatch(readyWriteBatch, error.exception(), false);
+                return;
+            }
             LOG.warn(
-                    "Batch for table-bucket {} with sequence {} received "
-                            + "OUT_OF_ORDER_SEQUENCE_EXCEPTION but has already been committed "
-                            + "(lastAckedBatchSequence={}). Treating as success due to lost response.",
+                    "Batch for table-bucket {} with sequence {} received {} after a covering ACK (lastAckedBatchSequence={}).",
                     readyWriteBatch.tableBucket(),
                     writeBatch.batchSequence(),
+                    error.error(),
                     idempotenceManager.lastAckedBatchSequence(readyWriteBatch.tableBucket()));
             completeBatch(readyWriteBatch);
         } else if (canRetry(readyWriteBatch, error.error())) {
@@ -817,6 +864,12 @@ public class Sender implements Runnable {
                         "Retrying batch to table-bucket {}, Batch sequence : {}",
                         readyWriteBatch.tableBucket(),
                         writeBatch.batchSequence());
+                if (idempotenceManager.recoveryEnabled()
+                        && !sequenceRejected
+                        && !rejectedBeforeWrite) {
+                    idempotenceManager.recordUncertainAttempt(
+                            writeBatch, source == WriteFailureSource.REQUEST);
+                }
                 prepareWriteRetry(readyWriteBatch, error);
                 batchesToRetry.add(readyWriteBatch);
             } else {
@@ -828,14 +881,31 @@ public class Sender implements Runnable {
                                         writeBatch.writerId(), idempotenceManager.writerId()));
                 failBatch(readyWriteBatch, exception, false);
             }
+        } else if (sequenceRejected
+                && writeBatch.attempts() < retries
+                && idempotenceManager.requestWriterIdRecovery(readyWriteBatch, error.exception())) {
+            batchesToRetry.add(readyWriteBatch);
         } else {
             LOG.warn(
                     "Get error write response on table bucket {}, fail. Error: {}",
                     readyWriteBatch.tableBucket(),
                     error.formatErrMsg());
-            // tell the user the result of their request. We only adjust batch sequence if the
-            // batch didn't exhaust its retries -- if it did, we don't know whether the batch
-            // sequence was accepted or not, and thus it is not safe to reassign the sequence.
+            if (rejectedBeforeWrite
+                    && idempotenceManager.recoveryEnabled()
+                    && idempotenceManager.tryReclaimRejectedSequence(readyWriteBatch)) {
+                if (writeBatch.completeExceptionally(error.exception())) {
+                    maybeRemoveAndDeallocateBatch(readyWriteBatch);
+                }
+                return;
+            }
+            if (idempotenceManager.recoveryEnabled()
+                    && (source == WriteFailureSource.REQUEST
+                            || writeBatch.hasUncertainDelivery()
+                            || error.exception() instanceof RetriableException
+                            || sequenceRejected)) {
+                // Recovery on another bucket could otherwise overtake this write.
+                recordFatalError(error.exception());
+            }
             failBatch(readyWriteBatch, error.exception(), writeBatch.attempts() < this.retries);
         }
     }
@@ -896,6 +966,9 @@ public class Sender implements Runnable {
      * old physical target can race with resetting its queued batches to the historical target.
      */
     private void handleMissingPartition(PhysicalTablePath targetPath, Throwable cause) {
+        if (idempotenceManager.isRecoveringWriterId()) {
+            return;
+        }
         if (HISTORICAL_PARTITION_VALUE.equals(targetPath.getPartitionName())) {
             abortBatches(
                     targetPath,
