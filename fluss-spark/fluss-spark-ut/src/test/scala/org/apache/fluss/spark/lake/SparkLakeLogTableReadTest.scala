@@ -20,7 +20,7 @@ package org.apache.fluss.spark.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.BUCKET_NUMBER
-import org.apache.fluss.spark.read.FlussMetrics
+import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussMetrics}
 
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
@@ -626,6 +626,41 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
                          |WHERE amount >= 200 ORDER BY id""".stripMargin)
       checkAnswer(query, Row(2, 200, "2026-01-01") :: Row(3, 300, "2026-01-02") :: Nil)
       assertPushedNames(query, Set(">="))
+    }
+  }
+
+  test(
+    "Spark Lake Read: partition whose lake files are all pruned reads its log from the lake offset") {
+    withTable("t_pd_pruned") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_pruned
+             |  (id INT, amount INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_pruned VALUES
+             |(1, 100, 'alpha', '2026-01-01'),
+             |(2, 200, 'beta', '2026-01-01'),
+             |(3, 300, 'gamma', '2026-01-02')
+             |""".stripMargin)
+      tierToLake("t_pd_pruned")
+
+      // no lake file of 2026-01-01 matches: that partition gets no lake split, and its log must not
+      // be read from the earliest offset (the lake already holds it, and it may be remote-only)
+      val query = sql(s"""
+                         |SELECT id, dt FROM $DEFAULT_DATABASE.t_pd_pruned
+                         |WHERE amount >= 300""".stripMargin)
+      checkAnswer(query, Row(3, "2026-01-02") :: Nil)
+      val fromEarliest = lakeInputPartitions(query).collect {
+        case p: FlussAppendInputPartition if p.startOffset < 0 => p
+      }
+      assert(
+        fromEarliest.isEmpty,
+        s"log read from the earliest offset: ${fromEarliest.mkString(", ")}")
     }
   }
 

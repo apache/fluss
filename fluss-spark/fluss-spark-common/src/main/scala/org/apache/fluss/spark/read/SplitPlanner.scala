@@ -536,6 +536,10 @@ class AppendPlanner(
         }
     }.toSeq
 
+    // Partitions without lake splits: either not tiered yet, or every lake file was pruned by the
+    // pushed filter. In the second case the snapshot still has the bucket's lake offset, and no row
+    // before it can match the filter, so the log is read from there, not from the earliest offset
+    // (which may only exist in remote storage by now).
     val flussOnlyPartitions = flussPartitionIdByName.flatMap {
       case (partitionName, partitionId) =>
         val stoppingOffsets = getBucketOffsets(
@@ -545,17 +549,8 @@ class AppendPlanner(
           bucketOffsetsRetriever)
         buckets.flatMap {
           bucketId =>
-            val stoppingOffset = stoppingOffsets(bucketId)
-            if (stoppingOffset > 0) {
-              val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-              Some(
-                FlussAppendInputPartition(
-                  tableBucket,
-                  LogScanner.EARLIEST_OFFSET,
-                  stoppingOffset): InputPartition)
-            } else {
-              None
-            }
+            val tableBucket = new TableBucket(tableId, partitionId, bucketId)
+            createLogTailPartition(tableBucket, tableBucketsOffset, stoppingOffsets(bucketId))
         }
     }.toSeq
 
