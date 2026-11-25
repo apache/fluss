@@ -1277,6 +1277,48 @@ pub struct PbBulkLoadHandle {
     pub bulk_load_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbBulkLoadStatus {
+    #[prost(message, required, tag = "1")]
+    pub handle: PbBulkLoadHandle,
+    #[prost(int32, required, tag = "2")]
+    pub state: i32,
+    #[prost(int64, required, tag = "3")]
+    pub created_time: i64,
+    #[prost(int64, optional, tag = "4")]
+    pub finished_time: ::core::option::Option<i64>,
+    #[prost(string, optional, tag = "5")]
+    pub abort_message: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbBulkLoadTargetInfo {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(string, optional, tag = "2")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, required, tag = "3")]
+    pub bucket_count: i32,
+    #[prost(string, required, tag = "4")]
+    pub remote_data_dir: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeginBulkLoadRequest {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(string, repeated, tag = "2")]
+    pub partition_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub bulk_load_id: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BeginBulkLoadResponse {
+    #[prost(message, required, tag = "1")]
+    pub status: PbBulkLoadStatus,
+    #[prost(message, required, tag = "2")]
+    pub table_info: PbTableInfo,
+    #[prost(message, repeated, tag = "3")]
+    pub targets: ::prost::alloc::vec::Vec<PbBulkLoadTargetInfo>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AllocateBulkLoadBucketSnapshotRequest {
     #[prost(message, required, tag = "1")]
     pub handle: PbBulkLoadHandle,
@@ -1306,6 +1348,65 @@ pub struct CommitBulkLoadBucketSnapshotRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitBulkLoadBucketSnapshotResponse {}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitBulkLoadRequest {
+    #[prost(message, required, tag = "1")]
+    pub handle: PbBulkLoadHandle,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitBulkLoadResponse {
+    #[prost(message, required, tag = "1")]
+    pub status: PbBulkLoadStatus,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AbortBulkLoadRequest {
+    #[prost(message, required, tag = "1")]
+    pub handle: PbBulkLoadHandle,
+    #[prost(string, optional, tag = "2")]
+    pub abort_message: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AbortBulkLoadResponse {
+    #[prost(message, required, tag = "1")]
+    pub status: PbBulkLoadStatus,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBulkLoadInfoRequest {
+    #[prost(message, required, tag = "1")]
+    pub handle: PbBulkLoadHandle,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbBulkLoadTargetProgress {
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "2")]
+    pub bucket_count: i32,
+    #[prost(int64, required, tag = "3")]
+    pub allocated_bucket_count: i64,
+    #[prost(int64, required, tag = "4")]
+    pub committed_bucket_count: i64,
+    #[prost(bool, required, tag = "5")]
+    pub withdrawn: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetBulkLoadInfoResponse {
+    #[prost(message, required, tag = "1")]
+    pub status: PbBulkLoadStatus,
+    #[prost(message, repeated, tag = "2")]
+    pub targets: ::prost::alloc::vec::Vec<PbBulkLoadTargetProgress>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListInProgressBulkLoadsRequest {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(string, repeated, tag = "2")]
+    pub partition_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListInProgressBulkLoadsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub transactions: ::prost::alloc::vec::Vec<PbBulkLoadStatus>,
+}
 /// --------------- Inner classes ----------------
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbTabletServerLoad {

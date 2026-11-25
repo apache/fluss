@@ -35,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -226,9 +227,7 @@ public final class CoordinatorEventManager implements EventManager {
         inLock(
                 putLock,
                 () -> {
-                    if (thread.isShutdownInitiated()
-                            && event instanceof CommitBulkLoadBucketEvent) {
-                        rejectPendingPublication(event);
+                    if (thread.isShutdownInitiated() && rejectPendingBulkLoadEvent(event)) {
                         return;
                     }
                     try {
@@ -244,7 +243,7 @@ public final class CoordinatorEventManager implements EventManager {
                                 event,
                                 event.getClass());
                     } catch (InterruptedException e) {
-                        rejectPendingPublication(event);
+                        rejectPendingBulkLoadEvent(event);
                         LOG.error("Fail to put coordinator event {}.", event, e);
                     }
                 });
@@ -256,20 +255,36 @@ public final class CoordinatorEventManager implements EventManager {
                 () -> {
                     QueuedEvent pending;
                     while ((pending = queue.poll()) != null) {
-                        rejectPendingPublication(pending.event);
+                        rejectPendingBulkLoadEvent(pending.event);
                     }
                     put(event);
                 });
     }
 
-    private static void rejectPendingPublication(CoordinatorEvent event) {
+    private static boolean rejectPendingBulkLoadEvent(CoordinatorEvent event) {
         if (event instanceof CommitBulkLoadBucketEvent) {
             CommitBulkLoadBucketEvent commit = (CommitBulkLoadBucketEvent) event;
             commit.result.completeExceptionally(
                     new NotCoordinatorLeaderException(
                             "Coordinator stopped before publishing "
                                     + commit.snapshot.getTableBucket()));
+            return true;
         }
+
+        CompletableFuture<?> response;
+        if (event instanceof BeginBulkLoadEvent) {
+            response = ((BeginBulkLoadEvent) event).result;
+        } else if (event instanceof CommitBulkLoadEvent) {
+            response = ((CommitBulkLoadEvent) event).result;
+        } else if (event instanceof AbortBulkLoadEvent) {
+            response = ((AbortBulkLoadEvent) event).result;
+        } else {
+            return false;
+        }
+        response.completeExceptionally(
+                new NotCoordinatorLeaderException(
+                        "Coordinator stopped before processing BulkLoad metadata."));
+        return true;
     }
 
     private class CoordinatorEventThread extends ShutdownableThread {

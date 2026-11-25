@@ -1564,7 +1564,7 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    private void writeBulkLoadMetadata(List<CuratorOp> fencedOperations, int epochVersion)
+    void writeBulkLoadMetadata(List<CuratorOp> fencedOperations, int epochVersion)
             throws Exception {
         try {
             zkClient.transaction().forOperations(fencedOperations);
@@ -1576,7 +1576,7 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    private static boolean failedMultiOperation(KeeperException e, int index) {
+    static boolean failedMultiOperation(KeeperException e, int index) {
         List<OpResult> results = e.getResults();
         return results != null
                 && index < results.size()

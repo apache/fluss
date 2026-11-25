@@ -212,6 +212,20 @@ public class ConfigOptions {
                                             + PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS.key()
                                             + "\".");
 
+    public static final ConfigOption<Integer> COORDINATOR_BULKLOAD_MAX_TARGETS =
+            key("coordinator.bulkload.max-targets")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "Maximum physical targets selected by one BulkLoad transaction.");
+
+    public static final ConfigOption<Duration> COORDINATOR_BULKLOAD_RESULT_RETENTION =
+            key("coordinator.bulkload.result-retention")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(7))
+                    .withDescription(
+                            "Minimum retention of terminal BulkLoad results while the table exists.");
+
     public static final ConfigOption<Duration> AUTO_PARTITION_CHECK_INTERVAL =
             key("auto-partition.check.interval")
                     .durationType()

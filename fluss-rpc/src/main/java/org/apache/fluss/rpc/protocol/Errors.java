@@ -21,6 +21,7 @@ import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.BulkLoadConflictException;
+import org.apache.fluss.exception.BulkLoadIncompleteException;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
@@ -340,7 +341,9 @@ public enum Errors {
     INVALID_BULK_LOAD_SNAPSHOT(
             85, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
     BULK_LOAD_TARGET_WITHDRAWN(
-            86, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new);
+            86, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new),
+    BULK_LOAD_INCOMPLETE(
+            87, "BulkLoad transaction is incomplete.", BulkLoadIncompleteException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

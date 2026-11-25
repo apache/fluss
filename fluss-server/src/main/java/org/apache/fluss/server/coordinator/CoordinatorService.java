@@ -29,7 +29,6 @@ import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
-import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -68,6 +67,8 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
+import org.apache.fluss.rpc.messages.AbortBulkLoadResponse;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
@@ -84,10 +85,14 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -120,12 +125,16 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoRequest;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsRequest;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
@@ -173,11 +182,14 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
+import org.apache.fluss.server.coordinator.event.AbortBulkLoadEvent;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.BeginBulkLoadEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
+import org.apache.fluss.server.coordinator.event.CommitBulkLoadEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
@@ -219,7 +231,6 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
-import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.slf4j.Logger;
@@ -276,6 +287,7 @@ import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
@@ -372,91 +384,182 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
+    public CompletableFuture<BeginBulkLoadResponse> beginBulkLoad(BeginBulkLoadRequest request) {
+        TablePath path = toTablePath(request.getTablePath());
+        path.validate();
+        authorizeTable(OperationType.WRITE, path);
+        CompletableFuture<BeginBulkLoadResponse> response = new CompletableFuture<>();
+        requireLeaderEventProcessor()
+                .getCoordinatorEventManager()
+                .put(
+                        new BeginBulkLoadEvent(
+                                path,
+                                request.hasBulkLoadId() ? request.getBulkLoadId() : null,
+                                request.getPartitionNamesList(),
+                                response));
+        return translateBulkLoadZooKeeperFailures(response);
+    }
+
+    @Override
+    public CompletableFuture<GetBulkLoadInfoResponse> getBulkLoadInfo(
+            GetBulkLoadInfoRequest request) {
+        PbBulkLoadHandle handle = request.getHandle();
+        authorizeTable(OperationType.DESCRIBE, handle.getTableId());
+        CompletableFuture<GetBulkLoadInfoResponse> response = new CompletableFuture<>();
+        ioExecutor.execute(
+                () ->
+                        completeFromCallable(
+                                response,
+                                () -> {
+                                    BulkLoadManager manager =
+                                            requireLeaderEventProcessor().bulkLoadManager();
+                                    return manager.getBulkLoadInfo(
+                                            handle.getTableId(), handle.getBulkLoadId());
+                                }));
+        return translateBulkLoadZooKeeperFailures(response);
+    }
+
+    @Override
+    public CompletableFuture<ListInProgressBulkLoadsResponse> listInProgressBulkLoads(
+            ListInProgressBulkLoadsRequest request) {
+        TablePath path = toTablePath(request.getTablePath());
+        path.validate();
+        authorizeTable(OperationType.DESCRIBE, path);
+        CompletableFuture<ListInProgressBulkLoadsResponse> response = new CompletableFuture<>();
+        ioExecutor.execute(
+                () ->
+                        completeFromCallable(
+                                response,
+                                () -> {
+                                    BulkLoadManager manager =
+                                            requireLeaderEventProcessor().bulkLoadManager();
+                                    return manager.listInProgressBulkLoads(
+                                            path, request.getPartitionNamesList());
+                                }));
+        return translateBulkLoadZooKeeperFailures(response);
+    }
+
+    @Override
+    public CompletableFuture<CommitBulkLoadResponse> commitBulkLoad(CommitBulkLoadRequest request) {
+        PbBulkLoadHandle handle = request.getHandle();
+        authorizeTable(OperationType.WRITE, handle.getTableId());
+        CompletableFuture<CommitBulkLoadResponse> response = new CompletableFuture<>();
+        requireLeaderEventProcessor()
+                .getCoordinatorEventManager()
+                .put(
+                        new CommitBulkLoadEvent(
+                                handle.getTableId(), handle.getBulkLoadId(), response));
+        return translateBulkLoadZooKeeperFailures(response);
+    }
+
+    @Override
+    public CompletableFuture<AbortBulkLoadResponse> abortBulkLoad(AbortBulkLoadRequest request) {
+        PbBulkLoadHandle handle = request.getHandle();
+        authorizeTable(OperationType.WRITE, handle.getTableId());
+        CompletableFuture<AbortBulkLoadResponse> response = new CompletableFuture<>();
+        requireLeaderEventProcessor()
+                .getCoordinatorEventManager()
+                .put(
+                        new AbortBulkLoadEvent(
+                                handle.getTableId(),
+                                handle.getBulkLoadId(),
+                                request.hasAbortMessage() ? request.getAbortMessage() : null,
+                                response));
+        return translateBulkLoadZooKeeperFailures(response);
+    }
+
+    @Override
     public CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
             AllocateBulkLoadBucketSnapshotRequest request) {
         PbBulkLoadHandle handle = request.getHandle();
-        authorizeBulkLoad(handle.getTableId());
-        return submitBulkLoadOperation(
-                manager -> {
-                    TableBucket bucket =
-                            new TableBucket(
-                                    handle.getTableId(),
-                                    request.hasPartitionId() ? request.getPartitionId() : null,
-                                    request.getBucketId());
-                    BulkLoadBucket allocation =
-                            manager.allocateBucketSnapshot(handle.getBulkLoadId(), bucket);
-                    return CompletableFuture.completedFuture(
-                            new AllocateBulkLoadBucketSnapshotResponse()
-                                    .setSnapshotId(allocation.snapshotId)
-                                    .setLogOffset(allocation.logOffset)
-                                    .setState(allocation.state));
-                });
+        authorizeTable(OperationType.WRITE, handle.getTableId());
+        TableBucket bucket =
+                new TableBucket(
+                        handle.getTableId(),
+                        request.hasPartitionId() ? request.getPartitionId() : null,
+                        request.getBucketId());
+        CoordinatorEventProcessor coordinator = requireLeaderEventProcessor();
+        CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> response =
+                new CompletableFuture<>();
+        ioExecutor.execute(
+                () ->
+                        completeFromCallable(
+                                response,
+                                () -> {
+                                    checkCoordinatorLeadership(coordinator);
+                                    BulkLoadManager manager = coordinator.bulkLoadManager();
+                                    BulkLoadBucket allocation =
+                                            manager.allocateBucketSnapshot(
+                                                    handle.getBulkLoadId(), bucket);
+                                    return new AllocateBulkLoadBucketSnapshotResponse()
+                                            .setSnapshotId(allocation.snapshotId)
+                                            .setLogOffset(allocation.logOffset)
+                                            .setState(allocation.state);
+                                }));
+        return translateBulkLoadZooKeeperFailures(response);
     }
 
     @Override
     public CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
             CommitBulkLoadBucketSnapshotRequest request) {
         PbBulkLoadHandle handle = request.getHandle();
-        authorizeBulkLoad(handle.getTableId());
-        return submitBulkLoadOperation(
-                        manager -> {
-                            TableBucket bucket =
-                                    new TableBucket(
-                                            handle.getTableId(),
-                                            request.hasPartitionId()
-                                                    ? request.getPartitionId()
-                                                    : null,
-                                            request.getBucketId());
-                            CoordinatorEventProcessor processor =
-                                    coordinatorEventProcessorSupplier.get();
-                            return manager.commitBucketSnapshot(
-                                    handle.getBulkLoadId(),
-                                    bucket,
-                                    processor.completedSnapshotStoreManager(),
-                                    processor.getCoordinatorEventManager());
-                        })
+        authorizeTable(OperationType.WRITE, handle.getTableId());
+        TableBucket bucket =
+                new TableBucket(
+                        handle.getTableId(),
+                        request.hasPartitionId() ? request.getPartitionId() : null,
+                        request.getBucketId());
+        CoordinatorEventProcessor coordinator = requireLeaderEventProcessor();
+        CompletableFuture<CompletableFuture<Void>> prepared = new CompletableFuture<>();
+        ioExecutor.execute(
+                () ->
+                        completeFromCallable(
+                                prepared,
+                                () -> {
+                                    checkCoordinatorLeadership(coordinator);
+                                    BulkLoadManager manager = coordinator.bulkLoadManager();
+                                    return manager.commitBucketSnapshot(
+                                            handle.getBulkLoadId(),
+                                            bucket,
+                                            coordinator.completedSnapshotStoreManager(),
+                                            coordinator.getCoordinatorEventManager());
+                                }));
+        return translateBulkLoadZooKeeperFailures(prepared.thenCompose(publication -> publication))
                 .thenApply(ignored -> new CommitBulkLoadBucketSnapshotResponse());
     }
 
-    private void authorizeBulkLoad(long tableId) {
+    private CoordinatorEventProcessor requireLeaderEventProcessor() {
         try {
-            authorizeTable(OperationType.WRITE, tableId);
-        } catch (UnknownTableOrBucketException e) {
-            throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
+            CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
+            checkCoordinatorLeadership(processor);
+            return processor;
+        } catch (IllegalStateException e) {
+            throw new NotCoordinatorLeaderException(
+                    "BulkLoad requires the current Coordinator leader.", e);
         }
     }
 
-    private <T> CompletableFuture<T> submitBulkLoadOperation(
-            FunctionWithException<BulkLoadManager, CompletableFuture<T>, Exception> action) {
-        final int epochVersion = coordinatorZkVersionSupplier.get();
-        return CompletableFuture.supplyAsync(
-                        () -> {
-                            if (!isLeader() || epochVersion < 0) {
-                                throw new NotCoordinatorLeaderException(
-                                        "BulkLoad requires the current Coordinator leader.");
-                            }
-                            try {
-                                return action.apply(
-                                        new BulkLoadManager(zkClient, epochVersion, ioExecutor));
-                            } catch (Exception e) {
-                                throw new CompletionException(e);
-                            }
-                        },
-                        ioExecutor)
-                .thenCompose(result -> result)
-                .exceptionally(
-                        failure -> {
-                            Throwable cause = ExceptionUtils.stripCompletionException(failure);
-                            if (cause instanceof KeeperException.ConnectionLossException) {
-                                throw new NetworkException(
-                                        "Connection to BulkLoad metadata store was lost.", cause);
-                            }
-                            if (cause instanceof KeeperException.OperationTimeoutException) {
-                                throw new TimeoutException(
-                                        "BulkLoad metadata operation timed out.", cause);
-                            }
-                            throw new CompletionException(cause);
-                        });
+    private void checkCoordinatorLeadership(CoordinatorEventProcessor coordinator) {
+        if (!isLeader() || coordinator.getCoordinatorZkVersion() < 0) {
+            throw new NotCoordinatorLeaderException(
+                    "BulkLoad requires the current Coordinator leader.");
+        }
+    }
+
+    private static <T> CompletableFuture<T> translateBulkLoadZooKeeperFailures(
+            CompletableFuture<T> result) {
+        return result.exceptionally(
+                failure -> {
+                    Throwable cause = ExceptionUtils.stripCompletionException(failure);
+                    if (cause instanceof KeeperException.ConnectionLossException) {
+                        throw new NetworkException(
+                                "Connection to BulkLoad metadata store was lost.", cause);
+                    }
+                    if (cause instanceof KeeperException.OperationTimeoutException) {
+                        throw new TimeoutException("BulkLoad metadata operation timed out.", cause);
+                    }
+                    throw new CompletionException(cause);
+                });
     }
 
     @Override

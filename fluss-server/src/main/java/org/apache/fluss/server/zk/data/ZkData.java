@@ -310,10 +310,25 @@ public final class ZkData {
     // ZNodes under "/bulk_load/"
     // ------------------------------------------------------------------------------------------
 
+    /** The transaction and ownership directories of one physical table. */
+    public static final class BulkLoadTableZNode {
+        public static String root() {
+            return "/bulk_load/tables";
+        }
+
+        public static String path(long tableId) {
+            return root() + "/" + tableId;
+        }
+
+        public static String transactions(long tableId) {
+            return path(tableId) + "/transactions";
+        }
+    }
+
     /** The transaction record written by BeginBulkLoad. */
     public static final class BulkLoadTransactionZNode {
         public static String path(long tableId, String bulkLoadId) {
-            return "/bulk_load/tables/" + tableId + "/transactions/" + bulkLoadId;
+            return BulkLoadTableZNode.transactions(tableId) + "/" + bulkLoadId;
         }
 
         public static byte[] encode(BulkLoadTransaction transaction) {
@@ -328,10 +343,18 @@ public final class ZkData {
 
     /** The table or physical partition targeted by a transaction. */
     public static final class BulkLoadTargetZNode {
+        public static String root(long tableId, String bulkLoadId) {
+            return BulkLoadTransactionZNode.path(tableId, bulkLoadId) + "/targets";
+        }
+
+        public static String partitions(long tableId, String bulkLoadId) {
+            return root(tableId, bulkLoadId) + "/partitions";
+        }
+
         public static String path(long tableId, String bulkLoadId, @Nullable Long partitionId) {
-            return BulkLoadTransactionZNode.path(tableId, bulkLoadId)
-                    + "/targets"
-                    + (partitionId == null ? "/table" : "/partitions/" + partitionId);
+            return partitionId == null
+                    ? root(tableId, bulkLoadId) + "/table"
+                    : partitions(tableId, bulkLoadId) + "/" + partitionId;
         }
 
         public static byte[] encode(BulkLoadTarget target) {
@@ -343,13 +366,48 @@ public final class ZkData {
         }
     }
 
+    /** The transaction that currently owns a table or physical partition. */
+    public static final class BulkLoadOwnerZNode {
+        public static String root(long tableId) {
+            return BulkLoadTableZNode.path(tableId) + "/owners";
+        }
+
+        public static String partitions(long tableId) {
+            return root(tableId) + "/partitions";
+        }
+
+        public static String path(long tableId, @Nullable Long partitionId) {
+            return partitionId == null
+                    ? root(tableId) + "/table"
+                    : partitions(tableId) + "/" + partitionId;
+        }
+
+        public static byte[] encode(String bulkLoadId) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    bulkLoadId,
+                    (id, out) -> {
+                        out.writeStartObject();
+                        out.writeNumberField("version", 1);
+                        out.writeStringField("bulk_load_id", id);
+                        out.writeEndObject();
+                    });
+        }
+
+        public static String decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, node -> node.get("bulk_load_id").asText());
+        }
+    }
+
     /** The allocation and commit state of a target bucket. */
     public static final class BulkLoadBucketZNode {
-        public static String path(BulkLoadTransaction transaction, TableBucket bucket) {
+        public static String root(BulkLoadTransaction transaction, @Nullable Long partitionId) {
             return BulkLoadTargetZNode.path(
-                            transaction.tableId, transaction.bulkLoadId, bucket.getPartitionId())
-                    + "/buckets/"
-                    + bucket.getBucket();
+                            transaction.tableId, transaction.bulkLoadId, partitionId)
+                    + "/buckets";
+        }
+
+        public static String path(BulkLoadTransaction transaction, TableBucket bucket) {
+            return root(transaction, bucket.getPartitionId()) + "/" + bucket.getBucket();
         }
 
         public static byte[] encode(BulkLoadBucket bucket) {

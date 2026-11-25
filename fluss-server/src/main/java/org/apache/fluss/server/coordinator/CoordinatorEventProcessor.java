@@ -50,10 +50,13 @@ import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AbortBulkLoadResponse;
 import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
@@ -64,13 +67,17 @@ import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
+import org.apache.fluss.server.coordinator.event.AbortBulkLoadEvent;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.BeginBulkLoadEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.CommitBulkLoadBucketEvent;
+import org.apache.fluss.server.coordinator.event.CommitBulkLoadEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
@@ -94,6 +101,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.ReclaimTableBulkLoadMetadataEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
@@ -138,6 +146,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
@@ -216,6 +226,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     // write attempt invalidates the entry before it starts.
     private final Map<TableBucket, List<Integer>> assignmentPersistenceByBucket = new HashMap<>();
     private ScheduledFuture<?> offlineLeaderRetryTask;
+    private final BulkLoadManager bulkLoadManager;
+    private final int bulkLoadMaxTargets;
+    private final long bulkLoadResultRetentionMs;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -306,6 +319,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             offlineLeaderRetryDelayMs));
         }
         this.scheduler = scheduler;
+        this.bulkLoadManager =
+                new BulkLoadManager(
+                        zooKeeperClient, coordinatorContext.getCoordinatorZkVersion(), ioExecutor);
+        this.bulkLoadMaxTargets = conf.get(ConfigOptions.COORDINATOR_BULKLOAD_MAX_TARGETS);
+        this.bulkLoadResultRetentionMs =
+                conf.get(ConfigOptions.COORDINATOR_BULKLOAD_RESULT_RETENTION).toMillis();
         this.zkRetryDelayMs = conf.get(ConfigOptions.ZOOKEEPER_RETRY_WAIT).toMillis();
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
@@ -321,6 +340,88 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     public CoordinatorContext getCoordinatorContext() {
         return coordinatorContext;
+    }
+
+    private BeginBulkLoadResponse processBeginBulkLoad(BeginBulkLoadEvent event) throws Exception {
+        long tableId = coordinatorContext.getTableIdByPath(event.tablePath);
+        TableInfo table = getActiveBulkLoadTable(tableId);
+        if (table == null) {
+            throw new TableNotExistException("Table " + event.tablePath + " does not exist.");
+        }
+        return bulkLoadManager.begin(
+                table,
+                event.bulkLoadId,
+                event.partitionNames,
+                bulkLoadMaxTargets,
+                name -> getBulkLoadPartitionTarget(table, name));
+    }
+
+    private @Nullable BulkLoadTarget getBulkLoadPartitionTarget(TableInfo table, String name) {
+        Long partitionId =
+                coordinatorContext
+                        .getPartitionId(PhysicalTablePath.of(table.getTablePath(), name))
+                        .orElse(null);
+        if (partitionId == null) {
+            return null;
+        }
+        TablePartition tablePartition = new TablePartition(table.getTableId(), partitionId);
+        Integer bucketCount = coordinatorContext.getPartitionBucketCount(tablePartition);
+        if (bucketCount == null
+                || coordinatorContext.isPartitionQueuedForDeletion(tablePartition)) {
+            return null;
+        }
+        PartitionInfo partition = coordinatorContext.getPartitionInfoById(partitionId);
+        return new BulkLoadTarget(
+                partitionId, name, bucketCount, partition.getRemoteDataDir(), false);
+    }
+
+    private CommitBulkLoadResponse processCommitBulkLoad(CommitBulkLoadEvent event)
+            throws Exception {
+        return new CommitBulkLoadResponse()
+                .setStatus(
+                        bulkLoadManager.finishTransaction(
+                                event.tableId,
+                                event.bulkLoadId,
+                                BulkLoadTransaction.COMMITTED,
+                                null,
+                                getActiveBulkLoadTable(event.tableId),
+                                this::isBulkLoadPartitionActive));
+    }
+
+    private AbortBulkLoadResponse processAbortBulkLoad(AbortBulkLoadEvent event) throws Exception {
+        return new AbortBulkLoadResponse()
+                .setStatus(
+                        bulkLoadManager.finishTransaction(
+                                event.tableId,
+                                event.bulkLoadId,
+                                BulkLoadTransaction.ABORTED,
+                                event.abortMessage,
+                                getActiveBulkLoadTable(event.tableId),
+                                this::isBulkLoadPartitionActive));
+    }
+
+    private void processReclaimTableBulkLoadMetadata(ReclaimTableBulkLoadMetadataEvent event) {
+        try {
+            bulkLoadManager.reclaimTableBulkLoadMetadata(
+                    event.tableId,
+                    event.retentionCutoff,
+                    getActiveBulkLoadTable(event.tableId) == null,
+                    coordinatorContext.hasPendingBulkLoadPublication(event.tableId));
+            event.result.complete(null);
+        } catch (Exception e) {
+            event.result.completeExceptionally(e);
+        }
+    }
+
+    private @Nullable TableInfo getActiveBulkLoadTable(long tableId) {
+        return coordinatorContext.isTableQueuedForDeletion(tableId)
+                ? null
+                : coordinatorContext.getTableInfoById(tableId);
+    }
+
+    private boolean isBulkLoadPartitionActive(TablePartition partition) {
+        return coordinatorContext.containsPartitionId(partition.getPartitionId())
+                && !coordinatorContext.isPartitionQueuedForDeletion(partition);
     }
 
     private void processCommitBulkLoadBucket(CommitBulkLoadBucketEvent event) {
@@ -558,9 +659,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
         // start rebalance manager.
         rebalanceManager.startup();
+        bulkLoadManager.startMetadataReclamation(
+                scheduler, coordinatorEventManager, bulkLoadResultRetentionMs);
     }
 
     public void shutdown() {
+        bulkLoadManager.stopMetadataReclamation();
         clearOfflineLeaderRetryTask();
         // Cancel periodic event producers before stopping the event loop.
         rebalanceManager.stopTimeoutChecker();
@@ -915,7 +1019,21 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     @Override
     public void process(CoordinatorEvent event) {
-        if (event instanceof CommitBulkLoadBucketEvent) {
+        if (event instanceof BeginBulkLoadEvent) {
+            BeginBulkLoadEvent beginBulkLoadEvent = (BeginBulkLoadEvent) event;
+            completeFromCallable(
+                    beginBulkLoadEvent.result, () -> processBeginBulkLoad(beginBulkLoadEvent));
+        } else if (event instanceof CommitBulkLoadEvent) {
+            CommitBulkLoadEvent commitBulkLoadEvent = (CommitBulkLoadEvent) event;
+            completeFromCallable(
+                    commitBulkLoadEvent.result, () -> processCommitBulkLoad(commitBulkLoadEvent));
+        } else if (event instanceof AbortBulkLoadEvent) {
+            AbortBulkLoadEvent abortBulkLoadEvent = (AbortBulkLoadEvent) event;
+            completeFromCallable(
+                    abortBulkLoadEvent.result, () -> processAbortBulkLoad(abortBulkLoadEvent));
+        } else if (event instanceof ReclaimTableBulkLoadMetadataEvent) {
+            processReclaimTableBulkLoadMetadata((ReclaimTableBulkLoadMetadataEvent) event);
+        } else if (event instanceof CommitBulkLoadBucketEvent) {
             processCommitBulkLoadBucket((CommitBulkLoadBucketEvent) event);
         } else if (event instanceof BulkLoadVerificationResult) {
             processBulkLoadVerification((BulkLoadVerificationResult) event);
@@ -1417,6 +1535,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // can be never if no other table is being dropped.
         if (dropTableInfo.isPartitioned()) {
             tableManager.resumeDeletions();
+        }
+        if (dropTableInfo.hasPrimaryKey()) {
+            bulkLoadManager.onTableDropped(
+                    tableId, bulkLoadResultRetentionMs, coordinatorEventManager);
         }
     }
 
@@ -3215,6 +3337,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     CompletedSnapshotStoreManager completedSnapshotStoreManager() {
         return completedSnapshotStoreManager;
+    }
+
+    BulkLoadManager bulkLoadManager() {
+        return bulkLoadManager;
     }
 
     private static final class ReplicaReassignment {

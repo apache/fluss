@@ -131,6 +131,8 @@ public class FlussConfigUtils {
         validateServerConfigs(conf);
         validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, 1);
         validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, 1);
+        validMinValue(conf, ConfigOptions.COORDINATOR_BULKLOAD_MAX_TARGETS, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_BULKLOAD_RESULT_RETENTION, 1);
     }
 
     public static void validateTabletConfigs(Configuration conf) {

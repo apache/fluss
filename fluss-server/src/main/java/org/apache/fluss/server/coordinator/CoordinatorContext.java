@@ -745,6 +745,12 @@ public class CoordinatorContext {
         return unverifiedBulkLoadBuckets.contains(bucket);
     }
 
+    /** Returns whether publication verification still needs bucket records for this table. */
+    public boolean hasPendingBulkLoadPublication(long tableId) {
+        return unverifiedBulkLoadBuckets.stream()
+                .anyMatch(bucket -> bucket.getTableId() == tableId);
+    }
+
     void setBulkLoadPublicationPending(TableBucket bucket, boolean pending) {
         if (pending) {
             unverifiedBulkLoadBuckets.add(bucket);
@@ -832,7 +838,7 @@ public class CoordinatorContext {
 
         TablePath tablePath = tablePathById.remove(tableId);
         if (tablePath != null) {
-            tableIdByPath.remove(tablePath);
+            tableIdByPath.remove(tablePath, tableId);
         }
         tableInfoById.remove(tableId);
     }
@@ -861,7 +867,7 @@ public class CoordinatorContext {
         PhysicalTablePath physicalTablePath =
                 pathByPartitionId.remove(tablePartition.getPartitionId());
         if (physicalTablePath != null) {
-            partitionIdByPath.remove(physicalTablePath);
+            partitionIdByPath.remove(physicalTablePath, tablePartition.getPartitionId());
         }
 
         partitionInfoById.remove(tablePartition.getPartitionId());

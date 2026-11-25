@@ -17,6 +17,8 @@
 
 package org.apache.fluss.rpc.gateway;
 
+import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
+import org.apache.fluss.rpc.messages.AbortBulkLoadResponse;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
@@ -31,10 +33,14 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -59,8 +65,12 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoRequest;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsRequest;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
@@ -287,4 +297,25 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.LIST_KV_SNAPSHOTS)
     CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(ListKvSnapshotsRequest request);
+
+    /** Starts a bulk load or returns the retained transaction for the same ID. */
+    @RPC(api = ApiKeys.BEGIN_BULK_LOAD)
+    CompletableFuture<BeginBulkLoadResponse> beginBulkLoad(BeginBulkLoadRequest request);
+
+    /** Completes a bulk load once its effective targets have committed. */
+    @RPC(api = ApiKeys.COMMIT_BULK_LOAD)
+    CompletableFuture<CommitBulkLoadResponse> commitBulkLoad(CommitBulkLoadRequest request);
+
+    /** Ends a bulk load while preserving its committed buckets. */
+    @RPC(api = ApiKeys.ABORT_BULK_LOAD)
+    CompletableFuture<AbortBulkLoadResponse> abortBulkLoad(AbortBulkLoadRequest request);
+
+    /** Returns retained progress for a BulkLoad transaction. */
+    @RPC(api = ApiKeys.GET_BULK_LOAD_INFO)
+    CompletableFuture<GetBulkLoadInfoResponse> getBulkLoadInfo(GetBulkLoadInfoRequest request);
+
+    /** Lists RUNNING transactions matching the selected physical targets. */
+    @RPC(api = ApiKeys.LIST_IN_PROGRESS_BULK_LOADS)
+    CompletableFuture<ListInProgressBulkLoadsResponse> listInProgressBulkLoads(
+            ListInProgressBulkLoadsRequest request);
 }

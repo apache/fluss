@@ -21,12 +21,29 @@ import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.InvalidRequestException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoResponse;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsResponse;
+import org.apache.fluss.rpc.messages.PbBulkLoadStatus;
+import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
+import org.apache.fluss.rpc.messages.PbBulkLoadTargetProgress;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.event.CommitBulkLoadBucketEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ReclaimTableBulkLoadMetadataEvent;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.zk.BulkLoadTransactionStore;
+import org.apache.fluss.server.zk.BulkLoadTransactionStore.BucketProgress;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -36,26 +53,319 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.concurrent.FutureUtils.runAsync;
 
-/** Allocates and commits snapshots for individual BulkLoad buckets. */
+/**
+ * Coordinates BulkLoad transactions and bucket snapshot imports. Transaction mutations run on the
+ * Coordinator event thread. Reading transaction progress and preparing bucket operations run on I/O
+ * threads.
+ */
 public final class BulkLoadManager {
-    private final ZooKeeperClient zooKeeperClient;
-    private final int epochVersion;
-    private final Executor ioExecutor;
+    private static final Logger LOG = LoggerFactory.getLogger(BulkLoadManager.class);
 
-    public BulkLoadManager(ZooKeeperClient zooKeeperClient, int epochVersion, Executor ioExecutor) {
+    private final ZooKeeperClient zooKeeperClient;
+    private final BulkLoadTransactionStore transactionStore;
+    private final int coordinatorEpochZkVersion;
+    private final Executor ioExecutor;
+    private @Nullable ScheduledFuture<?> metadataReclamationTask;
+
+    public BulkLoadManager(
+            ZooKeeperClient zooKeeperClient, int coordinatorEpochZkVersion, Executor ioExecutor) {
         this.zooKeeperClient = zooKeeperClient;
-        this.epochVersion = epochVersion;
+        this.transactionStore = new BulkLoadTransactionStore(zooKeeperClient);
+        this.coordinatorEpochZkVersion = coordinatorEpochZkVersion;
         this.ioExecutor = ioExecutor;
+    }
+
+    /** Establishes ownership of the selected physical targets and fixes their build context. */
+    public BeginBulkLoadResponse begin(
+            TableInfo table,
+            @Nullable String bulkLoadId,
+            List<String> names,
+            int maxTargets,
+            Function<String, BulkLoadTarget> resolvePartitionTarget)
+            throws Exception {
+        requireDistinctPartitions(names);
+        String id = bulkLoadId == null ? UUID.randomUUID().toString() : bulkLoadId;
+        long tableId = table.getTableId();
+        if (bulkLoadId != null) {
+            Optional<VersionedData<BulkLoadTransaction>> previous =
+                    zooKeeperClient.getBulkLoadTransaction(tableId, id);
+            if (previous.isPresent()) {
+                return replayBegin(previous.get().data(), names, table);
+            }
+        }
+
+        if (!table.hasPrimaryKey()) {
+            throw new InvalidRequestException("BulkLoad requires a primary key table.");
+        }
+        if (!table.getSchema().getAutoIncrementColumnNames().isEmpty()) {
+            throw new InvalidRequestException("BulkLoad does not support auto-increment columns.");
+        }
+        if (table.getTableConfig().getMergeEngineType().isPresent()) {
+            throw new InvalidRequestException(
+                    "BulkLoad does not support tables with a merge engine.");
+        }
+        if (table.isPartitioned() == names.isEmpty()) {
+            throw new InvalidRequestException("Invalid partition selection for this table.");
+        }
+        if (Math.max(1, names.size()) > maxTargets) {
+            throw new InvalidRequestException("BulkLoad exceeds max-targets.");
+        }
+
+        if (names.contains(HISTORICAL_PARTITION_VALUE)) {
+            throw new InvalidRequestException("Historical partitions are unsupported.");
+        }
+        List<BulkLoadTarget> targets = resolveBeginTargets(table, names, resolvePartitionTarget);
+        BulkLoadTransaction transaction =
+                new BulkLoadTransaction(
+                        tableId,
+                        id,
+                        table.getTablePath(),
+                        table.getSchemaId(),
+                        table.getRemoteDataDir(),
+                        BulkLoadTransaction.RUNNING,
+                        System.currentTimeMillis(),
+                        null,
+                        null);
+        try {
+            transactionStore.begin(transaction, targets, coordinatorEpochZkVersion);
+        } catch (KeeperException.NodeExistsException e) {
+            // Curator may retry a Begin whose first write succeeded without a response.
+            Optional<VersionedData<BulkLoadTransaction>> current =
+                    zooKeeperClient.getBulkLoadTransaction(tableId, id);
+            if (current.isPresent()) {
+                BulkLoadTransaction existing = current.get().data();
+                return replayBegin(existing, names, table);
+            }
+            throw e;
+        }
+        return beginResponse(transaction, targets, table, table.toTableDescriptor());
+    }
+
+    /** Returns progress for the original targets, including withdrawn partitions. */
+    public GetBulkLoadInfoResponse getBulkLoadInfo(long tableId, String bulkLoadId)
+            throws Exception {
+        BulkLoadTransaction transaction = getTransaction(tableId, bulkLoadId).data();
+        TableRegistration table = getOriginalTableWithVersion(transaction).data();
+        List<BulkLoadTarget> targets =
+                transactionStore.getTargets(transaction, table.isPartitioned());
+        if (targets.isEmpty()) {
+            // Reclamation may finish between the transaction and target reads.
+            throw new BulkLoadNotFoundException("BulkLoad transaction does not exist.");
+        }
+        boolean running = transaction.state == BulkLoadTransaction.RUNNING;
+        Map<String, PartitionRegistration> currentPartitions =
+                running && table.isPartitioned()
+                        ? getCurrentPartitions(transaction, targets)
+                        : Collections.emptyMap();
+        GetBulkLoadInfoResponse response =
+                new GetBulkLoadInfoResponse().setStatus(status(transaction));
+        for (BulkLoadTarget target : targets) {
+            BucketProgress buckets =
+                    transactionStore.getBucketProgress(transaction, target.partitionId);
+            PbBulkLoadTargetProgress progress =
+                    response.addTarget()
+                            .setBucketCount(target.bucketCount)
+                            .setAllocatedBucketCount(buckets.allocated)
+                            .setCommittedBucketCount(buckets.committed)
+                            .setWithdrawn(target.withdrawn);
+            if (target.partitionId != null) {
+                progress.setPartitionId(target.partitionId);
+                if (running && !target.withdrawn) {
+                    PartitionRegistration partition = currentPartitions.get(target.partitionName);
+                    progress.setWithdrawn(
+                            partition == null || partition.getPartitionId() != target.partitionId);
+                }
+            }
+        }
+        return response;
+    }
+
+    /** Lists the running transactions owning any of the selected current physical targets. */
+    public ListInProgressBulkLoadsResponse listInProgressBulkLoads(
+            TablePath path, List<String> names) throws Exception {
+        requireDistinctPartitions(names);
+        TableRegistration table =
+                zooKeeperClient
+                        .getTable(path)
+                        .orElseThrow(
+                                () ->
+                                        new TableNotExistException(
+                                                "Table " + path + " does not exist."));
+        if (!table.isPartitioned() && !names.isEmpty()) {
+            throw new InvalidRequestException("Non-partitioned target has partition names.");
+        }
+
+        List<Long> ids = new ArrayList<>();
+        if (table.isPartitioned()) {
+            Collection<String> selected =
+                    names.isEmpty() ? zooKeeperClient.getPartitions(path) : names;
+            Map<String, PartitionRegistration> registrations =
+                    zooKeeperClient.getPartitionRegistrations(path, selected);
+            for (String name : selected) {
+                PartitionRegistration partition = registrations.get(name);
+                if (partition != null && partition.getTableId() == table.tableId) {
+                    ids.add(partition.getPartitionId());
+                } else if (!names.isEmpty()) {
+                    throw partitionNotFound(name);
+                }
+            }
+        } else {
+            ids.add(null);
+        }
+
+        ListInProgressBulkLoadsResponse response = new ListInProgressBulkLoadsResponse();
+        for (BulkLoadTransaction transaction :
+                transactionStore.listRunningTransactions(table.tableId, ids)) {
+            response.addTransaction().copyFrom(status(transaction));
+        }
+        return response;
+    }
+
+    /** Ends the transaction, or returns its existing matching terminal result. */
+    public PbBulkLoadStatus finishTransaction(
+            long tableId,
+            String bulkLoadId,
+            int terminalState,
+            @Nullable String abortMessage,
+            @Nullable TableInfo table,
+            Predicate<TablePartition> partitionExists)
+            throws Exception {
+        VersionedData<BulkLoadTransaction> transaction = getTransaction(tableId, bulkLoadId);
+        BulkLoadTransaction original = transaction.data();
+        if (table == null) {
+            throw originalTableNotFound();
+        }
+        if (original.state == terminalState) {
+            return status(original);
+        }
+        requireRunning(original);
+        List<BulkLoadTarget> targets = transactionStore.getTargets(original, table.isPartitioned());
+        List<BulkLoadTarget> newlyWithdrawnTargets = new ArrayList<>();
+        for (int i = 0; i < targets.size(); i++) {
+            BulkLoadTarget target = targets.get(i);
+            if (!target.withdrawn
+                    && target.partitionId != null
+                    && !partitionExists.test(new TablePartition(tableId, target.partitionId))) {
+                BulkLoadTarget withdrawn = target.withdraw();
+                targets.set(i, withdrawn);
+                newlyWithdrawnTargets.add(withdrawn);
+            }
+        }
+        if (!newlyWithdrawnTargets.isEmpty()) {
+            transactionStore.persistWithdrawnTargets(
+                    original, newlyWithdrawnTargets, coordinatorEpochZkVersion);
+        }
+        try {
+            return status(
+                    transactionStore.finishTransaction(
+                            transaction,
+                            targets,
+                            terminalState,
+                            abortMessage,
+                            coordinatorEpochZkVersion));
+        } catch (KeeperException.BadVersionException e) {
+            BulkLoadTransaction current =
+                    getTransaction(original.tableId, original.bulkLoadId).data();
+            if (current.state == terminalState) {
+                return status(current);
+            }
+            throw e;
+        }
+    }
+
+    /** Schedules periodic metadata reclamation for the Coordinator leadership term. */
+    public void startMetadataReclamation(
+            Scheduler scheduler, EventManager eventManager, long retentionMillis) {
+        AtomicBoolean sweepRunning = new AtomicBoolean();
+        metadataReclamationTask =
+                scheduler.schedule(
+                        "expire-bulk-load-results",
+                        () ->
+                                scheduleMetadataReclamation(
+                                        eventManager, retentionMillis, sweepRunning),
+                        0,
+                        Duration.ofMinutes(1).toMillis());
+    }
+
+    /** Cancels the periodic trigger before the Coordinator event queue closes. */
+    public void stopMetadataReclamation() {
+        if (metadataReclamationTask != null) {
+            metadataReclamationTask.cancel(false);
+        }
+    }
+
+    /** Enqueues reclamation for a dropped physical table without waiting for the next sweep. */
+    public void onTableDropped(long tableId, long retentionMillis, EventManager eventManager) {
+        enqueueTableMetadataReclamation(
+                tableId, System.currentTimeMillis() - retentionMillis, eventManager);
+    }
+
+    /** Discovers tables and enqueues one metadata reclamation event at a time. */
+    public CompletableFuture<Void> enqueueMetadataReclamation(
+            long retentionCutoff, EventManager eventManager) throws Exception {
+        CompletableFuture<Void> sweep = CompletableFuture.completedFuture(null);
+        // Other Coordinator events can run between tables.
+        for (long tableId : transactionStore.listTableIdsWithBulkLoadMetadata()) {
+            sweep =
+                    sweep.thenCompose(
+                            ignored ->
+                                    enqueueTableMetadataReclamation(
+                                            tableId, retentionCutoff, eventManager));
+        }
+        return sweep;
+    }
+
+    /** Reclaims eligible BulkLoad metadata for one physical table. */
+    public void reclaimTableBulkLoadMetadata(
+            long tableId, long retentionCutoff, boolean tableDropped, boolean hasPendingPublication)
+            throws Exception {
+        boolean hasRetainedResults = false;
+        for (VersionedData<BulkLoadTransaction> storedTransaction :
+                transactionStore.getTransactionsForTable(tableId)) {
+            BulkLoadTransaction transaction = storedTransaction.data();
+            boolean expired =
+                    transaction.finishedTime != null && transaction.finishedTime <= retentionCutoff;
+            if (tableDropped || (expired && !hasPendingPublication)) {
+                transactionStore.reclaimTransaction(storedTransaction, coordinatorEpochZkVersion);
+            } else {
+                hasRetainedResults = true;
+            }
+        }
+        if (!hasRetainedResults) {
+            transactionStore.pruneTableDirectories(tableId, coordinatorEpochZkVersion);
+        }
     }
 
     /**
@@ -67,7 +377,7 @@ public final class BulkLoadManager {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
         BulkLoadTransaction original = transaction.data();
-        VersionedData<TableRegistration> table = getOriginalTable(original);
+        VersionedData<TableRegistration> table = getOriginalTableWithVersion(original);
         BulkLoadBucket existing = zooKeeperClient.getBulkLoadBucket(original, bucket).orElse(null);
         if (existing != null && existing.state == BulkLoadBucket.COMMITTED) {
             return existing;
@@ -95,7 +405,7 @@ public final class BulkLoadManager {
                     allocation,
                     table.zkVersion(),
                     partitionVersion,
-                    epochVersion);
+                    coordinatorEpochZkVersion);
             return allocation;
         } catch (KeeperException.NodeExistsException e) {
             // The preceding checks succeeded; only creating the bucket record can report
@@ -122,7 +432,8 @@ public final class BulkLoadManager {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
         BulkLoadTransaction bulkLoadTransaction = transaction.data();
-        VersionedData<TableRegistration> currentTable = getOriginalTable(bulkLoadTransaction);
+        VersionedData<TableRegistration> currentTable =
+                getOriginalTableWithVersion(bulkLoadTransaction);
         Optional<BulkLoadBucket> record =
                 zooKeeperClient.getBulkLoadBucket(bulkLoadTransaction, bucket);
         if (record.isPresent() && record.get().state == BulkLoadBucket.COMMITTED) {
@@ -145,7 +456,7 @@ public final class BulkLoadManager {
                         target,
                         currentTable.zkVersion(),
                         partitionVersion,
-                        epochVersion,
+                        coordinatorEpochZkVersion,
                         snapshotStores.getOrCreateCompletedSnapshotStore(tablePath, bucket));
         eventManager.put(event);
         return event.result
@@ -165,6 +476,161 @@ public final class BulkLoadManager {
                 .thenCompose(result -> result);
     }
 
+    private void scheduleMetadataReclamation(
+            EventManager eventManager, long retentionMillis, AtomicBoolean sweepRunning) {
+        if (!sweepRunning.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            ioExecutor.execute(
+                    () -> enqueuePeriodicReclamation(eventManager, retentionMillis, sweepRunning));
+        } catch (RejectedExecutionException ignored) {
+            sweepRunning.set(false);
+        }
+    }
+
+    private void enqueuePeriodicReclamation(
+            EventManager eventManager, long retentionMillis, AtomicBoolean sweepRunning) {
+        try {
+            enqueueMetadataReclamation(System.currentTimeMillis() - retentionMillis, eventManager)
+                    .whenComplete((ignored, failure) -> sweepRunning.set(false));
+        } catch (Exception e) {
+            sweepRunning.set(false);
+            LOG.warn("Failed to discover BulkLoad tables for maintenance.", e);
+        }
+    }
+
+    private CompletableFuture<Void> enqueueTableMetadataReclamation(
+            long tableId, long retentionCutoff, EventManager eventManager) {
+        ReclaimTableBulkLoadMetadataEvent event =
+                new ReclaimTableBulkLoadMetadataEvent(tableId, retentionCutoff);
+        eventManager.put(event);
+        return event.result.exceptionally(failure -> handleReclamationFailure(tableId, failure));
+    }
+
+    private Void handleReclamationFailure(long tableId, Throwable failure) {
+        Throwable cause = ExceptionUtils.stripCompletionException(failure);
+        if (cause instanceof NotCoordinatorLeaderException) {
+            throw new CompletionException(cause);
+        }
+        LOG.warn("Failed to maintain BulkLoad metadata for table {}.", tableId, cause);
+        return null;
+    }
+
+    private Map<String, PartitionRegistration> getCurrentPartitions(
+            BulkLoadTransaction transaction, List<BulkLoadTarget> targets) throws Exception {
+        List<String> partitionNames = new ArrayList<>();
+        for (BulkLoadTarget target : targets) {
+            if (!target.withdrawn) {
+                partitionNames.add(target.partitionName);
+            }
+        }
+        return zooKeeperClient.getPartitionRegistrations(transaction.tablePath, partitionNames);
+    }
+
+    private BeginBulkLoadResponse replayBegin(
+            BulkLoadTransaction transaction, List<String> names, TableInfo table) throws Exception {
+        List<BulkLoadTarget> targets =
+                transactionStore.getTargets(transaction, table.isPartitioned());
+        Set<String> original = new HashSet<>();
+        for (BulkLoadTarget target : targets) {
+            if (target.partitionName != null) {
+                original.add(target.partitionName);
+            }
+        }
+        if (!original.equals(new HashSet<>(names))) {
+            throw new InvalidRequestException("bulk_load_id has different targets.");
+        }
+        TableDescriptor descriptor = table.toTableDescriptor();
+        if (table.getSchemaId() != transaction.schemaId) {
+            SchemaInfo schema =
+                    zooKeeperClient
+                            .getSchemaById(transaction.tablePath, transaction.schemaId)
+                            .orElseThrow(
+                                    () ->
+                                            new SchemaNotExistException(
+                                                    String.format(
+                                                            "Schema %d of table %s does not exist.",
+                                                            transaction.schemaId,
+                                                            transaction.tablePath)));
+            descriptor = TableDescriptor.builder(descriptor).schema(schema.getSchema()).build();
+        }
+        return beginResponse(transaction, targets, table, descriptor);
+    }
+
+    private static List<BulkLoadTarget> resolveBeginTargets(
+            TableInfo table,
+            List<String> names,
+            Function<String, BulkLoadTarget> resolvePartitionTarget) {
+        if (!table.isPartitioned()) {
+            return Collections.singletonList(
+                    new BulkLoadTarget(
+                            null, null, table.getNumBuckets(), table.getRemoteDataDir(), false));
+        }
+        List<BulkLoadTarget> targets = new ArrayList<>();
+        for (String name : names) {
+            BulkLoadTarget target = resolvePartitionTarget.apply(name);
+            if (target == null) {
+                throw partitionNotFound(name);
+            }
+            targets.add(target);
+        }
+        targets.sort(Comparator.comparing(target -> target.partitionId));
+        return targets;
+    }
+
+    private static BeginBulkLoadResponse beginResponse(
+            BulkLoadTransaction transaction,
+            List<BulkLoadTarget> targets,
+            TableInfo table,
+            TableDescriptor descriptor) {
+        BeginBulkLoadResponse response = new BeginBulkLoadResponse();
+        response.setStatus(status(transaction));
+        response.setTableInfo()
+                .setTableId(table.getTableId())
+                .setSchemaId(transaction.schemaId)
+                .setTableJson(descriptor.toJsonBytes())
+                .setCreatedTime(table.getCreatedTime())
+                .setModifiedTime(table.getModifiedTime())
+                .setBucketCountEpoch(table.getBucketCountEpoch())
+                .setRemoteDataDir(transaction.remoteDataDir);
+        for (BulkLoadTarget target : targets) {
+            PbBulkLoadTargetInfo info =
+                    response.addTarget()
+                            .setBucketCount(target.bucketCount)
+                            .setRemoteDataDir(target.remoteDataDir);
+            if (target.partitionId != null) {
+                info.setPartitionId(target.partitionId).setPartitionName(target.partitionName);
+            }
+        }
+        return response;
+    }
+
+    private static PbBulkLoadStatus status(BulkLoadTransaction transaction) {
+        PbBulkLoadStatus status =
+                new PbBulkLoadStatus()
+                        .setState(transaction.state)
+                        .setCreatedTime(transaction.createdTime);
+        status.setHandle().setTableId(transaction.tableId).setBulkLoadId(transaction.bulkLoadId);
+        if (transaction.finishedTime != null) {
+            status.setFinishedTime(transaction.finishedTime);
+        }
+        if (transaction.abortMessage != null) {
+            status.setAbortMessage(transaction.abortMessage);
+        }
+        return status;
+    }
+
+    private static void requireDistinctPartitions(List<String> names) {
+        if (new HashSet<>(names).size() != names.size()) {
+            throw new InvalidRequestException("Duplicate partition names.");
+        }
+    }
+
+    private static PartitionNotExistException partitionNotFound(String name) {
+        return new PartitionNotExistException("Partition " + name + " does not exist.");
+    }
+
     private VersionedData<BulkLoadTransaction> getTransaction(long tableId, String bulkLoadId)
             throws Exception {
         return zooKeeperClient
@@ -175,15 +641,16 @@ public final class BulkLoadManager {
                                         "BulkLoad transaction does not exist."));
     }
 
-    private VersionedData<TableRegistration> getOriginalTable(BulkLoadTransaction transaction)
-            throws Exception {
+    private VersionedData<TableRegistration> getOriginalTableWithVersion(
+            BulkLoadTransaction transaction) throws Exception {
         return zooKeeperClient
                 .getTableWithVersion(transaction.tablePath)
                 .filter(table -> table.data().tableId == transaction.tableId)
-                .orElseThrow(
-                        () ->
-                                new BulkLoadNotFoundException(
-                                        "The original BulkLoad table no longer exists."));
+                .orElseThrow(BulkLoadManager::originalTableNotFound);
+    }
+
+    private static BulkLoadNotFoundException originalTableNotFound() {
+        return new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
     }
 
     private VersionedData<BulkLoadTarget> resolveTarget(
@@ -208,20 +675,22 @@ public final class BulkLoadManager {
         if (target.withdrawn) {
             throw new BulkLoadTargetWithdrawnException("The original physical target was deleted.");
         }
+        VersionedData<PartitionRegistration> partition =
+                target.partitionId == null
+                        ? null
+                        : getOriginalPartition(transaction.tablePath, target);
         // KV encoding, row TTL, and changelog image are immutable through ALTER TABLE.
         if (zooKeeperClient.getCurrentSchemaId(transaction.tablePath) != transaction.schemaId
                 || !Objects.equals(table.remoteDataDir, transaction.remoteDataDir)) {
             throw new InvalidRequestException("BulkLoad build context changed.");
         }
-        if (target.partitionId == null) {
+        if (partition == null) {
             if (table.bucketCount != target.bucketCount) {
                 throw new InvalidRequestException("BulkLoad target bucket count changed.");
             }
             return null;
         }
 
-        VersionedData<PartitionRegistration> partition =
-                getOriginalPartition(transaction.tablePath, target);
         PartitionRegistration registration = partition.data();
         int bucketCount =
                 registration.getBucketCountOrDefault(table.bucketCount, table.bucketCountEpoch);
@@ -245,7 +714,7 @@ public final class BulkLoadManager {
 
     private void checkMutationTarget(BulkLoadTransaction original, BulkLoadTarget target)
             throws Exception {
-        getOriginalTable(original);
+        getOriginalTableWithVersion(original);
         requireRunning(getTransaction(original.tableId, original.bulkLoadId).data());
         if (target.partitionId != null) {
             getOriginalPartition(original.tablePath, target);

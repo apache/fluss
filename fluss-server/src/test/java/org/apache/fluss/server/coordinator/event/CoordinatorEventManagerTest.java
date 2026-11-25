@@ -19,12 +19,14 @@ package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
@@ -37,12 +39,14 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventManager}. */
 class CoordinatorEventManagerTest {
@@ -217,6 +221,30 @@ class CoordinatorEventManagerTest {
             assertThat(registry.metrics).containsOnlyKeys("serverMetric");
             assertThat(registry.metrics.get("serverMetric")).isSameAs(serverMetric);
             assertThat(metricGroup.isClosed()).isFalse();
+        } finally {
+            manager.close();
+            metricGroup.close();
+        }
+    }
+
+    @Test
+    void testBulkLoadLifecycleEventsFailWhenCoordinatorStops() {
+        TestingMetricRegistry registry = new TestingMetricRegistry();
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(registry, "cluster1", "host", "0");
+        CoordinatorEventManager manager = new CoordinatorEventManager(event -> {}, metricGroup);
+
+        try {
+            CompletableFuture<CommitBulkLoadResponse> response = new CompletableFuture<>();
+            manager.put(new CommitBulkLoadEvent(1, "load", response));
+            manager.close();
+            assertThatThrownBy(() -> response.get(10, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(NotCoordinatorLeaderException.class);
+
+            CompletableFuture<CommitBulkLoadResponse> lateResponse = new CompletableFuture<>();
+            manager.put(new CommitBulkLoadEvent(1, "load", lateResponse));
+            assertThatThrownBy(() -> lateResponse.get(10, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(NotCoordinatorLeaderException.class);
         } finally {
             manager.close();
             metricGroup.close();
