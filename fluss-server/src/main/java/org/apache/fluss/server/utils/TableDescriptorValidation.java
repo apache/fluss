@@ -89,7 +89,8 @@ public class TableDescriptorValidation {
                                     COMMIT_TIMESTAMP_COLUMN)));
 
     private static final List<DataTypeRoot> KEY_UNSUPPORTED_TYPES =
-            Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);
+            Arrays.asList(
+                    DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW, DataTypeRoot.VARIANT);
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
     public static void validateTableDescriptor(

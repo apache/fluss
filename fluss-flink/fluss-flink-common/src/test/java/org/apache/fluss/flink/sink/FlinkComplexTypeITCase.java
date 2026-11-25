@@ -541,7 +541,7 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasRootCauseMessage(
                         "Primary key column 'tags' has unsupported data type ARRAY<STRING> NOT NULL. "
-                                + "Currently, primary key column does not support types: [ARRAY, MAP, ROW].");
+                                + "Currently, primary key column does not support types: [ARRAY, MAP, ROW, VARIANT].");
 
         assertThatThrownBy(
                         () ->
@@ -554,7 +554,7 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasRootCauseMessage(
                         "Bucket key column 'tags' has unsupported data type ARRAY<STRING>. "
-                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW].");
+                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW, VARIANT].");
 
         assertThatThrownBy(
                         () ->
@@ -568,7 +568,7 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasRootCauseMessage(
                         "Primary key column 'metadata' has unsupported data type MAP<STRING NOT NULL, STRING> NOT NULL. "
-                                + "Currently, primary key column does not support types: [ARRAY, MAP, ROW].");
+                                + "Currently, primary key column does not support types: [ARRAY, MAP, ROW, VARIANT].");
 
         assertThatThrownBy(
                         () ->
@@ -581,7 +581,7 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasRootCauseMessage(
                         "Bucket key column 'metadata' has unsupported data type MAP<STRING NOT NULL, STRING>. "
-                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW].");
+                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW, VARIANT].");
 
         assertThatThrownBy(
                         () ->
@@ -609,7 +609,7 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasRootCauseMessage(
                         "Bucket key column 'info' has unsupported data type ROW<`name` STRING, `age` INT>. "
-                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW].");
+                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW, VARIANT].");
     }
 
     @Test

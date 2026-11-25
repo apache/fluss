@@ -311,6 +311,16 @@ public class DataTypes {
         return new MapType(keyType, valueType);
     }
 
+    /**
+     * Data type of a semi-structured Variant value, including primitives, strings, arrays, and
+     * objects.
+     *
+     * @see VariantType
+     */
+    public static VariantType VARIANT() {
+        return new VariantType();
+    }
+
     public static DataField FIELD(String name, DataType type) {
         return new DataField(name, type);
     }

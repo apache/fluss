@@ -155,6 +155,26 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     }
 
     @Test
+    void testVariantSchemaRoundTrip() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("payload", DataTypes.VARIANT())
+                        .column("required_payload", DataTypes.VARIANT().copy(false))
+                        .column("items", DataTypes.ARRAY(DataTypes.VARIANT()))
+                        .column(
+                                "properties",
+                                DataTypes.MAP(DataTypes.STRING(), DataTypes.VARIANT()))
+                        .column(
+                                "nested",
+                                DataTypes.ROW(DataTypes.FIELD("value", DataTypes.VARIANT())))
+                        .primaryKey("id")
+                        .build();
+        byte[] json = JsonSerdeUtils.writeValueAsBytes(schema, SchemaJsonSerde.INSTANCE);
+        assertEquals(JsonSerdeUtils.readValue(json, SchemaJsonSerde.INSTANCE), schema);
+    }
+
+    @Test
     void testCompatibilityFromJsonLackOfColumnId() {
         String[] jsons = jsonLackOfColumnId();
         Schema[] expectedSchema = new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_5};

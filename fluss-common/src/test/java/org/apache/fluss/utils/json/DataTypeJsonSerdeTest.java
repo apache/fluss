@@ -66,6 +66,7 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
     protected DataType[] createObjects() {
         final List<DataType> types =
                 Arrays.asList(
+                        DataTypes.VARIANT(),
                         new BooleanType(),
                         new TinyIntType(),
                         new SmallIntType(),
@@ -109,6 +110,8 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
     @Override
     protected String[] expectedJsons() {
         return new String[] {
+            "{\"type\":\"VARIANT\"}",
+            "{\"type\":\"VARIANT\",\"nullable\":false}",
             "{\"type\":\"BOOLEAN\"}",
             "{\"type\":\"BOOLEAN\",\"nullable\":false}",
             "{\"type\":\"TINYINT\"}",

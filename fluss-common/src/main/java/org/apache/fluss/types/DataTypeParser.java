@@ -281,6 +281,7 @@ public final class DataTypeParser {
         ROW,
         NOT,
         NULL,
+        VARIANT,
     }
 
     private enum UnsupportedKeyword {
@@ -290,7 +291,6 @@ public final class DataTypeParser {
         MULTISET,
         RAW,
         LEGACY,
-        VARIANT,
         BITMAP
     }
 
@@ -514,6 +514,8 @@ public final class DataTypeParser {
                     return parseMapType();
                 case ROW:
                     return parseRowType();
+                case VARIANT:
+                    return new VariantType();
                 default:
                     throw parsingError("Unsupported type: " + token().value);
             }

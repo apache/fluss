@@ -28,6 +28,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class BinaryArrayWriterTest {
 
     @Test
+    void testVariantNullSetter() {
+        BinaryArray array = new PrimitiveBinaryArray();
+        BinaryArrayWriter writer = new BinaryArrayWriter(array, 1, 8);
+        BinaryArrayWriter.createNullSetter(DataTypes.VARIANT()).setNull(writer, 0);
+        writer.complete();
+        assertThat(array.isNullAt(0)).isTrue();
+    }
+
+    @Test
     public void testWriteAndReadAllTypes() {
         BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 10, 8);

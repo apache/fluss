@@ -33,6 +33,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import java.io.Serializable;
 import java.util.Arrays;
@@ -174,6 +175,15 @@ public class IndexedRowReader {
         return readBytesInternal(length);
     }
 
+    private Variant readVariant() {
+        // Variant frames must retain trailing zero bytes, including the JSON null value.
+        int length = readVarLengthFromVarLengthList();
+        byte[] bytes = new byte[length];
+        segment.get(position, bytes, 0, length);
+        position += length;
+        return Variant.fromBytes(bytes);
+    }
+
     private int readVarLengthFromVarLengthList() {
         if (variableLengthPosition - nullBitsSizeInBytes + 4 > variableColumnLengthListInBytes) {
             throw new IllegalArgumentException();
@@ -261,6 +271,9 @@ public class IndexedRowReader {
                 break;
             case BYTES:
                 fieldReader = (reader, pos) -> reader.readBytes();
+                break;
+            case VARIANT:
+                fieldReader = (reader, pos) -> reader.readVariant();
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);

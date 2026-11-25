@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.array.PrimitiveBinaryArray;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.variant.Variant;
 
 import java.lang.reflect.Array;
 
@@ -90,6 +91,7 @@ public abstract class BinaryArray extends BinarySection
             case ARRAY:
             case MAP:
             case ROW:
+            case VARIANT:
                 // long and double are 8 bytes;
                 // otherwise it stores the length and offset of the variable-length part for types
                 // such as is string, map, etc.
@@ -231,6 +233,11 @@ public abstract class BinaryArray extends BinarySection
         int fieldOffset = getElementOffset(pos, 8);
         final long offsetAndSize = BinarySegmentUtils.getLong(segments, fieldOffset);
         return BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndSize);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return Variant.fromBytes(getBytes(pos));
     }
 
     @Override

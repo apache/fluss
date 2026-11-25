@@ -82,6 +82,89 @@ class TableDescriptorValidationTest {
         assertThatCode(() -> validate(tableDescriptor, null)).doesNotThrowAnyException();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testVariantValueColumn(boolean primaryKeyTable) {
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("payload", DataTypes.VARIANT());
+        if (primaryKeyTable) {
+            schema.primaryKey("id");
+        }
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .distributedBy(1, "id")
+                        .build()
+                        .withReplicationFactor(1);
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testVariantPrimaryKeyRejected() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("payload", DataTypes.VARIANT())
+                                        .primaryKey("id", "payload")
+                                        .build())
+                        .distributedBy(1, "id")
+                        .build()
+                        .withReplicationFactor(1);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Primary key column 'payload' has unsupported data type VARIANT");
+    }
+
+    @Test
+    void testVariantBucketKeyRejected() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("payload", DataTypes.VARIANT()).build())
+                        .distributedBy(1, "payload")
+                        .build()
+                        .withReplicationFactor(1);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Bucket key column 'payload' has unsupported data type VARIANT");
+    }
+
+    @Test
+    void testVariantPartitionKeyRejected() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("payload", DataTypes.VARIANT())
+                                        .build())
+                        .distributedBy(1, "id")
+                        .partitionedBy("payload")
+                        .build()
+                        .withReplicationFactor(1);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("partition key 'payload' with data type VARIANT");
+    }
+
     @Test
     void testRejectMalformedMinInSyncReplicas() {
         TableDescriptor tableDescriptor =

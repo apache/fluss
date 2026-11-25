@@ -32,6 +32,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import java.io.Serializable;
 
@@ -336,6 +337,9 @@ public class CompactedRowReader {
                 DataType[] nestedFieldTypes =
                         ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
                 fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
+                break;
+            case VARIANT:
+                fieldReader = (reader, pos) -> Variant.fromBytes(reader.readBytes());
                 break;
             default:
                 throw new IllegalArgumentException(

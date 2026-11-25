@@ -35,6 +35,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class DataTypeParserTests {
     private static Stream<TestSpec> testData() {
         return Stream.of(
+                TestSpec.forString("VARIANT").expectType(DataTypes.VARIANT()),
+                TestSpec.forString("variant not null").expectType(DataTypes.VARIANT().copy(false)),
+                TestSpec.forString("ARRAY<VARIANT>")
+                        .expectType(DataTypes.ARRAY(DataTypes.VARIANT())),
+                TestSpec.forString("MAP<STRING, VARIANT>")
+                        .expectType(DataTypes.MAP(DataTypes.STRING(), DataTypes.VARIANT())),
+                TestSpec.forString("ROW<payload VARIANT>")
+                        .expectType(DataTypes.ROW(DataTypes.FIELD("payload", DataTypes.VARIANT()))),
                 TestSpec.forString("CHAR").expectType(new CharType()),
                 TestSpec.forString("CHAR NOT NULL").expectType(new CharType().copy(false)),
                 TestSpec.forString("CHAR   NOT \t\nNULL").expectType(new CharType().copy(false)),

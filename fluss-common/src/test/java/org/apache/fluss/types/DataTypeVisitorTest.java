@@ -44,6 +44,7 @@ public class DataTypeVisitorTest {
                     DataTypes.BINARY(10),
                     DataTypes.STRING(),
                     DataTypes.BYTES(),
+                    DataTypes.VARIANT(),
                     DataTypes.ARRAY(DataTypes.INT()),
                     DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
                     DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT()))
@@ -66,6 +67,7 @@ public class DataTypeVisitorTest {
             "BINARY(10)",
             "STRING",
             "BYTES",
+            "VARIANT",
             "ARRAY<INT>",
             "MAP<INT NOT NULL, INT>",
             "ROW<`a` INT>"

@@ -81,6 +81,15 @@ public class DataTypesTest {
     }
 
     @Test
+    void testVariantType() {
+        VariantType type = DataTypes.VARIANT();
+        dataTypeBaseAssert(type, true, "VARIANT", new VariantType(false));
+        dataTypeBaseAssert(new VariantType(false), false, "VARIANT NOT NULL", type);
+        assertThat(type.getChildren()).isEmpty();
+        assertThat(type.getTypeRoot()).isEqualTo(DataTypeRoot.VARIANT);
+    }
+
+    @Test
     void testStringType() {
         StringType stringType = new StringType();
         dataTypeBaseAssert(stringType, true, "STRING", new StringType(false));

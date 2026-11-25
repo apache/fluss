@@ -107,6 +107,7 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
             case DATE:
             case BYTES:
             case STRING:
+            case VARIANT:
                 // do nothing.
                 break;
             case CHAR:
@@ -235,6 +236,8 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 return DataTypes.TIME(dataTypeNode.get(FIELD_NAME_PRECISION).asInt());
             case STRING:
                 return DataTypes.STRING();
+            case VARIANT:
+                return DataTypes.VARIANT();
             case BYTES:
                 return DataTypes.BYTES();
             case BINARY:
