@@ -18,7 +18,7 @@
 //! The connection cache for one configured Fluss cluster.
 //!
 //! Connections are indexed by effective Fluss user and multiplexed by `fluss-rs`. Service identity
-//! mode is the one-entry case: `ConnectionCache::key` always returns the configured service user.
+//! mode shares one entry with no authorization ID.
 //! Concurrent cold requests for the same user serialize behind one dial. A cancelled request cancels
 //! its dial, releases the dial lock, and lets the next waiter retry; dial failures are not cached.
 //!
@@ -30,7 +30,7 @@
 use crate::backend::context::RequestContext;
 use crate::backend::errors::map_fluss_error;
 use crate::backend::types::ClusterId;
-use crate::config::{ClusterConfig, ConnectionSecurityProtocol, IdentityMode};
+use crate::config::{ClusterConfig, IdentityMode};
 use crate::error::{GatewayError, GatewayResult};
 use crate::observability;
 use fluss::client::FlussConnection;
@@ -49,49 +49,6 @@ pub(crate) const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 /// Per-connection budget for an idle close. Idle cleanup is best effort and must not stall later scans.
 const CLEANER_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Private cache key for a service connection without Fluss authentication.
-///
-/// A configured SASL service account and every future request-derived principal are non-blank, so this
-/// sentinel cannot collide with an authenticated effective user.
-const PLAINTEXT_SERVICE_USER: &str = "";
-
-/// The two Fluss-side users of one authenticated native connection.
-///
-/// `gateway_user` authenticates the connection. `fluss_user` is the effective user Fluss authorizes.
-/// They are the same configured service account today. Future user identity mode keeps the Gateway
-/// account in the first field and maps the request [`crate::backend::context::Principal`] into the
-/// second immediately before selecting a connection.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FlussConnectionIdentity {
-    gateway_user: Arc<str>,
-    fluss_user: Arc<str>,
-}
-
-impl FlussConnectionIdentity {
-    fn service(config: &ClusterConfig) -> Option<Self> {
-        if config.security_protocol == ConnectionSecurityProtocol::Plaintext {
-            return None;
-        }
-        let service_user: Arc<str> = Arc::from(
-            config
-                .service_account()
-                .expect("validated SASL configuration has a service account"),
-        );
-        Some(Self {
-            gateway_user: service_user.clone(),
-            fluss_user: service_user,
-        })
-    }
-
-    fn gateway_user(&self) -> &str {
-        &self.gateway_user
-    }
-
-    fn fluss_user(&self) -> &str {
-        &self.fluss_user
-    }
-}
-
 /// Opens and releases connections for one cluster.
 ///
 /// The cache owns sharing and cleanup; this trait owns what a connection is, which lets those
@@ -101,7 +58,7 @@ pub(crate) trait Connector: Send + Sync + 'static {
 
     fn dial(
         &self,
-        identity: Option<&FlussConnectionIdentity>,
+        authorization_id: Option<&str>,
     ) -> impl Future<Output = Result<Self::Conn, FlussClientError>> + Send;
 
     /// Releases a connection, draining pending writes within `timeout`.
@@ -130,20 +87,11 @@ impl Connector for NativeConnector {
 
     async fn dial(
         &self,
-        identity: Option<&FlussConnectionIdentity>,
+        authorization_id: Option<&str>,
     ) -> Result<FlussConnection, FlussClientError> {
-        if let Some(identity) = identity {
-            if identity.gateway_user() != identity.fluss_user() {
-                return Err(FlussClientError::UnsupportedOperation {
-                    message: "user identity mode requires SASL authorization ID support"
-                        .to_string(),
-                });
-            }
-            debug_assert_eq!(self.config.security_sasl_username, identity.gateway_user());
-        } else {
-            debug_assert!(!self.config.is_sasl_enabled());
-        }
-        FlussConnection::new(self.config.clone()).await
+        let mut config = self.config.clone();
+        config.security_sasl_authorization_id = authorization_id.map(str::to_owned);
+        FlussConnection::new(config).await
     }
 
     async fn close(
@@ -183,15 +131,14 @@ impl<C> CachedConnection<C> {
 
 struct CacheState<C> {
     closed: bool,
-    entries: HashMap<Arc<str>, Arc<CachedConnection<C>>>,
+    entries: HashMap<Box<str>, Arc<CachedConnection<C>>>,
 }
 
 /// The connections of one configured Fluss cluster, indexed by effective Fluss user.
 pub(crate) struct ConnectionCache<K: Connector> {
     cluster: ClusterId,
-    /// Service-mode cache key: the service account under SASL, or a private sentinel for plaintext.
-    gateway_user: Arc<str>,
-    identity: Option<FlussConnectionIdentity>,
+    pub(super) identity_mode: IdentityMode,
+    max_entries: usize,
     connector: K,
     idle_timeout: Duration,
     origin: Instant,
@@ -200,20 +147,10 @@ pub(crate) struct ConnectionCache<K: Connector> {
 
 impl<K: Connector> ConnectionCache<K> {
     pub(crate) fn new(cluster: ClusterId, config: &ClusterConfig, connector: K) -> Self {
-        assert_eq!(
-            config.identity_mode,
-            IdentityMode::Service,
-            "validated configuration must reject user identity mode"
-        );
-        let identity = FlussConnectionIdentity::service(config);
-        let gateway_user = identity
-            .as_ref()
-            .map(|identity| identity.fluss_user.clone())
-            .unwrap_or_else(|| Arc::from(PLAINTEXT_SERVICE_USER));
         Self {
             cluster,
-            gateway_user,
-            identity,
+            identity_mode: config.identity_mode,
+            max_entries: config.connection_max as usize,
             connector,
             idle_timeout: config.connection_idle_timeout.get(),
             origin: Instant::now(),
@@ -229,11 +166,23 @@ impl<K: Connector> ConnectionCache<K> {
     /// The dial belongs to the calling request. Cancelling the request drops the dial future and its
     /// mutex guard; the next waiter then retries. A native dial failure is likewise not cached.
     pub(crate) async fn connection(&self, ctx: &RequestContext) -> GatewayResult<Arc<K::Conn>> {
-        let key = self.key(ctx);
-        if let Some(connection) = self.hit(&key)? {
+        let authorization_id = match self.identity_mode {
+            IdentityMode::Service => None,
+            IdentityMode::User => Some(
+                ctx.principal()
+                    .map(|principal| principal.name())
+                    .filter(|name| crate::auth::valid_principal(name))
+                    .ok_or_else(|| {
+                        GatewayError::unauthenticated("user mode requires a named principal")
+                    })?,
+            ),
+        };
+        // The empty key belongs exclusively to service mode.
+        let key = authorization_id.unwrap_or_default();
+        if let Some(connection) = self.hit(key)? {
             return Ok(connection);
         }
-        self.dial_for(&key).await
+        self.dial_for(authorization_id, ctx).await
     }
 
     /// Removes and closes connections whose last acquisition is beyond the configured idle timeout.
@@ -297,8 +246,14 @@ impl<K: Connector> ConnectionCache<K> {
         let mut first_failure = None;
         for result in results {
             if let Err(error) = result {
-                first_failure = first_failure
-                    .or_else(|| Some(map_fluss_error("close the Fluss connection", error, None)));
+                first_failure = first_failure.or_else(|| {
+                    Some(map_fluss_error(
+                        "close the Fluss connection",
+                        error,
+                        None,
+                        self.identity_mode,
+                    ))
+                });
             }
             observability::connection_closed(self.cluster.as_str(), "shutdown");
         }
@@ -308,8 +263,12 @@ impl<K: Connector> ConnectionCache<K> {
         first_failure.map_or(Ok(()), Err)
     }
 
-    async fn dial_for(&self, key: &Arc<str>) -> GatewayResult<Arc<K::Conn>> {
-        let entry = self.admit(key)?;
+    async fn dial_for(
+        &self,
+        authorization_id: Option<&str>,
+        ctx: &RequestContext,
+    ) -> GatewayResult<Arc<K::Conn>> {
+        let entry = self.admit(authorization_id.unwrap_or_default())?;
         // TODO: Share one failed dial with its current waiters without caching it for later requests;
         // see #4101.
         let _dialing = entry.dialing.lock().await;
@@ -323,9 +282,11 @@ impl<K: Connector> ConnectionCache<K> {
 
         let connection = self
             .connector
-            .dial(self.identity.as_ref())
+            .dial(authorization_id)
             .await
-            .map_err(|native| map_fluss_error("connect to Fluss", native, None))?;
+            .map_err(|native| {
+                map_fluss_error("connect to Fluss", native, Some(ctx), self.identity_mode)
+            })?;
         Ok(self.install(&entry, connection))
     }
 
@@ -339,19 +300,7 @@ impl<K: Connector> ConnectionCache<K> {
         entry.touch(self.elapsed_ms());
         observability::connection_created(self.cluster.as_str());
         observability::connections_active(self.cluster.as_str(), self.live_count());
-        if let Some(identity) = &self.identity {
-            log::info!(
-                "connected to Fluss cluster `{}` as Fluss user `{}` through Gateway user `{}`",
-                self.cluster,
-                identity.fluss_user(),
-                identity.gateway_user()
-            );
-        } else {
-            log::info!(
-                "connected to Fluss cluster `{}` without Fluss authentication",
-                self.cluster
-            );
-        }
+        log::info!("connected to Fluss cluster `{}`", self.cluster);
         connection
     }
 
@@ -372,7 +321,7 @@ impl<K: Connector> ConnectionCache<K> {
         Ok(Some(connection.clone()))
     }
 
-    fn admit(&self, key: &Arc<str>) -> GatewayResult<Arc<CachedConnection<K::Conn>>> {
+    fn admit(&self, key: &str) -> GatewayResult<Arc<CachedConnection<K::Conn>>> {
         {
             let state = self.read_state();
             if state.closed {
@@ -397,15 +346,20 @@ impl<K: Connector> ConnectionCache<K> {
             entry.touch(self.elapsed_ms());
             return Ok(entry.clone());
         }
+        if self.identity_mode == IdentityMode::User && state.entries.len() >= self.max_entries {
+            // A failed or cancelled dial can leave an empty entry. Waiters still hold an Arc.
+            state.entries.retain(|_, entry| {
+                entry.connection.get().is_some() || Arc::strong_count(entry) > 1
+            });
+            if state.entries.len() >= self.max_entries {
+                return Err(GatewayError::resource_exhausted(
+                    "the cluster's user connection limit is reached",
+                ));
+            }
+        }
         let entry = Arc::new(CachedConnection::new(self.elapsed_ms()));
-        state.entries.insert(key.clone(), entry.clone());
+        state.entries.insert(Box::from(key), entry.clone());
         Ok(entry)
-    }
-
-    /// The only identity-mode branch point. Service mode always has exactly one key; future user mode
-    /// maps the request principal into an effective Fluss user here.
-    fn key(&self, _ctx: &RequestContext) -> Arc<str> {
-        self.gateway_user.clone()
     }
 
     fn take_expired(&self, state: &mut CacheState<K::Conn>) -> Vec<Arc<K::Conn>> {
@@ -413,7 +367,10 @@ impl<K: Connector> ConnectionCache<K> {
         let threshold_ms = u64::try_from(self.idle_timeout.as_millis()).unwrap_or(u64::MAX);
         let mut expired = Vec::new();
         state.entries.retain(|_, entry| {
-            if now_ms.saturating_sub(entry.last_access_ms.load(Ordering::Relaxed)) < threshold_ms {
+            if Arc::strong_count(entry) > 1
+                || now_ms.saturating_sub(entry.last_access_ms.load(Ordering::Relaxed))
+                    < threshold_ms
+            {
                 return true;
             }
             if let Some(connection) = entry.connection.get() {
@@ -449,7 +406,7 @@ impl<K: Connector> ConnectionCache<K> {
 mod tests {
     use super::*;
     use crate::backend::errors::tests::api_failure;
-    use crate::config::ConfigDuration;
+    use crate::config::{ConfigDuration, ConnectionSecurityProtocol};
     use crate::error::ErrorKind;
     use fluss::error::FlussError;
     use futures_util::future::join_all;
@@ -467,7 +424,7 @@ mod tests {
     }
 
     struct Dialer {
-        dials: Mutex<Vec<Option<FlussConnectionIdentity>>>,
+        dials: Mutex<Vec<Option<String>>>,
         closes: AtomicUsize,
         outcome: Mutex<Outcome>,
         latency: Duration,
@@ -495,7 +452,7 @@ mod tests {
             *self.outcome.lock().unwrap() = outcome;
         }
 
-        fn dialed(&self) -> Vec<Option<FlussConnectionIdentity>> {
+        fn dialed(&self) -> Vec<Option<String>> {
             self.dials.lock().unwrap().clone()
         }
 
@@ -521,10 +478,10 @@ mod tests {
 
         fn dial(
             &self,
-            identity: Option<&FlussConnectionIdentity>,
+            authorization_id: Option<&str>,
         ) -> impl Future<Output = Result<FakeConnection, FlussClientError>> + Send {
             let dialer = self.clone();
-            let identity = identity.cloned();
+            let identity = authorization_id.map(str::to_owned);
             async move {
                 dialer.dials.lock().unwrap().push(identity);
                 let active = dialer.active_dials.fetch_add(1, Ordering::SeqCst) + 1;
@@ -575,6 +532,98 @@ mod tests {
 
     fn context() -> RequestContext {
         RequestContext::for_test("default", Duration::from_secs(5))
+    }
+
+    fn caller(name: &str) -> RequestContext {
+        RequestContext::new(
+            "request",
+            ClusterId::try_from("default").unwrap(),
+            std::time::Instant::now() + Duration::from_secs(5),
+            Default::default(),
+            Some(crate::backend::context::Principal::new(
+                name,
+                Default::default(),
+            )),
+        )
+    }
+
+    #[tokio::test]
+    async fn user_mode_isolates_connections_by_authenticated_principal() {
+        let dialer = Dialer::connecting();
+        let cache = cache(
+            &dialer,
+            ClusterConfig {
+                identity_mode: IdentityMode::User,
+                ..service_config()
+            },
+        );
+        for invalid in [context(), caller(""), caller("anonymous")] {
+            assert_eq!(
+                cache.connection(&invalid).await.unwrap_err().kind(),
+                ErrorKind::Unauthenticated
+            );
+        }
+        let alice = cache.connection(&caller("alice")).await.unwrap();
+        let bob = cache.connection(&caller("bob")).await.unwrap();
+        assert!(!Arc::ptr_eq(&alice, &bob));
+        assert!(Arc::ptr_eq(
+            &alice,
+            &cache.connection(&caller("alice")).await.unwrap()
+        ));
+        assert_eq!(
+            dialer.dialed(),
+            [Some("alice".to_owned()), Some("bob".to_owned())]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pending_dials_count_toward_the_limit_and_abandoned_slots_can_be_reused() {
+        let dialer = Dialer::new(Outcome::Hang, Duration::ZERO);
+        let cache = Arc::new(cache(
+            &dialer,
+            ClusterConfig {
+                identity_mode: IdentityMode::User,
+                connection_max: 1,
+                connection_idle_timeout: ConfigDuration::from_secs(2),
+                ..service_config()
+            },
+        ));
+        let dialing = {
+            let cache = cache.clone();
+            tokio::spawn(async move { cache.connection(&caller("alice")).await })
+        };
+        while dialer.dialed().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_secs(2)).await;
+        cache.clean_expired().await;
+        assert_eq!(
+            cache.connection(&caller("bob")).await.unwrap_err().kind(),
+            ErrorKind::ResourceExhausted
+        );
+        dialing.abort();
+        assert!(dialing.await.unwrap_err().is_cancelled());
+
+        dialer.set(Outcome::Fail(FlussError::AuthenticateException));
+        assert_eq!(
+            cache.connection(&caller("bob")).await.unwrap_err().kind(),
+            ErrorKind::Backend
+        );
+        dialer.set(Outcome::Connect);
+        let alice = cache.connection(&caller("alice")).await.unwrap();
+        assert_eq!(
+            cache.connection(&caller("bob")).await.unwrap_err().kind(),
+            ErrorKind::ResourceExhausted
+        );
+        assert!(Arc::ptr_eq(
+            &alice,
+            &cache.connection(&caller("alice")).await.unwrap()
+        ));
+        drop(alice);
+        tokio::time::advance(Duration::from_secs(2)).await;
+        cache.clean_expired().await;
+        assert!(cache.connection(&caller("bob")).await.is_ok());
+        assert_eq!(dialer.closes(), 1);
     }
 
     #[tokio::test]
@@ -679,32 +728,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_mode_uses_the_gateway_user_as_its_single_key() {
-        let dialer = Dialer::connecting();
-        let cache = service_cache(&dialer);
-        let first = context();
-        let second = RequestContext::for_test("default", Duration::from_secs(1));
-
-        assert_eq!(&*cache.key(&first), "gateway_svc");
-        assert_eq!(cache.key(&first), cache.key(&second));
-        drop(cache.connection(&first).await.unwrap());
-        assert_eq!(
-            dialer.dialed(),
-            [Some(FlussConnectionIdentity {
-                gateway_user: Arc::from("gateway_svc"),
-                fluss_user: Arc::from("gateway_svc"),
-            })]
-        );
-    }
-
-    #[tokio::test]
-    async fn plaintext_service_mode_uses_the_unauthenticated_key() {
-        let dialer = Dialer::connecting();
-        let cache = cache(&dialer, ClusterConfig::default());
-
-        assert_eq!(&*cache.key(&context()), PLAINTEXT_SERVICE_USER);
-        drop(cache.connection(&context()).await.unwrap());
-        assert_eq!(dialer.dialed(), [None]);
+    async fn service_mode_shares_one_connection_without_an_authorization_id() {
+        for config in [ClusterConfig::default(), service_config()] {
+            let dialer = Dialer::connecting();
+            let cache = cache(&dialer, config);
+            let first = cache.connection(&caller("alice")).await.unwrap();
+            let second = cache.connection(&caller("bob")).await.unwrap();
+            assert!(Arc::ptr_eq(&first, &second));
+            assert_eq!(dialer.dialed(), [None]);
+        }
     }
 
     #[test]

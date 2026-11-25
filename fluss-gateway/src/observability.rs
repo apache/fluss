@@ -106,9 +106,7 @@ pub const METRIC_DEFINITIONS: &[MetricDefinition] = &[
         "REST request duration.",
         &["cluster", "method", "operation"],
     ),
-    // Connection families, reported per configured cluster by the backend runtime. The per-user
-    // act-as pool of the user identity mode reports into the same families when it arrives: they count the
-    // Fluss connections the gateway holds for a cluster, whoever they are opened for.
+    // Aggregate service and per-user connections by cluster to bound metric cardinality.
     metric(
         "fluss_gateway_connections_active",
         MetricKind::Gauge,

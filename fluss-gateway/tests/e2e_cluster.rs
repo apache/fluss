@@ -49,7 +49,7 @@ struct FlussCluster {
 }
 
 impl FlussCluster {
-    fn start(port: u16) -> Self {
+    fn start(port: u16, cluster_config: serde_json::Value) -> Self {
         let helper = std::env::var_os("FLUSS_TEST_CLUSTER_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("../fluss-rust/target/debug/fluss-test-cluster"));
@@ -71,6 +71,8 @@ impl FlussCluster {
             .args(["start", "--name"])
             .arg(&cluster.name)
             .arg("--sasl")
+            .arg("--cluster-config")
+            .arg(cluster_config.to_string())
             .args(["--port", &port.to_string()])
             .output()
             .expect("start the Fluss test cluster helper");
@@ -95,6 +97,19 @@ impl FlussCluster {
             .expect("SASL cluster JSON contains sasl_bootstrap_servers")
             .to_string();
         cluster
+    }
+
+    async fn service_connection(&self) -> FlussConnection {
+        FlussConnection::new(Config {
+            bootstrap_servers: self.sasl_bootstrap_servers.clone(),
+            security_protocol: "sasl".to_string(),
+            security_sasl_mechanism: "PLAIN".to_string(),
+            security_sasl_username: SERVICE_ACCOUNT.to_string(),
+            security_sasl_password: SERVICE_SECRET.to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("connect the catalog setup client")
     }
 
     fn stop(mut self) {
@@ -162,6 +177,12 @@ fn write_gateway_config(
     let mut file = std::fs::File::create(&path).expect("create gateway config");
     writeln!(file, "gateway.rest.listen: 127.0.0.1:{port}").expect("write REST listener");
     writeln!(file, "gateway.metrics.enabled: false").expect("disable metrics listener");
+    writeln!(file, "gateway.security.authentication: password").unwrap();
+    writeln!(
+        file,
+        "gateway.security.users: alice:alice-secret,bob:bob-secret"
+    )
+    .unwrap();
     writeln!(
         file,
         "gateway.cluster.default.bootstrap.servers: {bootstrap_servers}"
@@ -212,13 +233,20 @@ async fn assert_metadata_apis(
         "Gateway becomes ready"
     );
 
-    let api = Api::new(base);
+    assert_eq!(Api::new(&base).get("/v1/clusters").await.status(), 401);
+    let api = Api::with_basic_auth(&base, "alice", "alice-secret");
     assert_eq!(
         api.get_ok("/v1/clusters").await,
         serde_json::json!({"clusters": ["default"]})
     );
 
     let databases = api.get_ok("/v1/clusters/default/databases").await;
+    let bob = Api::with_basic_auth(&base, "bob", "bob-secret");
+    assert_eq!(
+        bob.get_ok("/v1/clusters/default/databases").await,
+        databases,
+        "both HTTP identities use the configured Fluss service account"
+    );
     assert!(
         databases["databases"]
             .as_array()
@@ -435,7 +463,8 @@ async fn assert_write_apis(
         await_http_ok(&format!("{base}/ready"), Duration::from_secs(15)).await,
         "Gateway becomes ready"
     );
-    let api = Api::new(base);
+    assert_eq!(Api::new(&base).get("/v1/clusters").await.status(), 401);
+    let api = Api::with_basic_auth(&base, "alice", "alice-secret");
 
     let appended = api
         .post_json_text_ok(
@@ -669,21 +698,104 @@ async fn assert_kv_rows_reached_fluss(connection: &FlussConnection) {
 }
 
 #[tokio::test]
-async fn metadata_apis_support_plaintext_and_sasl_fluss_clusters() {
-    let cluster = tokio::task::spawn_blocking(|| FlussCluster::start(free_cluster_port_pair()))
-        .await
-        .expect("cluster startup task");
+#[ignore = "requires a Fluss server image with SASL proxy authorization (#3857)"]
+async fn user_mode_enforces_fluss_acls_for_each_http_caller() {
+    use fluss::metadata::{AclInfo, OperationType, PermissionType, ResourceType};
 
-    let connection = FlussConnection::new(Config {
-        bootstrap_servers: cluster.sasl_bootstrap_servers.clone(),
-        security_protocol: "sasl".to_string(),
-        security_sasl_mechanism: "PLAIN".to_string(),
-        security_sasl_username: SERVICE_ACCOUNT.to_string(),
-        security_sasl_password: SERVICE_SECRET.to_string(),
-        ..Default::default()
+    let properties = serde_json::json!({
+        "security.protocol.map": "CLIENT:SASL,INTERNAL:PLAINTEXT",
+        "security.sasl.enabled.mechanisms": "PLAIN",
+        "security.sasl.plain.credentials": format!("{SERVICE_ACCOUNT}:{SERVICE_SECRET}"),
+        "security.sasl.listener.name.client.plain.proxy-users": format!("{SERVICE_ACCOUNT}:alice;bob"),
+        "authorizer.enabled": "true",
+        "super.users": format!("User:{SERVICE_ACCOUNT}"),
+    });
+    let cluster = tokio::task::spawn_blocking(move || {
+        FlussCluster::start(free_cluster_port_pair(), properties)
     })
     .await
-    .expect("connect the catalog setup client");
+    .expect("cluster startup task");
+    let connection = cluster.service_connection().await;
+    let grants = connection
+        .get_admin()
+        .unwrap()
+        .create_acls(vec![AclInfo {
+            resource_name: "fluss-cluster".into(),
+            resource_type: ResourceType::Cluster,
+            principal_name: "alice".into(),
+            principal_type: "User".into(),
+            host: "*".into(),
+            operation_type: OperationType::Create,
+            permission_type: PermissionType::Allow,
+        }])
+        .await
+        .unwrap();
+    assert_eq!(grants.len(), 1);
+    assert!(
+        grants[0].error.as_ref().is_none_or(|error| error.code == 0),
+        "{grants:?}"
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let config = write_gateway_config(&directory, port, &cluster.sasl_bootstrap_servers, "sasl");
+    let mut gateway = ChildGuard(
+        binary()
+            .arg("--config")
+            .arg(config)
+            .env(
+                "FLUSS_GATEWAY__CLUSTER__DEFAULT__CONNECTION__IDENTITY_MODE",
+                "user",
+            )
+            .spawn()
+            .unwrap(),
+    );
+    let base = format!("http://127.0.0.1:{port}");
+    assert!(await_http_ok(&format!("{base}/ready"), Duration::from_secs(15)).await);
+    let databases = "/v1/clusters/default/databases";
+    let alice = Api::with_basic_auth(&base, "alice", "alice-secret");
+    let bob = Api::with_basic_auth(&base, "bob", "bob-secret");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let (status, _, body) = alice
+                .post(databases, &serde_json::json!({"database":"allowed"}))
+                .await;
+            if status == 201 {
+                break;
+            }
+            assert_eq!(status, 403, "{body}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("Alice's ACL became visible");
+    let (status, _, body) = bob
+        .post(databases, &serde_json::json!({"database":"denied"}))
+        .await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body["error"]["code"], "unauthorized");
+    alice
+        .post_created(databases, &serde_json::json!({"database":"still_allowed"}))
+        .await;
+    gateway.send_sigterm();
+    assert!(
+        gateway
+            .wait_for_exit(Duration::from_secs(35))
+            .await
+            .success()
+    );
+    cluster.stop();
+}
+
+#[tokio::test]
+async fn metadata_apis_support_plaintext_and_sasl_fluss_clusters() {
+    let cluster = tokio::task::spawn_blocking(|| {
+        FlussCluster::start(free_cluster_port_pair(), serde_json::json!({}))
+    })
+    .await
+    .expect("cluster startup task");
+
+    let connection = cluster.service_connection().await;
     let admin = connection.get_admin().expect("get Fluss admin client");
     admin
         .create_database(DATABASE, None, false)
