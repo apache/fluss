@@ -52,6 +52,12 @@ impl OffsetsInitializer {
         }
     }
     #[staticmethod]
+    fn latest_on_poll() -> Self {
+        Self {
+            inner: fcore::client::OffsetsInitializer::latest_on_poll(),
+        }
+    }
+    #[staticmethod]
     fn latest() -> Self {
         Self {
             inner: fcore::client::OffsetsInitializer::latest(),

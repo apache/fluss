@@ -556,6 +556,8 @@ inline DataType DataType::Row(std::vector<std::pair<std::string, DataType>> fiel
 }
 
 constexpr int64_t EARLIEST_OFFSET = -2;
+/// Resolve the bucket end during poll.
+constexpr int64_t LATEST_OFFSET = -1;
 
 enum class OffsetType {
     Earliest = 0,
@@ -1296,6 +1298,8 @@ class OffsetsInitializer {
    public:
     static OffsetsInitializer Earliest() { return OffsetsInitializer({5, 0, {}}); }
     static OffsetsInitializer Latest() { return OffsetsInitializer({1, 0, {}}); }
+    /// Resolve each bucket end independently on poll, including multi-table scans.
+    static OffsetsInitializer LatestOnPoll() { return OffsetsInitializer({6, 0, {}}); }
     /// Unix timestamp in milliseconds.
     static OffsetsInitializer Timestamp(int64_t timestamp_ms) {
         return OffsetsInitializer({2, timestamp_ms, {}});
@@ -2456,7 +2460,8 @@ class LogScanner {
         const OffsetsInitializer& fallback = OffsetsInitializer::Earliest());
     /// Registers a table on a multi-table scanner and returns its current ID.
     Result RegisterTable(const TablePath& path, int64_t& table_id);
-    /// Closes the scanner; with auto-commit enabled waits for the final commit.
+    /// Submits an automatic commit if due and waits for pending commits up to the group timeout.
+    /// Use CommitSync() before Close() to confirm the final positions.
     OffsetCommitResult Close();
     /// Commits explicit next offsets, allowing partially processed poll results.
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
@@ -2546,7 +2551,8 @@ class RecordBatchLogScanner {
         const OffsetsInitializer& fallback = OffsetsInitializer::Earliest());
     /// Registers a table on a multi-table scanner and returns its current ID.
     Result RegisterTable(const TablePath& path, int64_t& table_id);
-    /// Closes the scanner; with auto-commit enabled waits for the final commit.
+    /// Submits an automatic commit if due and waits for pending commits up to the group timeout.
+    /// Use CommitSync() before Close() to confirm the final positions.
     OffsetCommitResult Close();
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     std::future<OffsetCommitResult> CommitAsync();

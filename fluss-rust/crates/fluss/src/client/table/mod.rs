@@ -23,6 +23,8 @@ use crate::metadata::{SchemaInfo, TableInfo, TablePath};
 use std::sync::Arc;
 
 pub const EARLIEST_OFFSET: i64 = -2;
+/// Resolve a scanner subscription to the end of the bucket on poll.
+pub const LATEST_OFFSET: i64 = -1;
 
 mod append;
 mod batch_scanner;

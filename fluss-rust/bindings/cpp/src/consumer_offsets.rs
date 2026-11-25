@@ -141,6 +141,7 @@ impl LogScanner {
                 3 => OffsetsInitializer::fail(),
                 4 => OffsetsInitializer::committed_with_fallback(step.group_id, strategy),
                 5 => OffsetsInitializer::earliest(),
+                6 => OffsetsInitializer::latest_on_poll(),
                 _ => {
                     return err_from_core_error(&fcore::error::Error::IllegalArgument {
                         message: "Unknown offsets initializer".into(),
@@ -181,8 +182,6 @@ impl LogScanner {
         match info {
             Ok(info) => {
                 *id = info.table_id;
-                self.table_columns
-                    .insert(*id, info.schema.columns().to_vec());
                 ok_result()
             }
             Err(e) => err_from_core_error(&e),
@@ -300,10 +299,6 @@ impl Connection {
             } else {
                 scan = scan.without_auto_commit();
             }
-            let mut table_columns = HashMap::new();
-            for info in scan.table_infos() {
-                table_columns.insert(info.table_id, info.schema.columns().to_vec());
-            }
             let scanner = if batch {
                 ScannerKind::MultiBatch(scan.create_record_batch_log_scanner()?)
             } else {
@@ -313,7 +308,6 @@ impl Connection {
                 delivery_pending: Some(Default::default()),
                 scanner,
                 projected_columns: Vec::new(),
-                table_columns,
             })
         });
         match result {

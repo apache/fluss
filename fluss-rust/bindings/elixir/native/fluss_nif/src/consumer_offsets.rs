@@ -140,6 +140,7 @@ fn values(
 pub enum Initializer {
     Earliest,
     Latest,
+    LatestOnPoll,
     Timestamp(i64),
     Offset(i64),
     Fail,
@@ -151,6 +152,7 @@ fn initializer(steps: Vec<Initializer>) -> OffsetsInitializer {
         value = match step {
             Initializer::Earliest => OffsetsInitializer::earliest(),
             Initializer::Latest => OffsetsInitializer::latest(),
+            Initializer::LatestOnPoll => OffsetsInitializer::latest_on_poll(),
             Initializer::Timestamp(ms) => OffsetsInitializer::timestamp(ms),
             Initializer::Offset(offset) => OffsetsInitializer::offset(offset),
             Initializer::Fail => OffsetsInitializer::fail(),

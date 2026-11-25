@@ -1157,7 +1157,6 @@ pub struct LogScanner {
     /// Fluss columns matching the projected Arrow fields (1:1 by index).
     /// For non-projected scanners this is the full table schema columns.
     projected_columns: Vec<fcore::metadata::Column>,
-    table_columns: HashMap<i64, Vec<fcore::metadata::Column>>,
 }
 
 pub struct RecordBatchLogReader {
@@ -2211,7 +2210,6 @@ impl Table {
                 delivery_pending: group.enabled.then(Default::default),
                 scanner,
                 projected_columns,
-                table_columns: HashMap::new(),
             }));
             ok_ptr(ptr as usize)
         })
@@ -2710,13 +2708,18 @@ impl LogScanner {
         match result {
             Ok(records) => {
                 self.await_delivery();
-                let columns = records
-                    .records_by_buckets()
-                    .keys()
-                    .next()
-                    .and_then(|bucket| self.table_columns.get(&bucket.table_id()))
-                    .unwrap_or(&self.projected_columns)
-                    .clone();
+                let columns = match (&self.scanner, records.records_by_buckets().keys().next()) {
+                    (ScannerKind::MultiRecord(s), Some(bucket)) => {
+                        let Some(info) = s.registered_table_info(bucket.table_id()) else {
+                            return Box::new(ScanResultInner::from_error(
+                                CLIENT_ERROR_CODE,
+                                "Missing schema for polled table".into(),
+                            ));
+                        };
+                        info.schema.columns().to_vec()
+                    }
+                    _ => self.projected_columns.clone(),
+                };
                 let mut total_count = 0usize;
                 let mut buckets = Vec::new();
                 let mut bucket_infos = Vec::new();

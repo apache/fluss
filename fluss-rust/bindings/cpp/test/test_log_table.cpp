@@ -2776,7 +2776,8 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     ASSERT_OK(single.Subscribe(0, 1));
     ASSERT_OK(single.Poll(10000, remaining));
     EXPECT_EQ(remaining.Count(), 2);
-    EXPECT_EQ(single.Close().result.error_code, 75);
+    EXPECT_EQ(single.CommitSync().result.error_code, 75);
+    EXPECT_TRUE(single.Close().Ok());
     EXPECT_FALSE(single.Available());
     EXPECT_TRUE(adm.DeleteConsumerOffsets(group, {buckets[0]}).Ok());
     std::vector<fluss::ConsumerGroupDeleteResult> deleted;

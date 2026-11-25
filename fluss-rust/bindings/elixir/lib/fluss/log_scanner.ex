@@ -94,7 +94,7 @@ defmodule Fluss.LogScanner do
 
   @doc """
   Buckets are `{table_id, partition_id_or_nil, bucket_id}` tuples. Initializers are
-  `:earliest`, `:latest`, `:fail`, `{:offset, n}`, `{:timestamp, ms}`,
+  `:earliest`, `:latest`, `:latest_on_poll`, `:fail`, `{:offset, n}`, `{:timestamp, ms}`,
   `{:committed, group}` or `{:committed, group, fallback}`. Fallbacks only resolve
   missing commits; authorization errors never select a fallback.
   """
