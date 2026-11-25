@@ -26,6 +26,7 @@ import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.BucketsFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
+import org.apache.fluss.flink.source.PartitionsFlinkTableSource;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkFullCacheLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
@@ -93,14 +94,21 @@ abstract class FlinkTableFactoryTest {
     public static final ObjectIdentifier BUCKETS_TABLE_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BUCKETS_TABLE_SUFFIX);
 
+    public static final ObjectIdentifier PARTITIONS_TABLE_IDENTIFIER =
+            ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.PARTITIONS_TABLE_SUFFIX);
+
     @Test
     void testResolveToLakeObjectName() {
         assertThat(FlinkCatalog.isVirtualTableName("fluss_table$buckets")).isTrue();
         assertThat(FlinkCatalog.isVirtualTableName("fluss_table$lake$buckets")).isFalse();
+        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$partitions")).isTrue();
+        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$lake$partitions")).isFalse();
         assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake"))
                 .isEqualTo("fluss_table");
         assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake$snapshots"))
                 .isEqualTo("fluss_table$snapshots");
+        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake$partitions"))
+                .isEqualTo("fluss_table$partitions");
         assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table$lake"))
                 .isEqualTo("custom_lake_table");
         assertThat(
@@ -525,6 +533,15 @@ abstract class FlinkTableFactoryTest {
                                 Collections.emptyMap(),
                                 configuration))
                 .isInstanceOf(BucketsFlinkTableSource.class);
+
+        assertThat(
+                        createTableSource(
+                                PARTITIONS_TABLE_IDENTIFIER,
+                                createPartitionsSchema(),
+                                properties,
+                                Collections.emptyMap(),
+                                configuration))
+                .isInstanceOf(PartitionsFlinkTableSource.class);
     }
 
     @Test
@@ -557,6 +574,15 @@ abstract class FlinkTableFactoryTest {
                         Collections.emptyMap(),
                         new Configuration());
         assertThat(bucketsSource).isInstanceOf(BucketsFlinkTableSource.class);
+
+        DynamicTableSource partitionsSource =
+                createTableSource(
+                        PARTITIONS_TABLE_IDENTIFIER,
+                        createPartitionsSchema(),
+                        properties,
+                        Collections.emptyMap(),
+                        new Configuration());
+        assertThat(partitionsSource).isInstanceOf(PartitionsFlinkTableSource.class);
     }
 
     @Test
@@ -566,6 +592,15 @@ abstract class FlinkTableFactoryTest {
                                 createTableSink(
                                         BUCKETS_TABLE_IDENTIFIER,
                                         createBucketsSchema(),
+                                        getBasicOptions()))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("read-only virtual table");
+
+        assertThatThrownBy(
+                        () ->
+                                createTableSink(
+                                        PARTITIONS_TABLE_IDENTIFIER,
+                                        createPartitionsSchema(),
                                         getBasicOptions()))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("read-only virtual table");
@@ -700,6 +735,16 @@ abstract class FlinkTableFactoryTest {
                                 "replicas", DataTypes.ARRAY(DataTypes.INT().notNull()).notNull()),
                         Column.physical(
                                 "isr", DataTypes.ARRAY(DataTypes.INT().notNull()).notNull())),
+                Collections.emptyList(),
+                null);
+    }
+
+    private ResolvedSchema createPartitionsSchema() {
+        return new ResolvedSchema(
+                Arrays.asList(
+                        Column.physical("partition_id", DataTypes.BIGINT().notNull()),
+                        Column.physical("partition_name", DataTypes.STRING().notNull()),
+                        Column.physical("bucket_count", DataTypes.INT().notNull())),
                 Collections.emptyList(),
                 null);
     }
