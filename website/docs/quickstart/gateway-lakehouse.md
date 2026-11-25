@@ -27,7 +27,7 @@ In this quickstart, you will:
 Fluss Gateway is a preview feature introduced in Fluss 1.0.
 This quickstart uses its unauthenticated `trust` mode and is
 intended only for local development. See
-[Fluss Gateway security](/docs/gateway/index.md#security) before planning
+[Fluss Gateway security](../gateway/index.md#security) before planning
 a production deployment.
 
 The Gateway does not yet support reading records; this guide reads data
@@ -515,7 +515,7 @@ lake-enabled Fluss tables, not as code the application owns or operates.
 - HTTP 200 from a write request can still contain partial failures; always
   check both `successes` and `failures` in the response body.
 
-See the full [Fluss Gateway reference](/docs/gateway/index.md) for details.
+See the full [Fluss Gateway reference](../gateway/index.md) for details.
 
 ## Clean up
 
@@ -536,6 +536,6 @@ docker compose down -v
 ## Learn more
 
 Now that you're up and running with the Fluss Gateway and a real-time
-lakehouse, check out the [Fluss Gateway reference](/docs/gateway/index.md)
+lakehouse, check out the [Fluss Gateway reference](../gateway/index.md)
 for the full REST API, or the [Lakestream](lakehouse.md) guide for
 the equivalent all-Flink-SQL workflow.
