@@ -80,7 +80,9 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
@@ -122,6 +124,11 @@ public class TieringSourceEnumerator
     private final Set<Integer> readersAwaitingSplit;
 
     private final Map<Long, Long> tieringTableEpochs;
+    // table id -> the epoch of the coordinator that assigned the table to this tiering service.
+    // The coordinator fences the heartbeat of a table by this epoch, so each table is reported
+    // with the epoch it was assigned with, which is not the epoch of the coordinator this tiering
+    // service registered to after a coordinator leader switch.
+    private final Map<Long, Integer> tableCoordinatorEpochs;
     private final Map<Long, Long> failedTableEpochs;
     private final Map<Long, TieringFinishInfo> finishedTables;
     private final Set<Long> tieringReachMaxDurationsTables;
@@ -188,6 +195,7 @@ public class TieringSourceEnumerator
         this.pendingSplits = new ConcurrentLinkedDeque<>();
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = new ConcurrentHashMap<>();
+        this.tableCoordinatorEpochs = new ConcurrentHashMap<>();
         this.finishedTables = new ConcurrentHashMap<>();
         this.failedTableEpochs = new ConcurrentHashMap<>();
         this.tieringReachMaxDurationsTables = Collections.synchronizedSet(new TreeSet<>());
@@ -321,6 +329,10 @@ public class TieringSourceEnumerator
                 }
             }
         }
+    }
+
+    private int coordinatorEpochOfTable(long tableId) {
+        return tableCoordinatorEpochs.getOrDefault(tableId, flussCoordinatorEpoch);
     }
 
     private int max(Set<Integer> integers) {
@@ -463,7 +475,7 @@ public class TieringSourceEnumerator
                         this.tieringTableEpochs,
                         currentFinishedTables,
                         currentFailedTableEpochs,
-                        this.flussCoordinatorEpoch);
+                        this::coordinatorEpochOfTable);
 
         Tuple3<Long, Long, TablePath> lakeTieringInfo = null;
         // report heartbeat with request table to fluss coordinator
@@ -488,6 +500,9 @@ public class TieringSourceEnumerator
                                         tieringTable.getTablePath().getDatabaseName(),
                                         tieringTable.getTablePath().getTableName()));
                 tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
+                // the coordinator may have changed since this tiering service registered
+                this.flussCoordinatorEpoch = heartbeatResponse.getCoordinatorEpoch();
+                tableCoordinatorEpochs.put(lakeTieringInfo.f0, flussCoordinatorEpoch);
                 LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
                 LOG.info("No available Tiering table found, will poll later.");
@@ -501,6 +516,12 @@ public class TieringSourceEnumerator
         // in next round
         currentFinishedTables.forEach(finishedTables::remove);
         currentFailedTableEpochs.forEach(failedTableEpochs::remove);
+        // a reported table may have been assigned again by this heartbeat, keep its epoch then
+        Stream.concat(
+                        currentFinishedTables.keySet().stream(),
+                        currentFailedTableEpochs.keySet().stream())
+                .filter(tableId -> !tieringTableEpochs.containsKey(tableId))
+                .forEach(tableCoordinatorEpochs::remove);
         return lakeTieringInfo;
     }
 
@@ -652,7 +673,7 @@ public class TieringSourceEnumerator
                                             Collections.emptyMap(),
                                             currentFinishedTables,
                                             currentFailedTableEpochs,
-                                            flussCoordinatorEpoch)));
+                                            this::coordinatorEpochOfTable)));
                 }
             }
         } finally {
@@ -682,7 +703,7 @@ public class TieringSourceEnumerator
                 Map<Long, Long> tieringTableEpochs,
                 Map<Long, TieringFinishInfo> finishedTables,
                 Map<Long, Long> failedTableEpochs,
-                int coordinatorEpoch) {
+                Function<Long, Integer> coordinatorEpoch) {
             if (!tieringTableEpochs.isEmpty()) {
                 heartbeatRequest.addAllTieringTables(
                         toPbHeartbeatReqForTable(tieringTableEpochs, coordinatorEpoch));
@@ -698,7 +719,7 @@ public class TieringSourceEnumerator
                             PbHeartbeatReqForTable pbHeartbeatReqForTable =
                                     new PbHeartbeatReqForTable()
                                             .setTableId(tableId)
-                                            .setCoordinatorEpoch(coordinatorEpoch)
+                                            .setCoordinatorEpoch(coordinatorEpoch.apply(tableId))
                                             .setTieringEpoch(tieringFinishInfo.tieringEpoch);
                             TieringStats stats = tieringFinishInfo.stats;
                             if (stats.isAvailableStats()) {
@@ -723,13 +744,15 @@ public class TieringSourceEnumerator
         }
 
         private static Set<PbHeartbeatReqForTable> toPbHeartbeatReqForTable(
-                Map<Long, Long> tableEpochs, int coordinatorEpoch) {
+                Map<Long, Long> tableEpochs, Function<Long, Integer> coordinatorEpoch) {
             return tableEpochs.entrySet().stream()
                     .map(
                             tieringTableEpoch ->
                                     new PbHeartbeatReqForTable()
                                             .setTableId(tieringTableEpoch.getKey())
-                                            .setCoordinatorEpoch(coordinatorEpoch)
+                                            .setCoordinatorEpoch(
+                                                    coordinatorEpoch.apply(
+                                                            tieringTableEpoch.getKey()))
                                             .setTieringEpoch(tieringTableEpoch.getValue()))
                     .collect(Collectors.toSet());
         }
@@ -742,7 +765,7 @@ public class TieringSourceEnumerator
         static LakeTieringHeartbeatRequest failedTableHeartBeat(
                 LakeTieringHeartbeatRequest lakeTieringHeartbeatRequest,
                 Map<Long, Long> failedTieringTableEpochs,
-                int coordinatorEpoch) {
+                Function<Long, Integer> coordinatorEpoch) {
             if (!failedTieringTableEpochs.isEmpty()) {
                 lakeTieringHeartbeatRequest.addAllFailedTables(
                         toPbHeartbeatReqForTable(failedTieringTableEpochs, coordinatorEpoch));
