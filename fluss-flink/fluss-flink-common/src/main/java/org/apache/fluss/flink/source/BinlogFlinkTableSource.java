@@ -164,6 +164,10 @@ public class BinlogFlinkTableSource
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
                 break;
+            case GROUP_OFFSETS:
+                offsetsInitializer =
+                        FlinkConnectorOptionsUtils.groupOffsetsInitializer(flussConfig);
+                break;
             default:
                 throw new IllegalArgumentException(
                         "Unsupported startup mode: " + startupOptions.startupMode);

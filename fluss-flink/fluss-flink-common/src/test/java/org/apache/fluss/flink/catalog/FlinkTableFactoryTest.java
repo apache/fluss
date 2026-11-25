@@ -152,6 +152,12 @@ abstract class FlinkTableFactoryTest {
         scanModeProperties.put(
                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
         createTableSource(schema, scanModeProperties);
+        scanModeProperties.put(FlinkConnectorOptions.SCAN_STARTUP_MODE.key(), "group-offsets");
+        assertThatThrownBy(() -> createTableSource(schema, scanModeProperties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
+        scanModeProperties.put(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "test-group");
+        createTableSource(schema, scanModeProperties);
 
         // test scan bounded mode options
         Map<String, String> boundedModeProperties = getBasicOptions();
@@ -202,6 +208,37 @@ abstract class FlinkTableFactoryTest {
 
         // test partition key
         assertThat(tableSource.getPrimaryKeyIndexes()).isEqualTo(new int[] {0, 2});
+    }
+
+    @Test
+    void testCommitOffsetOnCheckpointOption() {
+        assertThat(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key())
+                .isEqualTo("client.commit-offset-on-checkpoint");
+        assertThat(createFlinkTableFactory().optionalOptions())
+                .contains(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT);
+
+        Map<String, String> properties = getBasicOptions();
+        properties.put(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key(), "true");
+        assertThatThrownBy(() -> createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key())
+                .hasMessageContaining(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
+
+        properties.put(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "  ");
+        assertThatThrownBy(() -> createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
+
+        properties.put(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "bad group");
+        assertThatThrownBy(() -> createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key())
+                .hasMessageContaining("ASCII letters");
+
+        properties.put(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "test-group");
+        assertThat(createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(FlinkTableSource.class);
     }
 
     @Test

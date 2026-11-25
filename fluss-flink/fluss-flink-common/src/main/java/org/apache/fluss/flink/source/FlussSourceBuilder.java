@@ -157,6 +157,24 @@ public class FlussSourceBuilder<OUT> {
     }
 
     /**
+     * Sets whether consumed offsets are committed to the Fluss consumer group on checkpoint
+     * completion. Disabled by default. When enabled, a valid consumer group id
+     * ('client.consumer.group.id') must be configured as well. Without checkpointing, no offsets
+     * are committed.
+     *
+     * @param enabled whether to commit offsets on checkpoint completion
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setCommitOffsetOnCheckpoint(boolean enabled) {
+        if (this.flussConf == null) {
+            this.flussConf = new Configuration();
+        }
+        this.flussConf.setBoolean(
+                FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key(), enabled);
+        return this;
+    }
+
+    /**
      * Sets the maximum number of splits assigned to a reader in one assignment request.
      *
      * <p>If not specified, the default value from {@link

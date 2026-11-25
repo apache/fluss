@@ -19,11 +19,14 @@ package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanBoundedMode;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.MergeEngineType;
 
 import org.apache.flink.api.connector.source.Boundedness;
@@ -52,7 +55,9 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAM
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
+import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.GROUP_OFFSETS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.TIMESTAMP;
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Utility class for {@link FlinkConnectorOptions}. */
 public class FlinkConnectorOptionsUtils {
@@ -67,9 +72,38 @@ public class FlinkConnectorOptionsUtils {
     }
 
     public static void validateTableSourceOptions(ReadableConfig tableOptions) {
+        if (tableOptions.get(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT)) {
+            validateConsumerGroupId(
+                    tableOptions, FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key());
+        }
         validateScanStartupMode(tableOptions);
         validateScanBoundedMode(tableOptions);
         validateScanSplitAssignmentBatchSize(tableOptions);
+    }
+
+    public static OffsetsInitializer groupOffsetsInitializer(Configuration flussConfig) {
+        return OffsetsInitializer.committed(
+                GroupId.of(flussConfig.get(ConfigOptions.CLIENT_CONSUMER_GROUP_ID)).getGroupId(),
+                flussConfig.get(ConfigOptions.CLIENT_CONSUMER_AUTO_OFFSET_RESET));
+    }
+
+    private static void validateConsumerGroupId(
+            ReadableConfig tableOptions, String requiringOptionKey) {
+        String groupId =
+                tableOptions
+                        .getOptional(toFlinkOption(ConfigOptions.CLIENT_CONSUMER_GROUP_ID))
+                        .orElse(null);
+        try {
+            GroupId.of(groupId);
+        } catch (InvalidConsumerGroupIdException e) {
+            throw new ValidationException(
+                    String.format(
+                            "Option '%s' requires a valid '%s': %s",
+                            requiringOptionKey,
+                            ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(),
+                            e.getMessage()),
+                    e);
+        }
     }
 
     /**
@@ -250,6 +284,9 @@ public class FlinkConnectorOptionsUtils {
 
     private static void validateScanStartupMode(ReadableConfig tableOptions) {
         ScanStartupMode scanStartupMode = tableOptions.get(SCAN_STARTUP_MODE);
+        if (scanStartupMode == GROUP_OFFSETS) {
+            validateConsumerGroupId(tableOptions, SCAN_STARTUP_MODE.key());
+        }
         if (scanStartupMode == TIMESTAMP) {
             if (!tableOptions.getOptional(SCAN_STARTUP_TIMESTAMP).isPresent()) {
                 throw new ValidationException(

@@ -454,6 +454,7 @@ The config option `scan.startup.mode` enables you to specify the starting point 
 - `earliest`: For primary key tables, it starts consuming from the earliest changelog offset; for log tables, it starts consuming from the earliest log offset.
 - `latest`: For primary key tables, it starts consuming from the latest changelog offset; for log tables, it starts consuming from the latest log offset.
 - `timestamp`: For primary key tables, it starts consuming the changelog from a specified time (defined by the configuration item `scan.startup.timestamp`); for log tables, it starts consuming from the offset corresponding to the specified time.
+- `group-offsets`: For primary key tables, it starts consuming the changelog from the last committed offset of the configured consumer group; for log tables, it starts consuming from the last committed log offset. Buckets without a committed offset follow `client.consumer.auto-offset-reset` (default `earliest`). This mode requires `client.consumer.group.id`.
 
 
 You can dynamically apply the scan parameters via SQL hints. For instance, the following SQL statement temporarily sets the `scan.startup.mode` to latest when consuming the `log_table` table.

@@ -63,4 +63,8 @@ public class HybridSnapshotLogSplitState extends SourceSplitState {
         snapshotFinished = true;
         this.nextOffset = nextOffset;
     }
+
+    public long getNextOffset() {
+        return this.nextOffset;
+    }
 }

@@ -17,12 +17,15 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
@@ -87,9 +90,114 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkSourceReader}. */
 class FlinkSourceReaderTest extends FlinkTestBase {
+
+    @Test
+    void testCommitOffsetOnCheckpointRequiresConsumerGroup() throws Exception {
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setBoolean(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key(), true);
+
+        assertThatThrownBy(
+                        () ->
+                                createReader(
+                                        sourceConf,
+                                        tableNames.tablePath(DEFAULT_DB, "missing_commit_group"),
+                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                                        new TestingReaderContext(),
+                                        null))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("Consumer group id");
+
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "  ");
+        assertThatThrownBy(
+                        () ->
+                                createReader(
+                                        sourceConf,
+                                        tableNames.tablePath(DEFAULT_DB, "empty_commit_group"),
+                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                                        new TestingReaderContext(),
+                                        null))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("ASCII letters");
+
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "__reserved");
+        assertThatThrownBy(
+                        () ->
+                                createReader(
+                                        sourceConf,
+                                        tableNames.tablePath(DEFAULT_DB, "reserved_commit_group"),
+                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                                        new TestingReaderContext(),
+                                        null))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("must not start with '__'");
+    }
+
+    @Test
+    void testCommitOffsetsOnlyAfterCheckpointCompletion() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "commit_on_checkpoint");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        String groupId = tablePath.getTableName();
+        writeRows(conn, tablePath, Arrays.asList(row(1, "one"), row(2, "two")), true);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        admin.alterConsumerGroupOffsets(
+                        groupId, Collections.singletonMap(bucket, new OffsetMetadata(0L)))
+                .all()
+                .get();
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), groupId);
+        sourceConf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL, Duration.ZERO);
+        sourceConf.setBoolean(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key(), true);
+
+        // The reader context may not expose the job's programmatic checkpoint interval.
+        TestingReaderContext readerContext = new TestingReaderContext();
+        try (FlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        readerContext,
+                        null)) {
+            reader.addSplits(Collections.singletonList(new LogSplit(bucket, null, 0L)));
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(2);
+                    });
+
+            List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
+            assertThat(checkpoint).hasSize(1);
+            assertThat(checkpoint.get(0).asLogSplit().getStartingOffset()).isEqualTo(2L);
+            assertThat(admin.listConsumerGroupOffsets(groupId, Collections.singleton(bucket)).get())
+                    .containsEntry(bucket, new OffsetMetadata(0L));
+
+            reader.notifyCheckpointComplete(1L);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(
+                                        admin.listConsumerGroupOffsets(
+                                                        groupId, Collections.singleton(bucket))
+                                                .get())
+                                .containsEntry(bucket, new OffsetMetadata(2L));
+                    });
+        }
+    }
 
     @Test
     void testCheckpointHybridSnapshotFinishedBeforeFirstLogRecord() throws Exception {

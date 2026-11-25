@@ -19,6 +19,7 @@ package org.apache.fluss.client.initializer;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.config.ConsumerOffsetReset;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -58,6 +59,21 @@ public interface OffsetsInitializer extends Serializable {
 
         Map<Integer, Long> offsetsFromTimestamp(
                 @Nullable String partitionName, Collection<Integer> buckets, long timestamp);
+
+        /**
+         * Fetch the last committed offset of {@code groupId} for each of {@code buckets}. Buckets
+         * without a committed offset (never-committed) are absent from the returned map — the
+         * caller decides the fallback behavior.
+         *
+         * @param groupId the consumer group whose committed offsets should be fetched
+         * @param partitionName the partition name of the buckets if they are partitioned.
+         *     Otherwise, null.
+         * @param buckets the buckets whose committed offsets should be fetched
+         * @return a mapping from bucket to its committed offset; buckets without a committed offset
+         *     are absent
+         */
+        Map<Integer, Long> committedOffsets(
+                String groupId, @Nullable String partitionName, Collection<Integer> buckets);
     }
 
     // --------------- factory methods ---------------
@@ -111,5 +127,31 @@ public interface OffsetsInitializer extends Serializable {
      */
     static OffsetsInitializer timestamp(long timestamp) {
         return new TimestampOffsetsInitializer(timestamp);
+    }
+
+    /**
+     * Get an {@link OffsetsInitializer} which initializes the offsets to the last committed offsets
+     * of the given consumer group. Buckets that have no committed offset for this group follow the
+     * default {@link ConsumerOffsetReset#EARLIEST} policy.
+     *
+     * @param groupId the consumer group whose committed offsets should be used as the starting
+     *     offsets
+     * @return an {@link OffsetsInitializer} which initializes the offsets to the committed offsets
+     */
+    static OffsetsInitializer committed(String groupId) {
+        return committed(groupId, ConsumerOffsetReset.EARLIEST);
+    }
+
+    /**
+     * Same as {@link #committed(String)} but uses the given reset policy for buckets that have no
+     * committed offset yet.
+     *
+     * @param groupId the consumer group whose committed offsets should be used as the starting
+     *     offsets
+     * @param resetPolicy policy used for any bucket without a committed offset
+     * @return an {@link OffsetsInitializer} which initializes the offsets to the committed offsets
+     */
+    static OffsetsInitializer committed(String groupId, ConsumerOffsetReset resetPolicy) {
+        return new CommittedOffsetsInitializer(groupId, resetPolicy);
     }
 }

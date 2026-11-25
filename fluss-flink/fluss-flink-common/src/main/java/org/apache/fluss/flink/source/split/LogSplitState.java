@@ -34,6 +34,10 @@ public class LogSplitState extends SourceSplitState {
         this.nextOffset = nextOffset;
     }
 
+    public long getNextOffset() {
+        return this.nextOffset;
+    }
+
     @Override
     public LogSplit toSourceSplit() {
         final LogSplit logSplit = (LogSplit) split;
