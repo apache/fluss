@@ -48,6 +48,7 @@ final class ServerRpcResources {
                 new RequestProcessorPool(
                         conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
                         conf.getInt(ConfigOptions.NETTY_SERVER_MAX_QUEUED_REQUESTS),
+                        conf.getInt(ConfigOptions.NETTY_SERVER_MAX_PENDING_REQUESTS_PER_CONNECTION),
                         service,
                         requestHandlers,
                         requestsMetrics,

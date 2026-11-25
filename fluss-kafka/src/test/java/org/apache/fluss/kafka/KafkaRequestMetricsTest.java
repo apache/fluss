@@ -266,6 +266,7 @@ class KafkaRequestMetricsTest {
             int requestSize = serialized.remaining();
             channel.writeInbound(Unpooled.wrappedBuffer(serialized));
             KafkaRequest result = (KafkaRequest) requests.pollRequest(0);
+            requests.requestFinished();
             assertThat(result).isNotNull();
             assertThat(result.requestBytes()).isEqualTo(requestSize);
             result.setRequestDequeTimeMs(System.currentTimeMillis());

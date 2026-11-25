@@ -17,38 +17,26 @@
 
 package org.apache.fluss.rpc.netty.server;
 
-import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
 
-/** A testing request channel that can receive requests and deal with requests. */
+/** A test worker that stages completed claims for tests that deliver responses out of order. */
 final class TestingRequestChannel extends RequestChannel {
+    private final List<RpcRequest> claimed = new ArrayList<>();
 
-    public TestingRequestChannel(int queueCapacity) {
+    TestingRequestChannel(int queueCapacity) {
         super(queueCapacity);
     }
 
-    public RpcRequest getAndRemoveRequest(int index) {
-        if (requestQueue.isEmpty()) {
-            throw new IllegalStateException("No requests pending for request channel.");
-        }
-
-        // Index out of bounds check.
-        if (index >= requestQueue.size()) {
-            throw new IllegalArgumentException(
-                    "Index " + index + " is out of bounds for request channel.");
-        }
-
-        int currentIndex = 0;
-        RpcRequest request = null;
-        for (Iterator<RpcRequest> it = requestQueue.iterator(); it.hasNext(); ) {
-            RpcRequest rpcRequest = it.next();
-            if (currentIndex == index) {
-                it.remove();
-                request = rpcRequest;
-                break;
+    RpcRequest getAndRemoveRequest(int index) {
+        while (claimed.size() <= index) {
+            RpcRequest request = pollRequest(0);
+            if (request == null) {
+                throw new IllegalArgumentException("No request at index " + index);
             }
-            currentIndex++;
+            requestFinished();
+            claimed.add(request);
         }
-
-        return request;
+        return claimed.remove(index);
     }
 }

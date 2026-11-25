@@ -110,7 +110,6 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
                 "initial a channel for listener {} with protocol {}",
                 endpointListenerName,
                 serverAuthenticator.protocol());
-        // TODO: we can introduce a smarter and dynamic strategy to distribute requests to channels
         ch.pipeline()
                 .addLast(
                         "handler",

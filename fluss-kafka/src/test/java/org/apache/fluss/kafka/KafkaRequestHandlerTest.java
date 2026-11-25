@@ -259,6 +259,7 @@ public class KafkaRequestHandlerTest extends KafkaServerTestBase {
         } finally {
             // Mirror RequestProcessor's independent ownership before response-queue cleanup.
             request.releaseBuffer();
+            requests.requestFinished();
         }
         channel.runPendingTasks();
         assertThat(buffer.refCnt()).isZero();
