@@ -67,7 +67,6 @@ use crate::client::consumer_offsets::ConsumerGroup;
 use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
 
 mod consumer_group;
-pub use consumer_group::OffsetsInitializer;
 
 pub(super) const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -103,7 +102,7 @@ impl<'a> TableScan<'a> {
 
     /// Enables persisted offsets for a manually assigned consumer group.
     /// Existing subscriptions still use their explicit starting offsets; use
-    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. No background commits are made.
+    /// `subscribe_from_committed` to restore them. No background commits are made.
     pub fn with_consumer_group(mut self, options: ConsumerGroupOptions) -> Result<Self> {
         options.validate()?;
         self.consumer_group = Some(options);
@@ -539,6 +538,7 @@ impl PolledBatches {
 /// Private shared implementation for both scanner types
 struct LogScannerInner {
     consumer_group: Option<Arc<ConsumerGroup>>,
+    pending_starts: Mutex<consumer_group::PendingStarts>,
     table_path: TablePath,
     table_id: TableId,
     table_info: TableInfo,
@@ -738,6 +738,7 @@ impl LogScannerInner {
         );
         Ok(Self {
             consumer_group: None,
+            pending_starts: Default::default(),
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
             table_info: table_info.clone(),
@@ -780,13 +781,16 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+    async fn poll_records(self: &Arc<Self>, timeout: Duration) -> Result<ScanRecords> {
         // Pairs record_poll_start (now) with record_poll_end
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
         let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
+        if !self.prepare_positions(timeout).await? {
+            return Ok(ScanRecords::empty());
+        }
 
         loop {
             // Try to collect fetches
@@ -1049,18 +1053,10 @@ impl LogScannerInner {
             .await
     }
 
-    async fn do_subscribe_buckets(
+    async fn prepare_bucket_metadata(
         &self,
-        bucket_offsets: HashMap<TableBucket, i64>,
-        reader_is_active: bool,
+        bucket_offsets: &HashMap<TableBucket, i64>,
     ) -> Result<()> {
-        if bucket_offsets.is_empty() {
-            return Err(Error::UnexpectedError {
-                message: "Bucket offsets are empty.".to_string(),
-                source: None,
-            });
-        }
-
         if self.is_partitioned_table {
             let partition_ids: Vec<PartitionId> = bucket_offsets
                 .keys()
@@ -1074,6 +1070,23 @@ impl LogScannerInner {
                 .check_and_update_table_metadata(from_ref(&self.table_path))
                 .await?;
         }
+
+        Ok(())
+    }
+
+    async fn do_subscribe_buckets(
+        &self,
+        bucket_offsets: HashMap<TableBucket, i64>,
+        reader_is_active: bool,
+    ) -> Result<()> {
+        if bucket_offsets.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Bucket offsets are empty.".to_string(),
+                source: None,
+            });
+        }
+
+        self.prepare_bucket_metadata(&bucket_offsets).await?;
 
         let _subscription_guard = self.subscription_lock.lock();
         if reader_is_active {
@@ -1097,7 +1110,9 @@ impl LogScannerInner {
             .discard_buckets(|b| bucket_offsets.contains_key(b));
         if let Some(group) = &self.consumer_group {
             let mut delivered = group.delivered.lock();
+            let mut pending = self.pending_starts.lock();
             for bucket in bucket_offsets.keys() {
+                pending.forget(bucket);
                 delivered.remove(bucket);
             }
         }
@@ -1113,6 +1128,7 @@ impl LogScannerInner {
             .unassign_scan_buckets(from_ref(bucket));
         if let Some(group) = &self.consumer_group {
             group.delivered.lock().remove(bucket);
+            self.pending_starts.lock().forget(bucket);
         }
     }
 
@@ -1169,10 +1185,13 @@ impl LogScannerInner {
         self.log_fetcher.collect_fetches().await
     }
 
-    async fn poll_batches(&self, timeout: Duration) -> Result<PolledBatches> {
+    async fn poll_batches(self: &Arc<Self>, timeout: Duration) -> Result<PolledBatches> {
         let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
+        if !self.prepare_positions(timeout).await? {
+            return Ok(PolledBatches::default());
+        }
 
         loop {
             let batches = self.poll_for_batches().await?;
@@ -4778,33 +4797,6 @@ mod tests {
             inner.unsubscribe(0).await?;
             assert!(!group.delivered.lock().contains_key(&bucket));
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn an_explicit_offset_cannot_alias_earliest() -> Result<()> {
-        let (inner, _, _) = scanner_fixture(true)?;
-        let scanner = LogScanner { inner };
-        let bucket = TableBucket::new(1, 0);
-        scanner.subscribe(0, 7).await?;
-        let result = scanner
-            .subscribe_with_initializer(
-                from_ref(&bucket),
-                &OffsetsInitializer::offset(crate::client::EARLIEST_OFFSET),
-            )
-            .await;
-        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
-        assert_eq!(
-            scanner.inner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(7)
-        );
-        scanner
-            .subscribe_with_initializer(from_ref(&bucket), &OffsetsInitializer::earliest())
-            .await?;
-        assert_eq!(
-            scanner.inner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(crate::client::EARLIEST_OFFSET)
-        );
         Ok(())
     }
 

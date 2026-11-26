@@ -185,6 +185,13 @@ impl ConsumerGroup {
         }
     }
 
+    pub(crate) async fn fetch_positions(
+        &self,
+        buckets: &[TableBucket],
+    ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
+        self.client.fetch(buckets).await
+    }
+
     pub(crate) fn enqueue(
         self: &Arc<Self>,
         offsets: HashMap<TableBucket, OffsetAndMetadata>,

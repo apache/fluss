@@ -204,16 +204,14 @@ Both log scanner types support persisted offsets for manually assigned buckets. 
 nonempty group ID, restore subscriptions, process a poll, then commit:
 
 ```rust
-use fluss::client::{ConsumerGroupOptions, OffsetsInitializer, OffsetCommitOutcome};
+use fluss::client::{ConsumerGroupOptions, OffsetCommitOutcome};
 use fluss::metadata::TableBucket;
 
 let bucket = TableBucket::new(table.get_table_info().table_id, 0);
 let scanner = table.new_scan()
     .with_consumer_group(ConsumerGroupOptions::new("orders-worker"))?
     .create_log_scanner()?;
-scanner.subscribe_with_initializer(
-    &[bucket], &OffsetsInitializer::committed("orders-worker")
-).await?;
+scanner.subscribe_from_committed(&[bucket])?;
 let records = scanner.poll(std::time::Duration::from_secs(5)).await?;
 process_all(&records)?; // Commit only after processing succeeds.
 let outcomes = scanner.commit_sync().await?;
@@ -227,17 +225,13 @@ for (bucket, outcome) in outcomes {
 
 | Method | Contract |
 | --- | --- |
-| `subscribe_with_initializer(buckets, initializer).await` | Resolve and update selected buckets together; retain other subscriptions. Resolution errors leave subscriptions unchanged. |
+| `subscribe_from_committed(buckets)` | On poll, resume each bucket at this group’s saved offset, or earliest if it has no commit. Lookup errors propagate. |
 | `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
 | `commit_sync().await` | Commit progress from completed polls, including ranges skipped by the filter even when no rows were returned. Prefetch is excluded. Process all returned records first. |
 | `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
 | `commit_async()` / `commit_offsets_async(offsets)` | Call from a Tokio runtime to enqueue and capture the offsets. Outside a runtime, the call returns an error. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
 
-`OffsetsInitializer::committed(group_id)` uses `earliest()` for missing commits. Use
-`committed_with_fallback(group_id, strategy)` to choose `latest()`, `timestamp(ms)`, `offset(n)`
-or `fail()` instead. RPC/authorization errors and expired committed offsets do not trigger fallback.
-Initializers also work on scanners without a commit group; the source group may differ from the
-configured commit group. Restore and Admin queries use a 30-second deadline for offset fetches.
+For a timestamp or another group’s position, query Admin and pass the resulting offset to `subscribe` or `subscribe_partition`.
 Existing explicit-offset subscriptions keep their behavior. Rust uses distinct names for explicit
 commits because it does not support method overloading.
 
