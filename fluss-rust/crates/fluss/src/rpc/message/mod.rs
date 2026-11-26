@@ -162,12 +162,6 @@ where
     fn write(&self, writer: &mut W) -> Result<(), WriteError>;
 }
 
-impl<T: WriteType<W>, W: BufMut> WriteType<W> for &T {
-    fn write(&self, writer: &mut W) -> Result<(), WriteError> {
-        (**self).write(writer)
-    }
-}
-
 pub trait ReadType<R>: Sized
 where
     R: Buf,

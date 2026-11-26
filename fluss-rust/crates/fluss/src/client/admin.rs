@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::metadata::{BootstrapTarget, Metadata};
+use crate::client::metadata::Metadata;
 use crate::cluster::{Cluster, ServerNode};
 use crate::metadata::{
     AclFilter, AclInfo, AcquireKvSnapshotLeaseResult, ActiveKvSnapshots, AlterConfig,
@@ -40,20 +40,15 @@ use crate::rpc::message::{
     ListTablesRequest, RebalanceRequest, RegisterProducerOffsetsRequest,
     ReleaseKvSnapshotLeaseRequest, RemoveServerTagRequest, TableExistsRequest,
 };
-use crate::rpc::message::{
-    ListOffsetsRequest, OffsetSpec, ReadType, RequestBody, UpdateMetadataRequest, WriteType,
-};
+use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
 
-use crate::error::{Error, Result, RpcError};
+use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
 use crate::{BucketId, PartitionId, SnapshotId, TableId};
-use arc_swap::ArcSwap;
 use futures::future::try_join_all;
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
 use tokio::task::JoinHandle;
 
 fn parse_table_descriptor(bytes: &[u8]) -> Result<TableDescriptor> {
@@ -63,14 +58,9 @@ fn parse_table_descriptor(bytes: &[u8]) -> Result<TableDescriptor> {
     TableDescriptor::deserialize_json(&node)
 }
 
-type ReadRefresh = OnceCell<std::result::Result<Option<ServerNode>, ()>>;
-
 pub struct FlussAdmin {
     metadata: Arc<Metadata>,
     rpc_client: Arc<RpcClient>,
-    read_refresh: ArcSwap<ReadRefresh>,
-    // Node inspection may accept a coordinator-only response; reads must wait for a tablet.
-    node_refresh: ArcSwap<ReadRefresh>,
 }
 
 impl FlussAdmin {
@@ -78,8 +68,6 @@ impl FlussAdmin {
         FlussAdmin {
             metadata,
             rpc_client: connections,
-            read_refresh: ArcSwap::from_pointee(OnceCell::new()),
-            node_refresh: ArcSwap::from_pointee(OnceCell::new()),
         }
     }
 
@@ -95,55 +83,10 @@ impl FlussAdmin {
         self.rpc_client.get_connection(coordinator).await
     }
 
-    async fn read_only_request<R>(&self, request: R) -> Result<R::ResponseBody>
-    where
-        R: RequestBody + Sync + WriteType<Vec<u8>>,
-        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
-    {
-        // Requests started before the same outage share the discovery result, even if
-        // their errors arrive after the first caller has already refreshed the node list.
-        let target = BootstrapTarget::TabletServer;
-        let round = self.refresh_slot(target).load_full();
-        match self
-            .metadata
-            .request_from_tablet(&self.rpc_client, None, &request)
+    async fn read_only_gateway(&self) -> Result<ServerConnection> {
+        self.rpc_client
+            .get_connection(&self.metadata.admin_read_server()?)
             .await
-        {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                let responding_tablet =
-                    self.refresh_after_read_error(target, &round, error).await?;
-                self.metadata
-                    .request_from_tablet(&self.rpc_client, responding_tablet.as_ref(), &request)
-                    .await
-            }
-        }
-    }
-
-    fn refresh_slot(&self, target: BootstrapTarget) -> &ArcSwap<ReadRefresh> {
-        match target {
-            BootstrapTarget::AnyServer => &self.node_refresh,
-            BootstrapTarget::TabletServer => &self.read_refresh,
-        }
-    }
-
-    async fn refresh_after_read_error(
-        &self,
-        target: BootstrapTarget,
-        round: &ReadRefresh,
-        error: Error,
-    ) -> Result<Option<ServerNode>> {
-        if !error.is_retriable() && !matches!(error, Error::InvalidServerType { .. }) {
-            return Err(error);
-        }
-        let recovered = round
-            .get_or_init(|| async {
-                let result = self.metadata.refresh_server_nodes(target).await;
-                self.refresh_slot(target).store(Arc::new(OnceCell::new()));
-                result.map_err(|e| log::warn!("Failed to refresh Admin server nodes: {e}"))
-            })
-            .await;
-        recovered.clone().map_err(|()| error)
     }
 
     pub async fn create_database(
@@ -203,7 +146,9 @@ impl FlussAdmin {
         schema_id: Option<i32>,
     ) -> Result<SchemaInfo> {
         let response = self
-            .read_only_request(GetTableSchemaRequestMsg::new(table_path, schema_id))
+            .read_only_gateway()
+            .await?
+            .request(GetTableSchemaRequestMsg::new(table_path, schema_id))
             .await?;
 
         let schema_node: serde_json::Value = serde_json::from_slice(&response.schema_json)
@@ -215,27 +160,20 @@ impl FlussAdmin {
     }
 
     pub async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
-        let response = self
-            .read_only_request(GetTableRequest::new(table_path))
+        let info = self.fetch_table_info(table_path).await?;
+        // Refresh bucket routing for callers that use the table id to request table stats.
+        self.metadata
+            .refresh_admin_metadata(Some(table_path))
             .await?;
-
-        // Refresh bucket routing as well; callers use the returned table id for table stats.
-        let routing = self
-            .read_only_request(UpdateMetadataRequest::new(
-                &HashSet::from([table_path]),
-                &HashSet::new(),
-                vec![],
-            ))
-            .await?;
-        self.metadata.update(routing).await?;
-
-        Self::decode_table_info(table_path, response)
+        Ok(info)
     }
 
-    fn decode_table_info(
-        table_path: &TablePath,
-        response: GetTableInfoResponse,
-    ) -> Result<TableInfo> {
+    async fn fetch_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
+        let response = self
+            .read_only_gateway()
+            .await?
+            .request(GetTableRequest::new(table_path))
+            .await?;
         let GetTableInfoResponse {
             table_id,
             schema_id,
@@ -260,7 +198,9 @@ impl FlussAdmin {
     /// List all tables in the given database
     pub async fn list_tables(&self, database_name: &str) -> Result<Vec<String>> {
         let response = self
-            .read_only_request(ListTablesRequest::new(database_name))
+            .read_only_gateway()
+            .await?
+            .request(ListTablesRequest::new(database_name))
             .await?;
         Ok(response.table_name)
     }
@@ -277,7 +217,9 @@ impl FlussAdmin {
         partial_partition_spec: Option<&PartitionSpec>,
     ) -> Result<Vec<PartitionInfo>> {
         let response = self
-            .read_only_request(ListPartitionInfosRequest::new(
+            .read_only_gateway()
+            .await?
+            .request(ListPartitionInfosRequest::new(
                 table_path,
                 partial_partition_spec,
             ))
@@ -289,11 +231,7 @@ impl FlussAdmin {
         {
             return Ok(partitions);
         }
-        // Older servers omit per-partition bucket counts.
-        let response = self
-            .read_only_request(GetTableRequest::new(table_path))
-            .await?;
-        let table_info = Self::decode_table_info(table_path, response)?;
+        let table_info = self.fetch_table_info(table_path).await?;
         fill_bucket_counts(partitions, &table_info)
     }
 
@@ -338,7 +276,9 @@ impl FlussAdmin {
     /// Check if a table exists
     pub async fn table_exists(&self, table_path: &TablePath) -> Result<bool> {
         let response = self
-            .read_only_request(TableExistsRequest::new(table_path))
+            .read_only_gateway()
+            .await?
+            .request(TableExistsRequest::new(table_path))
             .await?;
         Ok(response.exists)
     }
@@ -364,23 +304,28 @@ impl FlussAdmin {
 
     /// List all databases
     pub async fn list_databases(&self) -> Result<Vec<String>> {
-        let response = self.read_only_request(ListDatabasesRequest::new()).await?;
+        let response = self
+            .read_only_gateway()
+            .await?
+            .request(ListDatabasesRequest::new())
+            .await?;
         Ok(response.database_name)
     }
 
     /// Check if a database exists
     pub async fn database_exists(&self, database_name: &str) -> Result<bool> {
         let response = self
-            .read_only_request(DatabaseExistsRequest::new(database_name))
+            .read_only_gateway()
+            .await?
+            .request(DatabaseExistsRequest::new(database_name))
             .await?;
         Ok(response.exists)
     }
 
     /// Get database information
     pub async fn get_database_info(&self, database_name: &str) -> Result<DatabaseInfo> {
-        let response = self
-            .read_only_request(GetDatabaseInfoRequest::new(database_name))
-            .await?;
+        let request = GetDatabaseInfoRequest::new(database_name);
+        let response = self.read_only_gateway().await?.request(request).await?;
 
         // Convert proto response to DatabaseInfo
         let database_descriptor = DatabaseDescriptor::from_json_bytes(&response.database_json)?;
@@ -396,32 +341,22 @@ impl FlussAdmin {
     /// Get all alive server nodes in the cluster, including the coordinator
     /// and all tablet servers. Refreshes cluster metadata before returning.
     pub async fn get_server_nodes(&self) -> Result<Vec<ServerNode>> {
-        let target = BootstrapTarget::AnyServer;
-        let round = self.refresh_slot(target).load_full();
-        let request = UpdateMetadataRequest::new(&HashSet::new(), &HashSet::new(), vec![]);
-        let error = match self
-            .metadata
-            .request_from_tablet(&self.rpc_client, None, request)
-            .await
-        {
-            Ok(response) if !response.tablet_servers.is_empty() => {
-                self.metadata.update(response).await?;
-                return Ok(self.metadata.get_cluster().get_server_nodes());
+        if let Err(error) = self.metadata.refresh_admin_metadata(None).await {
+            if !error.is_retriable() && !matches!(error, Error::InvalidServerType { .. }) {
+                return Err(error);
             }
-            Ok(_) => {
-                RpcError::ConnectionError("Tablet server returned an empty node list".into()).into()
-            }
-            Err(error) => error,
-        };
-        // Discovery itself supplies the requested nodes, including a coordinator with no live TS.
-        self.refresh_after_read_error(target, &round, error).await?;
+            // Explicit discovery still works when no cached tablet can answer.
+            self.metadata.reinit_cluster().await?;
+        }
         Ok(self.metadata.get_cluster().get_server_nodes())
     }
 
     /// Get the latest lake snapshot for a table
     pub async fn get_latest_lake_snapshot(&self, table_path: &TablePath) -> Result<LakeSnapshot> {
         let response = self
-            .read_only_request(GetLatestLakeSnapshotRequest::new(table_path))
+            .read_only_gateway()
+            .await?
+            .request(GetLatestLakeSnapshotRequest::new(table_path))
             .await?;
 
         // Convert proto response to LakeSnapshot
@@ -599,7 +534,9 @@ impl FlussAdmin {
     /// List database summaries (name, created_time, table_count).
     pub async fn list_database_summaries(&self) -> Result<Vec<DatabaseSummary>> {
         let response = self
-            .read_only_request(ListDatabaseSummariesRequest::new())
+            .read_only_gateway()
+            .await?
+            .request(ListDatabaseSummariesRequest::new())
             .await?;
         Ok(response
             .database_summary
@@ -730,7 +667,9 @@ impl FlussAdmin {
         partition_name: Option<&str>,
     ) -> Result<LatestKvSnapshots> {
         let response = self
-            .read_only_request(GetLatestKvSnapshotsRequest::new(table_path, partition_name))
+            .read_only_gateway()
+            .await?
+            .request(GetLatestKvSnapshotsRequest::new(table_path, partition_name))
             .await?;
         Ok(LatestKvSnapshots::from_pb(&response))
     }
@@ -744,7 +683,9 @@ impl FlussAdmin {
         snapshot_id: SnapshotId,
     ) -> Result<KvSnapshotMetadata> {
         let response = self
-            .read_only_request(GetKvSnapshotMetadataRequest::new(
+            .read_only_gateway()
+            .await?
+            .request(GetKvSnapshotMetadataRequest::new(
                 table_id,
                 partition_id,
                 bucket_id,
@@ -781,7 +722,9 @@ impl FlussAdmin {
         readable: Option<bool>,
     ) -> Result<LakeSnapshotInfo> {
         let response = self
-            .read_only_request(GetLakeSnapshotRequest::new(
+            .read_only_gateway()
+            .await?
+            .request(GetLakeSnapshotRequest::new(
                 table_path,
                 snapshot_id,
                 readable,

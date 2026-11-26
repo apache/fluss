@@ -16,22 +16,18 @@
 // under the License.
 
 use crate::cluster::{Cluster, ServerNode, ServerType};
-use crate::error::{Error, FlussError, Result, RpcError};
+use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
 use crate::rpc::from_pb_table_path;
-use crate::rpc::message::{
-    GetTableRequest, ReadType, RequestBody, UpdateMetadataRequest, WriteType,
-};
+use crate::rpc::message::{GetTableRequest, UpdateMetadataRequest};
 use crate::rpc::{RpcClient, ServerConnection};
 use crate::{PartitionId, TableId};
 use arc_swap::{ArcSwap, Guard};
 use log::{info, warn};
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::future::Future;
-use std::io::Cursor;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,21 +56,10 @@ struct BootstrapServer {
     address: Result<SocketAddr>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum BootstrapTarget {
-    AnyServer,
-    TabletServer,
-}
-
 impl Metadata {
     pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
-        let cluster = Self::init_cluster(
-            bootstrap,
-            &connections,
-            METADATA_REQUEST_TIMEOUT,
-            BootstrapTarget::AnyServer,
-        )
-        .await?;
+        let cluster =
+            Self::init_cluster(bootstrap, connections.clone(), METADATA_REQUEST_TIMEOUT).await?;
         let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
             cluster: ArcSwap::from_pointee(cluster),
@@ -177,9 +162,8 @@ impl Metadata {
 
     async fn init_cluster(
         bootstrap_servers: &str,
-        connections: &RpcClient,
+        connections: Arc<RpcClient>,
         request_timeout: Duration,
-        target: BootstrapTarget,
     ) -> Result<Cluster> {
         let bootstraps = Self::parse_bootstrap_servers(bootstrap_servers)?;
         let bootstrap_count = bootstraps.len();
@@ -207,21 +191,26 @@ impl Metadata {
                 ServerType::Unknown,
             );
 
-            let fetch = || {
-                Self::fetch_cluster_from_bootstrap(
-                    &server_node,
-                    connections,
-                    request_timeout,
-                    target,
-                )
-            };
             let cluster_result = if bootstrap_count == 1 {
-                Self::retry_bootstrap(&bootstrap.raw, fetch, || {
-                    connections.disconnect_endpoint(&server_node)
-                })
+                Self::retry_bootstrap(
+                    &bootstrap.raw,
+                    || {
+                        Self::fetch_cluster_from_bootstrap(
+                            &server_node,
+                            connections.clone(),
+                            request_timeout,
+                        )
+                    },
+                    || connections.disconnect_endpoint(&server_node),
+                )
                 .await
             } else {
-                fetch().await
+                Self::fetch_cluster_from_bootstrap(
+                    &server_node,
+                    connections.clone(),
+                    request_timeout,
+                )
+                .await
             };
 
             match cluster_result {
@@ -268,38 +257,27 @@ impl Metadata {
 
     async fn fetch_cluster_from_bootstrap(
         server_node: &ServerNode,
-        connections: &RpcClient,
+        connections: Arc<RpcClient>,
         request_timeout: Duration,
-        target: BootstrapTarget,
     ) -> Result<Cluster> {
-        let response = Self::request_with_timeout(
-            connections,
+        let response = Self::request_metadata(
+            &connections,
             server_node,
             UpdateMetadataRequest::new(&HashSet::default(), &HashSet::new(), vec![]),
             request_timeout,
         )
         .await?;
-        if target == BootstrapTarget::TabletServer && response.tablet_servers.is_empty() {
-            return Err(RpcError::ConnectionError(
-                "Bootstrap metadata contains no tablet servers".into(),
-            )
-            .into());
-        }
         Cluster::from_metadata_response(response, None)
     }
 
     /// Fails as retriable if `server` does not answer within `timeout`, so the caller can ask
     /// another server instead of waiting until the idle connection is closed.
-    async fn request_with_timeout<R>(
+    async fn request_metadata(
         connections: &RpcClient,
         server: &ServerNode,
-        request: R,
+        request: UpdateMetadataRequest,
         timeout: Duration,
-    ) -> Result<R::ResponseBody>
-    where
-        R: RequestBody + Send + WriteType<Vec<u8>>,
-        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
-    {
+    ) -> Result<MetadataResponse> {
         let requesting = async {
             let connection = connections.get_connection(server).await?;
             connection.request(request).await
@@ -309,19 +287,43 @@ impl Metadata {
             .unwrap_or_else(|_| {
                 Err(Error::FlussAPIError {
                     api_error: FlussError::RequestTimeOut.to_api_error(Some(format!(
-                        "No {:?} response from server {server:?} within {timeout:?}",
-                        R::API_KEY
+                        "No metadata response from server {server:?} within {timeout:?}"
                     ))),
                 })
             })
     }
 
-    async fn reinit_cluster(&self, target: BootstrapTarget) -> Result<()> {
+    pub(super) fn admin_read_server(&self) -> Result<ServerNode> {
+        self.cluster
+            .load()
+            .get_one_available_server()
+            .cloned()
+            .ok_or_else(|| {
+                crate::rpc::RpcError::ConnectionError(
+                    "No available tablet server for a read-only Admin request".into(),
+                )
+                .into()
+            })
+    }
+
+    pub(super) async fn refresh_admin_metadata(&self, table: Option<&TablePath>) -> Result<()> {
+        let request =
+            UpdateMetadataRequest::new(&table.into_iter().collect(), &HashSet::new(), vec![]);
+        let response = Self::request_metadata(
+            &self.connections,
+            &self.admin_read_server()?,
+            request,
+            self.request_timeout,
+        )
+        .await?;
+        self.update(response).await
+    }
+
+    pub(crate) async fn reinit_cluster(&self) -> Result<()> {
         let cluster = Self::init_cluster(
             &self.bootstrap,
-            &self.connections,
+            self.connections.clone(),
             self.request_timeout,
-            target,
         )
         .await?;
         let changing = self.changing.lock();
@@ -440,7 +442,7 @@ impl Metadata {
         Ok(())
     }
 
-    fn available_tablet_server(&self) -> Option<ServerNode> {
+    fn server_for_refresh(&self) -> Option<ServerNode> {
         let cluster = self.cluster.load();
         let excluded: HashSet<i32> = self
             .unavailable_tablet_servers
@@ -452,69 +454,6 @@ impl Metadata {
         cluster
             .get_one_available_server_excluding(&excluded)
             .cloned()
-    }
-
-    pub(super) async fn request_from_tablet<R>(
-        &self,
-        client: &RpcClient,
-        responding_tablet: Option<&ServerNode>,
-        request: R,
-    ) -> Result<R::ResponseBody>
-    where
-        R: RequestBody + Send + WriteType<Vec<u8>>,
-        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
-    {
-        // During a partial outage discovery may still advertise unreachable peers. Prefer the
-        // tablet that answered, unless its endpoint was replaced in the meantime.
-        let server = responding_tablet
-            .filter(|s| self.cluster.load().get_tablet_server(s.id()) == Some(*s))
-            .cloned()
-            .or_else(|| self.available_tablet_server())
-            .ok_or_else(|| {
-                RpcError::ConnectionError(
-                    "No available tablet server for a read-only Admin request".into(),
-                )
-            })?;
-        Self::request_with_timeout(client, &server, request, self.request_timeout).await
-    }
-
-    /// Probe each known tablet endpoint at most once before repeating bootstrap discovery.
-    pub(super) async fn refresh_server_nodes(
-        &self,
-        target: BootstrapTarget,
-    ) -> Result<Option<ServerNode>> {
-        let mut candidates = self.get_cluster().get_server_nodes();
-        {
-            let unavailable = self.unavailable_tablet_servers.read();
-            candidates.retain(|s| {
-                s.server_type() == &ServerType::TabletServer && !unavailable.contains(s)
-            });
-        }
-        candidates.shuffle(&mut rand::rng());
-        for server in candidates {
-            let result = Self::request_with_timeout(
-                &self.connections,
-                &server,
-                UpdateMetadataRequest::new(&HashSet::new(), &HashSet::new(), vec![]),
-                self.request_timeout,
-            )
-            .await;
-            match result {
-                Ok(response) if !response.tablet_servers.is_empty() => {
-                    self.update(response).await?;
-                    return Ok(Some(server));
-                }
-                Ok(_) => continue, // A restarting TS may not have received its node list yet.
-                Err(err)
-                    if err.is_retriable() || matches!(err, Error::InvalidServerType { .. }) =>
-                {
-                    warn!("Could not refresh cluster nodes from {server:?}: {err}");
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        self.reinit_cluster(target).await?;
-        Ok(None)
     }
 
     pub async fn update_tables_metadata(
@@ -566,18 +505,18 @@ impl Metadata {
         physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
         partition_ids: Vec<PartitionId>,
     ) -> Result<Option<MetadataResponse>> {
-        let server = match self.available_tablet_server() {
+        let server = match self.server_for_refresh() {
             Some(s) => s,
             None => {
                 info!(
                     "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
                 );
-                self.reinit_cluster(BootstrapTarget::AnyServer).await?;
+                self.reinit_cluster().await?;
                 return Ok(None);
             }
         };
 
-        let result = Self::request_with_timeout(
+        let result = Self::request_metadata(
             &self.connections,
             &server,
             UpdateMetadataRequest::new(table_paths, physical_table_paths, partition_ids),
@@ -832,20 +771,27 @@ mod tests {
         server_type: ServerType,
         response: std::result::Result<MetadataResponse, FlussError>,
     ) -> TcpStream {
-        let mut stream = accept_handshake(&listener, server_type, &[ApiKey::MetaData]).await;
-        match response {
-            Ok(metadata) => serve_success(&mut stream, ApiKey::MetaData, &metadata).await,
+        let mut stream = accept_handshake(listener, server_type, &[ApiKey::MetaData]).await;
+        let mut reply = read_request(&mut stream, ApiKey::MetaData).await;
+        match &response {
+            Ok(metadata) => metadata.encode(&mut reply).unwrap(),
             Err(error) => {
-                let reply = read_request(&mut stream, ApiKey::MetaData).await;
-                reply_error(&mut stream, reply, error).await;
+                reply[0] = 1;
+                ErrorResponse {
+                    error_code: error.code(),
+                    error_message: Some("metadata request failed".to_string()),
+                }
+                .encode(&mut reply)
+                .unwrap();
             }
         }
+        write_reply(&mut stream, &reply).await;
         stream
     }
 
     // Accept a connection and serve the API-version handshake.
     async fn accept_handshake(
-        listener: &TcpListener,
+        listener: TcpListener,
         server_type: ServerType,
         apis: &[ApiKey],
     ) -> TcpStream {
@@ -894,17 +840,6 @@ mod tests {
         write_reply(stream, &reply).await;
     }
 
-    async fn reply_error(stream: &mut TcpStream, mut reply: Vec<u8>, error: FlussError) {
-        reply[0] = 1;
-        ErrorResponse {
-            error_code: error.code(),
-            error_message: None,
-        }
-        .encode(&mut reply)
-        .unwrap();
-        write_reply(stream, &reply).await;
-    }
-
     fn unavailable_ids(metadata: &Metadata) -> HashSet<i32> {
         metadata
             .unavailable_tablet_servers
@@ -942,68 +877,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partition_listing_recovers_a_moved_tablet_and_reads_legacy_bucket_counts() {
+    async fn partition_listing_uses_an_alive_tablet_even_after_a_failed_metadata_refresh() {
         use crate::client::FlussAdmin;
         use crate::proto::{GetTableInfoResponse, ListPartitionInfosResponse, PbPartitionInfo};
 
-        let bootstrap = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let tablet = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut servers = server_metadata(&[1], 0);
-        servers.coordinator_server = Some(PbServerNode {
-            host: "127.0.0.1".into(),
-            port: i32::from(bootstrap.local_addr().unwrap().port()),
-            ..Default::default()
-        });
-        let stale = Cluster::from_metadata_response(servers.clone(), None).unwrap();
-        let empty = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metadata = Metadata::new_for_test(Arc::new(stale)).with_bootstrap(&format!(
-            "{},{}",
-            empty.local_addr().unwrap(),
-            bootstrap.local_addr().unwrap()
-        ));
-        let admin = FlussAdmin::new(metadata.connections.clone(), Arc::new(metadata));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nodes = server_metadata(&[1], listener.local_addr().unwrap().port());
+        let cluster = Arc::new(Cluster::from_metadata_response(nodes, None).unwrap());
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        metadata
+            .unavailable_tablet_servers
+            .write()
+            .insert(cluster.get_tablet_server(1).unwrap().clone());
+        let admin = FlussAdmin::new(metadata.connections.clone(), metadata);
 
-        servers.tablet_servers[0].port = i32::from(tablet.local_addr().unwrap().port());
-        let empty_task = tokio::spawn(serve_metadata_as(
-            empty,
-            ServerType::CoordinatorServer,
-            Ok(MetadataResponse {
-                coordinator_server: servers.coordinator_server.clone(),
-                ..Default::default()
-            }),
-        ));
-        let bootstrap_task = tokio::spawn(serve_metadata_as(
-            bootstrap,
-            ServerType::CoordinatorServer,
-            Ok(servers),
-        ));
-        let tablet_task = tokio::spawn(async move {
+        let server = tokio::spawn(async move {
             let mut stream = accept_handshake(
-                &tablet,
+                listener,
                 ServerType::TabletServer,
                 &[ApiKey::ListPartitionInfos, ApiKey::GetTable],
             )
             .await;
-            let mut reply = read_request(&mut stream, ApiKey::ListPartitionInfos).await;
-            ListPartitionInfosResponse {
-                partitions_info: vec![PbPartitionInfo {
-                    partition_id: 42,
+            // A legacy response needs a second Admin read for the table's bucket count.
+            serve_success(
+                &mut stream,
+                ApiKey::ListPartitionInfos,
+                &ListPartitionInfosResponse {
+                    partitions_info: vec![PbPartitionInfo {
+                        partition_id: 42,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
-                ..Default::default()
-            }
-            .encode(&mut reply)
-            .unwrap();
-            write_reply(&mut stream, &reply).await;
-            let mut reply = read_request(&mut stream, ApiKey::GetTable).await;
-            GetTableInfoResponse {
-                table_id: 1,
-                table_json: pb_table_metadata("parts", 1, true, vec![]).table_json,
-                ..Default::default()
-            }
-            .encode(&mut reply)
-            .unwrap();
-            write_reply(&mut stream, &reply).await;
+                },
+            )
+            .await;
+            serve_success(
+                &mut stream,
+                ApiKey::GetTable,
+                &GetTableInfoResponse {
+                    table_id: 1,
+                    table_json: pb_table_metadata("parts", 1, true, vec![]).table_json,
+                    ..Default::default()
+                },
+            )
+            .await;
         });
 
         let partitions = tokio::time::timeout(
@@ -1015,152 +932,7 @@ mod tests {
         .unwrap();
         assert_eq!(partitions[0].get_partition_id(), 42);
         assert_eq!(partitions[0].get_bucket_count(), 4);
-        empty_task.await.unwrap();
-        bootstrap_task.await.unwrap();
-        tablet_task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn coordinator_only_bootstrap_allows_discovery_but_not_admin_reads() {
-        use crate::client::FlussAdmin;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let nodes = MetadataResponse {
-            coordinator_server: Some(PbServerNode {
-                host: "127.0.0.1".into(),
-                port: i32::from(address.port()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let metadata =
-            Arc::new(Metadata::new_for_test(Arc::default()).with_bootstrap(&address.to_string()));
-        let admin = FlussAdmin::new(metadata.connections.clone(), metadata);
-        let (inspection_started, inspection_pending) = oneshot::channel();
-        let server = tokio::spawn(async move {
-            let mut stream = accept_handshake(
-                &listener,
-                ServerType::CoordinatorServer,
-                &[ApiKey::MetaData],
-            )
-            .await;
-            // Hold the inspection open: its coordinator-only result must not finish the read's refresh.
-            let inspection = read_request(&mut stream, ApiKey::MetaData).await;
-            inspection_started.send(()).unwrap();
-            let read = read_request(&mut stream, ApiKey::MetaData).await;
-            for mut reply in [inspection, read] {
-                nodes.encode(&mut reply).unwrap();
-                write_reply(&mut stream, &reply).await;
-            }
-            for _ in 0..3 {
-                let mut retry = accept_handshake(
-                    &listener,
-                    ServerType::CoordinatorServer,
-                    &[ApiKey::MetaData],
-                )
-                .await;
-                serve_success(&mut retry, ApiKey::MetaData, &nodes).await;
-            }
-        });
-        tokio::time::timeout(Duration::from_secs(5), async {
-            let (discovered, read) = tokio::join!(admin.get_server_nodes(), async {
-                inspection_pending.await.unwrap();
-                let start = tokio::time::Instant::now();
-                let result = admin.list_databases().await;
-                assert!(start.elapsed() >= Duration::from_millis(700));
-                result
-            });
-            let discovered = discovered.unwrap();
-            assert_eq!(discovered.len(), 1);
-            assert_eq!(discovered[0].server_type(), &ServerType::CoordinatorServer);
-            assert!(matches!(read, Err(Error::RpcError {
-                source: RpcError::ConnectionError(message), ..
-            }) if message.contains("No available tablet server")));
-            server.await.unwrap();
-        })
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn concurrent_admin_reads_refresh_once_and_retry_once() {
-        use crate::client::FlussAdmin;
-        use crate::proto::ListDatabasesResponse;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let nodes = server_metadata(&[1], listener.local_addr().unwrap().port());
-        let cluster = Cluster::from_metadata_response(nodes.clone(), None).unwrap();
-        let metadata = Arc::new(Metadata::new_for_test(Arc::new(cluster)));
-        let admin = FlussAdmin::new(metadata.connections.clone(), metadata.clone());
-        let server = tokio::spawn(async move {
-            let mut stream = accept_handshake(
-                &listener,
-                ServerType::TabletServer,
-                &[
-                    ApiKey::ListDatabases,
-                    ApiKey::DatabaseExists,
-                    ApiKey::MetaData,
-                ],
-            )
-            .await;
-            let first = read_request(&mut stream, ApiKey::ListDatabases).await;
-            let second = read_request(&mut stream, ApiKey::ListDatabases).await;
-            for reply in [first, second] {
-                reply_error(&mut stream, reply, FlussError::NetworkException).await;
-            }
-            serve_success(&mut stream, ApiKey::MetaData, &nodes).await;
-            serve_success(
-                &mut stream,
-                ApiKey::ListDatabases,
-                &ListDatabasesResponse {
-                    database_name: vec!["db".into()],
-                    ..Default::default()
-                },
-            )
-            .await;
-            let err = read_request(&mut stream, ApiKey::ListDatabases).await;
-            reply_error(&mut stream, err, FlussError::NetworkException).await;
-            // A failed replay and a subsequent authorization error must not start new refreshes.
-            let denied = read_request(&mut stream, ApiKey::DatabaseExists).await;
-            reply_error(&mut stream, denied, FlussError::AuthorizationException).await;
-            serve_success(
-                &mut stream,
-                ApiKey::ListDatabases,
-                &ListDatabasesResponse::default(),
-            )
-            .await;
-        });
-        tokio::time::timeout(Duration::from_secs(5), async {
-            // Both requests must share the established socket used by the simulated TS.
-            metadata
-                .get_connection(&metadata.available_tablet_server().unwrap())
-                .await
-                .unwrap();
-            let (first, second) = tokio::join!(admin.list_databases(), admin.list_databases());
-            let (ok, err) = if first.is_ok() {
-                (first, second)
-            } else {
-                (second, first)
-            };
-            assert_eq!(ok.unwrap(), ["db"]);
-            assert_eq!(
-                err.unwrap_err().api_error(),
-                Some(FlussError::NetworkException)
-            );
-            assert_eq!(
-                admin
-                    .database_exists("private")
-                    .await
-                    .unwrap_err()
-                    .api_error(),
-                Some(FlussError::AuthorizationException)
-            );
-            assert!(admin.list_databases().await.unwrap().is_empty());
-            server.await.unwrap();
-        })
-        .await
-        .unwrap();
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -1536,7 +1308,7 @@ mod tests {
         // The old address holds the refresh until released, then drops it.
         let server = tokio::spawn(async move {
             let mut stream =
-                accept_handshake(&listener, ServerType::TabletServer, &[ApiKey::MetaData]).await;
+                accept_handshake(listener, ServerType::TabletServer, &[ApiKey::MetaData]).await;
             read_request(&mut stream, ApiKey::MetaData).await;
             received_tx.send(()).unwrap();
             release_rx.await.unwrap();
@@ -1559,9 +1331,7 @@ mod tests {
         server.await.unwrap();
         assert!(refresh.await.unwrap().unwrap_err().is_retriable());
         assert_eq!(
-            metadata
-                .available_tablet_server()
-                .map(|server| server.port()),
+            metadata.server_for_refresh().map(|server| server.port()),
             Some(u32::from(new_port))
         );
     }
