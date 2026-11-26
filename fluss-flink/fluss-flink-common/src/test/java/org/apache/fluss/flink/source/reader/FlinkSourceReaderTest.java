@@ -68,6 +68,8 @@ import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.junit.jupiter.api.Test;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -520,6 +522,128 @@ class FlinkSourceReaderTest extends FlinkTestBase {
     }
 
     @Test
+    void testLakeSnapshotSplitsKeepPlanningOrderAcrossRestore() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_lake_snapshot_split_order");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(2).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        RowType rowType = tableDescriptor.getSchema().getRowType();
+
+        // Two buckets on one reader, three lake splits each, in planning (write) order. Each
+        // split holds two records whose id encodes the split index.
+        List<SourceSplitBase> plannedSplits = new ArrayList<>();
+        for (int splitIndex = 0; splitIndex < 6; splitIndex++) {
+            int bucket = splitIndex % 2;
+            plannedSplits.add(
+                    new LakeSnapshotSplit(
+                            new TableBucket(tableId, bucket),
+                            null,
+                            new OrderedTestingLakeSplit(
+                                    bucket, splitIndex * 10 + 1, splitIndex * 10 + 2),
+                            splitIndex));
+        }
+
+        // Splits can arrive in any order, so add them reversed.
+        List<SourceSplitBase> assignedSplits = new ArrayList<>(plannedSplits);
+        Collections.reverse(assignedSplits);
+        TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+        List<SourceSplitBase> checkpoint;
+        try (FlinkSourceReader<RowData> reader =
+                createReader(
+                        clientConf,
+                        tablePath,
+                        rowType,
+                        new TestingReaderContext(),
+                        new OrderedTestingLakeSource())) {
+            reader.addSplits(assignedSplits);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(3);
+                    });
+            checkpoint = new ArrayList<>(reader.snapshotState(1L));
+        }
+
+        // Restore while lake splits are still pending. Flink restores reader state in no
+        // particular order, so reverse it.
+        Collections.reverse(checkpoint);
+        TestingReaderOutput<RowData> restoredOutput = new TestingReaderOutput<>();
+        try (FlinkSourceReader<RowData> restoredReader =
+                createReader(
+                        clientConf,
+                        tablePath,
+                        rowType,
+                        new TestingReaderContext(),
+                        new OrderedTestingLakeSource())) {
+            restoredReader.addSplits(checkpoint);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        restoredReader.pollNext(restoredOutput);
+                        assertThat(restoredOutput.getEmittedRecords()).hasSize(9);
+                    });
+        }
+
+        List<RowData> emitted = new ArrayList<>(output.getEmittedRecords());
+        emitted.addAll(restoredOutput.getEmittedRecords());
+        assertThat(idsOfBucket(emitted, 0)).containsExactly(1, 2, 21, 22, 41, 42);
+        assertThat(idsOfBucket(emitted, 1)).containsExactly(11, 12, 31, 32, 51, 52);
+    }
+
+    @Test
+    void testSortLakeSnapshotSplitsKeepsOtherSplitsInPlace() {
+        TableBucket bucket0 = new TableBucket(1L, 0);
+        TableBucket bucket1 = new TableBucket(1L, 1);
+        LakeSnapshotSplit first =
+                new LakeSnapshotSplit(bucket0, null, new TestingLakeSplit(0, null), 0);
+        LakeSnapshotSplit second =
+                new LakeSnapshotSplit(bucket0, null, new TestingLakeSplit(0, null), 1);
+        LogSplit logSplit = new LogSplit(bucket1, null, 0L);
+
+        assertThat(FlinkSourceReader.sortLakeSnapshotSplits(Arrays.asList(second, logSplit, first)))
+                .containsExactly(first, logSplit, second);
+    }
+
+    @Test
+    void testSortLakeSnapshotSplitsOrdersByPartitionThenSplitIndex() {
+        // Split indexes restart in every partition, so the partition is compared first.
+        LakeSnapshotSplit p2Index0 = lakeSnapshotSplit(2L, 0, 0);
+        LakeSnapshotSplit p1Index1 = lakeSnapshotSplit(1L, 1, 1);
+        LakeSnapshotSplit p1Index0 = lakeSnapshotSplit(1L, 0, 0);
+        LakeSnapshotSplit p1Index2 = lakeSnapshotSplit(1L, 0, 2);
+        LakeSnapshotSplit p2Index1 = lakeSnapshotSplit(2L, 1, 1);
+
+        assertThat(
+                        FlinkSourceReader.sortLakeSnapshotSplits(
+                                Arrays.asList(p2Index1, p1Index2, p2Index0, p1Index1, p1Index0)))
+                .containsExactly(p1Index0, p1Index1, p1Index2, p2Index0, p2Index1);
+    }
+
+    @Test
+    void testSortLakeSnapshotSplitsLeavesOtherSplitTypesUntouched() {
+        TableBucket bucket0 = new TableBucket(1L, 0);
+        TableBucket bucket1 = new TableBucket(1L, 1);
+        List<SourceSplitBase> noLakeSnapshotSplits =
+                Arrays.asList(
+                        new LogSplit(bucket1, null, 0L),
+                        new LakeSnapshotAndFlussLogSplit(
+                                bucket0,
+                                null,
+                                Collections.singletonList(
+                                        new TestingLakeSplit(0, Collections.emptyList())),
+                                0L,
+                                10L));
+        assertThat(FlinkSourceReader.sortLakeSnapshotSplits(noLakeSnapshotSplits))
+                .isSameAs(noLakeSnapshotSplits);
+
+        List<SourceSplitBase> oneLakeSnapshotSplit =
+                Arrays.asList(new LogSplit(bucket1, null, 0L), lakeSnapshotSplit(null, 0, 0));
+        assertThat(FlinkSourceReader.sortLakeSnapshotSplits(oneLakeSnapshotSplit))
+                .isSameAs(oneLakeSnapshotSplit);
+    }
+
+    @Test
     void testHandlePartitionsRemovedEvent() throws Exception {
         TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test_partitioned_table");
 
@@ -805,6 +929,49 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
         private int getNumAliveFetchers() {
             return splitFetcherManager.getNumAliveFetchers();
+        }
+    }
+
+    private static LakeSnapshotSplit lakeSnapshotSplit(
+            @Nullable Long partitionId, int bucket, int splitIndex) {
+        return new LakeSnapshotSplit(
+                new TableBucket(1L, partitionId, bucket),
+                partitionId == null ? null : "p" + partitionId,
+                new TestingLakeSplit(bucket, Collections.emptyList()),
+                splitIndex);
+    }
+
+    private static List<Integer> idsOfBucket(List<RowData> rows, int bucket) {
+        return rows.stream()
+                .filter(row -> row.getString(1).toString().equals("b" + bucket))
+                .map(row -> row.getInt(0))
+                .collect(Collectors.toList());
+    }
+
+    /** A lake split that carries the ids of the records it holds. */
+    private static final class OrderedTestingLakeSplit extends TestingLakeSplit {
+
+        private final List<Integer> ids;
+
+        private OrderedTestingLakeSplit(int bucket, Integer... ids) {
+            super(bucket, null);
+            this.ids = Arrays.asList(ids);
+        }
+    }
+
+    /** A lake source that reads the records an {@link OrderedTestingLakeSplit} holds. */
+    private static final class OrderedTestingLakeSource extends TestingLakeSource {
+
+        @Override
+        public RecordReader createRecordReader(ReaderContext<LakeSplit> context) {
+            OrderedTestingLakeSplit split = (OrderedTestingLakeSplit) context.lakeSplit();
+            List<LogRecord> records = new ArrayList<>();
+            for (int id : split.ids) {
+                records.add(
+                        new GenericRecord(
+                                -1L, -1L, ChangeType.APPEND_ONLY, row(id, "b" + split.bucket())));
+            }
+            return () -> CloseableIterator.wrap(records.iterator());
         }
     }
 

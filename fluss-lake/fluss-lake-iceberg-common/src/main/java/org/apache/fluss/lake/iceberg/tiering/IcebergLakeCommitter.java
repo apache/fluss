@@ -167,7 +167,17 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                 throw new IllegalArgumentException(
                         "Rewrite data file results must have same snapshot id.");
             }
-            rewriteFiles.validateFromSnapshot(rewriteDataFileResults.get(0).snapshotId());
+            long startingSnapshotId = rewriteDataFileResults.get(0).snapshotId();
+            rewriteFiles.validateFromSnapshot(startingSnapshotId);
+            // The rewrite is committed after this round's data, so by default its files would get
+            // a newer data sequence number than the data and be read after it. Keep the sequence
+            // number of the snapshot the rewrite was planned from, as Spark's rewrite does, so
+            // compacted rows stay ordered before rows tiered later. Equality deletes committed
+            // since then still apply to the rewritten files.
+            Snapshot startingSnapshot = icebergTable.snapshot(startingSnapshotId);
+            if (startingSnapshot != null) {
+                rewriteFiles.dataSequenceNumber(startingSnapshot.sequenceNumber());
+            }
             for (RewriteDataFileResult rewriteDataFileResult : rewriteDataFileResults) {
                 rewriteDataFileResult.addedDataFiles().forEach(rewriteFiles::addFile);
                 rewriteDataFileResult.deletedDataFiles().forEach(rewriteFiles::deleteFile);
