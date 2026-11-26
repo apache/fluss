@@ -247,6 +247,11 @@ public final class LogTablet {
         return dataDir;
     }
 
+    /** Returns whether this log belongs to a primary-key table. */
+    public boolean isChangelog() {
+        return isChangeLog;
+    }
+
     /** Returns the concrete log tablet directory under the owning local data directory. */
     public File getLogDir() {
         return localLog.getLogTabletDir();

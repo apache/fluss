@@ -25,6 +25,7 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -605,11 +606,33 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
      * kvBucketCount} so KV-heavy workloads are balanced independently from pure log workloads.
      */
     public synchronized File selectDataDirForNewBucket(boolean hasPrimaryKey) {
-        DiskInfo selectedDisk = null;
         Comparator<DiskInfo> comparator =
                 hasPrimaryKey
                         ? Comparator.comparingInt((DiskInfo diskInfo) -> diskInfo.kvBucketCount)
                         : Comparator.comparingInt((DiskInfo diskInfo) -> diskInfo.logBucketCount);
+        return selectDataDir(comparator);
+    }
+
+    /**
+     * Selects a directory for a new KV leader using active and reserved leaders first, followed by
+     * total primary-key replicas and configured directory order.
+     */
+    public synchronized File selectDataDirForNewKvLeader(
+            Map<File, Set<TableBucket>> leaderReservations) {
+        Comparator<DiskInfo> placementOrder =
+                Comparator.comparingInt(
+                                (DiskInfo disk) -> {
+                                    Set<TableBucket> reservedBuckets =
+                                            leaderReservations.getOrDefault(
+                                                    disk.dataDir, Collections.emptySet());
+                                    return disk.kvLeaderCount + reservedBuckets.size();
+                                })
+                        .thenComparingInt(disk -> disk.kvBucketCount);
+        return selectDataDir(placementOrder);
+    }
+
+    private File selectDataDir(Comparator<DiskInfo> comparator) {
+        DiskInfo selectedDisk = null;
         for (DiskInfo candidate : diskInfosByDir.values()) {
             if (selectedDisk == null || comparator.compare(candidate, selectedDisk) < 0) {
                 selectedDisk = candidate;
@@ -635,6 +658,11 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
         if (hasPrimaryKey) {
             diskInfo.kvBucketCount = Math.max(0, diskInfo.kvBucketCount - 1);
         }
+    }
+
+    /** Records a replica entering or leaving the active KV leader role. */
+    public synchronized void recordKvLeaderChange(File dataDir, boolean isLeader) {
+        diskInfo(dataDir).kvLeaderCount += isLeader ? 1 : -1;
     }
 
     @VisibleForTesting
@@ -916,6 +944,7 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
         private final String diskId;
         private int logBucketCount;
         private int kvBucketCount;
+        private int kvLeaderCount;
 
         private DiskInfo(File dataDir, String diskId) {
             this.dataDir = dataDir;
