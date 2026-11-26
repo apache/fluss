@@ -72,18 +72,6 @@
             <artifactId>fluss-shaded-zookeeper</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.roaringbitmap</groupId>
-            <artifactId>RoaringBitmap</artifactId>
-            <version>${roaringbitmap.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.datasketches</groupId>
-            <artifactId>datasketches-java</artifactId>
-            <version>${datasketches-java.version}</version>
-        </dependency>
-
         <!--
         we will start zookeeper server when start a local cluster,
         need include this module for starting zookeeper requires it -->
@@ -154,16 +142,8 @@
                             </artifactSet>
                             <relocations>
                                 <relocation>
-                                    <pattern>org.apache.datasketches</pattern>
-                                    <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
-                                </relocation>
-                                <relocation>
                                     <pattern>org.apache.commons</pattern>
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>org.roaringbitmap</pattern>
-                                    <shadedPattern>org.apache.fluss.shaded.org.roaringbitmap</shadedPattern>
                                 </relocation>
                             </relocations>
                         </configuration>
