@@ -655,6 +655,51 @@ public class MemoryLogRecordsArrowBuilderTest {
         readContext.close();
     }
 
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2})
+    void testChangeTypeVectorSpansSegments(byte recordBatchMagic) throws Exception {
+        int pageSizeInBytes = 128;
+        // more records than bytes in a page, so the change type vector crosses several pages
+        int numRecords = pageSizeInBytes * 5;
+        ChangeType[] changeTypes = {
+            ChangeType.INSERT, ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER, ChangeType.DELETE
+        };
+
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024 * 1024, DATA1_ROW_TYPE, NO_COMPRESSION);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(
+                        0, writer, 1024, pageSizeInBytes, recordBatchMagic);
+
+        for (int i = 0; i < numRecords; i++) {
+            builder.append(changeTypes[i % changeTypes.length], row(i, "v" + i));
+        }
+
+        builder.setWriterState(1L, 0);
+        builder.close();
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+
+        LogRecordBatch batch = records.batches().iterator().next();
+        assertThat(batch.isValid()).isTrue();
+        assertThat(batch.getRecordCount()).isEqualTo(numRecords);
+
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createArrowReadContext(
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+                CloseableIterator<LogRecord> recordIterator = batch.records(readContext)) {
+            int i = 0;
+            while (recordIterator.hasNext()) {
+                LogRecord record = recordIterator.next();
+                assertThat(record.getChangeType()).isEqualTo(changeTypes[i % changeTypes.length]);
+                assertThat(record.getRow().getInt(0)).isEqualTo(i);
+                assertThat(record.getRow().getString(1).toString()).isEqualTo("v" + i);
+                i++;
+            }
+            assertThat(i).isEqualTo(numRecords);
+        }
+    }
+
     private static List<ArrowCompressionInfo> compressionInfos() {
         return Arrays.asList(
                 new ArrowCompressionInfo(ArrowCompressionType.LZ4_FRAME, -1),
