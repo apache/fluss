@@ -40,6 +40,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -193,11 +194,12 @@ class KafkaJsonProduceITCase {
                                     layout.equals("nested") ? 2 : 1 + VALUE_TYPE.getFieldCount();
                             if (rescue) {
                                 if (index == 0) {
-                                    assertThat(row.getString(headersPosition).toString())
+                                    assertThat(readJson(row.getString(headersPosition).toString()))
                                             .isEqualTo(
-                                                    "{\"extra\":null,\"_kafka_key\":42,"
-                                                            + "\"amount\":\"bad\","
-                                                            + "\"items\":[{\"extra\":[1,null,2],\"quantity\":\"bad\"},null]}");
+                                                    readJson(
+                                                            "{\"extra\":null,\"_kafka_key\":42,"
+                                                                    + "\"amount\":\"bad\","
+                                                                    + "\"items\":[{\"extra\":[1,null,2],\"quantity\":\"bad\"},null]}"));
                                 } else {
                                     assertThat(row.isNullAt(headersPosition)).isTrue();
                                 }
@@ -434,6 +436,14 @@ class KafkaJsonProduceITCase {
         return layout.equals("nested")
                 ? row.getRow(1, VALUE_TYPE.getFieldCount()).getInt(0)
                 : row.getInt(1);
+    }
+
+    private static Object readJson(String json) {
+        try {
+            return new ObjectMapper().readTree(json);
+        } catch (java.io.IOException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static String json(int id) {

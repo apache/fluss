@@ -20,11 +20,8 @@ package org.apache.fluss.kafka.format.json;
 import org.apache.fluss.kafka.transcode.KafkaRecordEncodingException;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.BinaryNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.FloatNode;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -42,8 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Covers scalar coercion rules from Flink 1.20 JsonToRowDataConverters. */
 class JsonToFlussFlinkCompatibilityTest {
-    private static final ObjectMapper MAPPER =
-            new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @ParameterizedTest
     @MethodSource("coercibleScalars")
@@ -80,35 +76,20 @@ class JsonToFlussFlinkCompatibilityTest {
     }
 
     @Test
-    void testDecimalTextAndFloatingPointNodes() throws Exception {
+    void testDecimalText() throws Exception {
         assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), "\"12.345\"")).toBigDecimal())
                 .isEqualByComparingTo("12.35");
         assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), "\"1.2345e1\"")).toBigDecimal())
                 .isEqualByComparingTo("12.35");
         assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), "\"1e-2147483647\"")).toBigDecimal())
                 .isEqualByComparingTo(BigDecimal.ZERO);
-        JsonNode floatNode = FloatNode.valueOf(0.1F);
-        Decimal decimal =
-                (Decimal)
-                        JsonToFlussConverters.create(DataTypes.DECIMAL(20, 10))
-                                .convert(floatNode, "$.field");
-        assertThat(decimal.toBigDecimal()).isEqualByComparingTo("0.1");
-        assertThat(JsonToFlussConverters.create(DataTypes.DOUBLE()).convert(floatNode, "$.field"))
-                .isEqualTo(0.1D);
     }
 
     @Test
-    void testJacksonBinaryNodesAndBase64Whitespace() throws Exception {
+    void testBase64Whitespace() throws Exception {
         byte[] bytes = {1, 2, 3, 4};
-        JsonNode binary = BinaryNode.valueOf(bytes);
-        assertThat((byte[]) JsonToFlussConverters.create(DataTypes.BYTES()).convert(binary, "$.b"))
-                .containsExactly(bytes);
-        assertThat(
-                        (byte[])
-                                JsonToFlussConverters.create(DataTypes.BINARY(2))
-                                        .convert(binary, "$.b"))
-                .containsExactly((byte) 1, (byte) 2);
         assertThat((byte[]) convert(DataTypes.BYTES(), "\" AQID\\nBA== \"")).containsExactly(bytes);
+
         assertThat((byte[]) convert(DataTypes.BINARY(6), "\" AQID\\nBA== \""))
                 .containsExactly((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 0, (byte) 0);
     }
@@ -171,6 +152,12 @@ class JsonToFlussFlinkCompatibilityTest {
     }
 
     private static Object convert(DataType type, String json) throws Exception {
-        return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$.field");
+        try (JsonParser parser = MAPPER.getFactory().createParser(json)) {
+            parser.nextToken();
+            Object value =
+                    JsonParserToFlussConverters.create(type).convert(parser, "$.field", null);
+            assertThat(parser.nextToken()).as("parser advancement").isNull();
+            return value;
+        }
     }
 }

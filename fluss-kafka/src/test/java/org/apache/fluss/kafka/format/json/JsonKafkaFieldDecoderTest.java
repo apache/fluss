@@ -174,11 +174,12 @@ class JsonKafkaFieldDecoderTest {
                                                 + "\"amount\":12345678901234567890.1234567890,\"floatZero\":-0}"))
                         .valueFields();
         assertThat(values[0]).isEqualTo(1.0000001F);
-        // Jackson's decimal/integer nodes currently normalize signed zero (see #4863).
-        assertThat(Double.doubleToRawLongBits((Double) values[1])).isEqualTo(0L);
+        assertThat(Double.doubleToRawLongBits((Double) values[1]))
+                .isEqualTo(Double.doubleToRawLongBits(-0.0D));
         assertThat(((Decimal) values[2]).toBigDecimal())
                 .isEqualByComparingTo("12345678901234567890.1234567890");
-        assertThat(Float.floatToRawIntBits((Float) values[3])).isEqualTo(0);
+        assertThat(Float.floatToRawIntBits((Float) values[3]))
+                .isEqualTo(Float.floatToRawIntBits(-0.0F));
     }
 
     @ParameterizedTest
