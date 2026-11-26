@@ -247,7 +247,7 @@ macro_rules! multi_methods {
                 let scanners = self.inner.scanners.read().clone();
                 for scanner in scanners.iter() {
                     if !scanner
-                        .prepare_positions(
+                        .restore_committed_offsets(
                             deadline.saturating_duration_since(tokio::time::Instant::now()),
                         )
                         .await?
@@ -280,7 +280,7 @@ macro_rules! multi_methods {
                 self.inner.register(path).await
             }
 
-            /// Resolves this group's committed positions on poll, within the poll deadline.
+            /// Registers buckets across tables. Poll restores their committed offsets before reading.
             pub fn subscribe_from_committed(&self, buckets: &[TableBucket]) -> Result<()> {
                 for bucket in buckets {
                     self.inner
@@ -290,7 +290,7 @@ macro_rules! multi_methods {
                 for bucket in buckets {
                     self.inner
                         .scanner(bucket.table_id())?
-                        .defer_committed(std::slice::from_ref(bucket))?;
+                        .subscribe_from_committed(std::slice::from_ref(bucket))?;
                 }
                 Ok(())
             }
@@ -364,7 +364,7 @@ macro_rules! multi_methods {
             pub async fn close(self) {
                 let scanners = self.inner.scanners.read().clone();
                 for scanner in scanners.iter() {
-                    scanner.cancel_position_lookup().await;
+                    scanner.cancel_committed_offset_lookup().await;
                 }
                 AutoCommit::finish(self.inner.auto_commit.as_ref(), &self.inner.group).await;
             }

@@ -581,7 +581,7 @@ impl PolledBatches {
 struct LogScannerInner {
     consumer_group: Option<Arc<ConsumerGroup>>,
     auto_commit: Option<consumer_group::AutoCommit>,
-    pending_starts: Mutex<consumer_group::PendingStarts>,
+    pending_offset_restore: Mutex<consumer_group::PendingOffsetRestore>,
     latest_resets: Mutex<latest_resets::LatestResets>,
     table_path: TablePath,
     table_id: TableId,
@@ -783,7 +783,7 @@ impl LogScannerInner {
         Ok(Self {
             consumer_group: None,
             auto_commit: None,
-            pending_starts: Default::default(),
+            pending_offset_restore: Default::default(),
             latest_resets: Default::default(),
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
@@ -834,7 +834,7 @@ impl LogScannerInner {
         let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
-        if !self.prepare_positions(timeout).await? {
+        if !self.restore_committed_offsets(timeout).await? {
             return Ok(ScanRecords::empty());
         }
         self.maybe_auto_commit();
@@ -987,7 +987,7 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
-        self.assign_buckets(HashMap::from([(table_bucket, offset)]));
+        self.assign_buckets_at_offsets(HashMap::from([(table_bucket, offset)]));
         Ok(())
     }
 
@@ -1048,7 +1048,7 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
-        self.assign_buckets(HashMap::from([(table_bucket, offset)]));
+        self.assign_buckets_at_offsets(HashMap::from([(table_bucket, offset)]));
         Ok(())
     }
 
@@ -1142,11 +1142,11 @@ impl LogScannerInner {
         } else {
             self.check_no_active_reader()?;
         }
-        self.assign_buckets(bucket_offsets);
+        self.assign_buckets_at_offsets(bucket_offsets);
         Ok(())
     }
 
-    fn assign_buckets(&self, bucket_offsets: HashMap<TableBucket, i64>) {
+    fn assign_buckets_at_offsets(&self, bucket_offsets: HashMap<TableBucket, i64>) {
         let mut epoch = self.log_scanner_status.assignment_epoch.write();
         *epoch += 1;
         self.log_fetcher
@@ -1163,9 +1163,9 @@ impl LogScannerInner {
         }
         if let Some(group) = &self.consumer_group {
             let mut delivered = group.delivered.lock();
-            let mut pending = self.pending_starts.lock();
+            let mut pending = self.pending_offset_restore.lock();
             for (bucket, &offset) in &bucket_offsets {
-                pending.forget(bucket);
+                pending.remove_bucket(bucket);
                 if offset >= 0 {
                     delivered.insert(bucket.clone(), OffsetAndMetadata::new(offset));
                 } else {
@@ -1177,7 +1177,8 @@ impl LogScannerInner {
     }
 
     fn has_subscriptions(&self) -> bool {
-        self.log_scanner_status.prepare_to_poll() || !self.pending_starts.lock().buckets.is_empty()
+        self.log_scanner_status.prepare_to_poll()
+            || !self.pending_offset_restore.lock().buckets.is_empty()
     }
 
     fn unassign_bucket(&self, bucket: &TableBucket) {
@@ -1190,7 +1191,7 @@ impl LogScannerInner {
             .unassign_scan_buckets(from_ref(bucket));
         if let Some(group) = &self.consumer_group {
             group.delivered.lock().remove(bucket);
-            self.pending_starts.lock().forget(bucket);
+            self.pending_offset_restore.lock().remove_bucket(bucket);
         }
     }
 
@@ -1251,7 +1252,7 @@ impl LogScannerInner {
         let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
-        if !self.prepare_positions(timeout).await? {
+        if !self.restore_committed_offsets(timeout).await? {
             return Ok(PolledBatches::default());
         }
         self.maybe_auto_commit();
@@ -4852,9 +4853,9 @@ mod tests {
     async fn late_filtered_response_does_not_advance_a_new_assignment() -> Result<()> {
         let (inner, _, _) = scanner_fixture(false)?;
         let bucket = TableBucket::new(1, 0);
-        inner.assign_buckets(HashMap::from([(bucket.clone(), 8)]));
+        inner.assign_buckets_at_offsets(HashMap::from([(bucket.clone(), 8)]));
         let old = test_response_context(&inner.log_fetcher, &inner.metadata);
-        inner.assign_buckets(HashMap::from([(bucket.clone(), 2)]));
+        inner.assign_buckets_at_offsets(HashMap::from([(bucket.clone(), 2)]));
         LogFetcher::handle_fetch_response(filtered_response(Some(11), Some(11)), old).await;
         assert!(inner.log_fetcher.log_fetch_buffer.is_empty());
         assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));

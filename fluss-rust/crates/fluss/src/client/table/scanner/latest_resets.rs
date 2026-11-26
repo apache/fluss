@@ -157,7 +157,7 @@ impl LogScannerInner {
         })
         .await?;
         if !offsets.is_empty() {
-            self.assign_buckets(offsets);
+            self.assign_buckets_at_offsets(offsets);
         }
         Ok(())
     }
@@ -214,7 +214,7 @@ mod tests {
         scanner.latest_resets.lock().requests.append(&mut requests);
         scanner.complete_next_reset().await?;
         assert_eq!(scanner.log_scanner_status.get_bucket_offset(&fast), Some(7));
-        scanner.assign_buckets(HashMap::from([(slow.clone(), 42)]));
+        scanner.assign_buckets_at_offsets(HashMap::from([(slow.clone(), 42)]));
         let _ = release.send(());
         assert!(scanner.latest_resets.lock().requests.is_empty());
         assert_eq!(
