@@ -112,8 +112,11 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
             return FlussPrincipal.WILD_CARD_PRINCIPAL;
         }
 
-        String[] principalTypeAndName = principalStr.split(":");
-        if (principalTypeAndName.length != 2) {
+        // Only the first colon separates the type, so a name may contain colons.
+        String[] principalTypeAndName = principalStr.split(":", 2);
+        if (principalTypeAndName.length != 2
+                || principalTypeAndName[0].isEmpty()
+                || principalTypeAndName[1].isEmpty()) {
             throw new IllegalArgumentException(
                     "principal must be in format PrincipalType:PrincipalName");
         }

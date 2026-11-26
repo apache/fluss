@@ -294,6 +294,48 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
+    void testAclProcedureWithColonsInPrincipalName() throws Exception {
+        String principal = "User:spiffe://example.org/fluss";
+        String listAcl =
+                String.format(
+                        "Call %s.sys.list_acl( resource => 'ANY', principal => '%s' )",
+                        CATALOG_NAME, principal);
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', '%s', 'READ', '*' )",
+                                CATALOG_NAME, principal))
+                .await();
+        try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
+            assertCallResult(
+                    listProceduresIterator,
+                    new String[] {
+                        "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:spiffe://example.org/fluss\";operation=\"READ\";host=\"*\"]"
+                    });
+        }
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', '%s', 'READ', '*' )",
+                                CATALOG_NAME, principal))
+                .await();
+        try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
+            assertCallResult(listProceduresIterator, new String[0]);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"User:", ":Alice"})
+    void testAclProcedureRejectsEmptyPrincipalTypeOrName(String principal) {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.add_acl('CLUSTER', 'ALLOW', '%s', 'READ', '*' )",
+                                                        CATALOG_NAME, principal))
+                                        .await())
+                .hasMessageContaining("principal must be in format PrincipalType:PrincipalName");
+    }
+
+    @Test
     void testNotAllowFilterWhenAddAcl() {
         assertThatThrownBy(
                         () ->
