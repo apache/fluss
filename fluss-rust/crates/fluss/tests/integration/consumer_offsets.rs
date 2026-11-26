@@ -17,7 +17,6 @@
 
 use fluss::client::{
     ConsumerGroupOptions, FlussConnection, OffsetAndMetadata, OffsetCommitOutcome,
-    OffsetsInitializer,
 };
 use fluss::config::Config;
 use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableBucket, TableDescriptor, TablePath};
@@ -121,13 +120,14 @@ async fn restore_skips_a_range_consumed_by_a_zero_row_poll() {
     row.set_field(0, 8i32);
     writer.append(&row).unwrap();
     writer.flush().await.unwrap();
-    let restored = table.new_scan().create_log_scanner().unwrap();
+    let restored = table
+        .new_scan()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
     restored
-        .subscribe_with_initializer(
-            std::slice::from_ref(&bucket),
-            &OffsetsInitializer::committed_with_fallback(group, OffsetsInitializer::fail()),
-        )
-        .await
+        .subscribe_from_committed(std::slice::from_ref(&bucket))
         .unwrap();
     let poll = restored.poll(Duration::from_secs(10)).await.unwrap();
     assert_eq!(
@@ -160,10 +160,7 @@ async fn explicit_and_polled_offsets_restore_without_committing_prefetch() {
         .unwrap()
         .create_log_scanner()
         .unwrap();
-    scanner
-        .subscribe_with_initializer(buckets, &OffsetsInitializer::committed(&group))
-        .await
-        .unwrap();
+    scanner.subscribe_from_committed(buckets).unwrap();
     let records = scanner.poll(Duration::from_secs(10)).await.unwrap();
     assert_eq!(
         records
@@ -191,13 +188,7 @@ async fn explicit_and_polled_offsets_restore_without_committing_prefetch() {
         .unwrap()
         .create_log_scanner()
         .unwrap();
-    restored
-        .subscribe_with_initializer(
-            buckets,
-            &OffsetsInitializer::committed_with_fallback(&group, OffsetsInitializer::fail()),
-        )
-        .await
-        .unwrap();
+    restored.subscribe_from_committed(buckets).unwrap();
     let records = restored.poll(Duration::from_secs(10)).await.unwrap();
     assert_eq!(
         records
@@ -302,33 +293,29 @@ async fn partition_commits_keep_partial_failures_and_missing_positions_distinct(
     let saved = admin.get_consumer_offsets(&group, &buckets).await.unwrap();
     assert_eq!(saved[&buckets[0]], Some(first.clone()));
     assert_eq!(saved[&buckets[1]], None);
-    scanner
-        .subscribe_with_initializer(&buckets, &OffsetsInitializer::offset(3))
-        .await
-        .unwrap();
-    assert!(
-        scanner
-            .subscribe_with_initializer(
-                &buckets,
-                &OffsetsInitializer::committed_with_fallback(&group, OffsetsInitializer::fail())
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        scanner
-            .get_subscribed_buckets()
-            .iter()
-            .all(|(_, offset)| *offset == 3)
-    );
-    scanner
-        .subscribe_with_initializer(
-            &buckets,
-            &OffsetsInitializer::committed_with_fallback(&group, OffsetsInitializer::latest()),
-        )
-        .await
-        .unwrap();
-    let starts: HashMap<_, _> = scanner.get_subscribed_buckets().into_iter().collect();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    for region in ["a", "b"] {
+        for id in 0..12 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, region);
+            writer.append(&row).unwrap();
+        }
+    }
+    writer.flush().await.unwrap();
+    scanner.subscribe_from_committed(&buckets).unwrap();
+    let mut starts = HashMap::new();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while starts.len() < 2 {
+            for batch in scanner.poll(Duration::from_secs(2)).await.unwrap() {
+                starts
+                    .entry(batch.bucket().clone())
+                    .or_insert(batch.base_offset());
+            }
+        }
+    })
+    .await
+    .expect("expected records from both partitions");
     assert_eq!(starts[&buckets[0]], 10);
     assert_eq!(starts[&buckets[1]], 0);
     let second = OffsetAndMetadata {
@@ -372,20 +359,7 @@ async fn arrow_commits_track_delivered_batches_and_explicit_seek_positions() {
         .unwrap()
         .create_record_batch_log_scanner()
         .unwrap();
-    for start in [
-        OffsetsInitializer::latest(),
-        OffsetsInitializer::committed_with_fallback(&group, OffsetsInitializer::latest()),
-    ] {
-        scanner
-            .subscribe_with_initializer(buckets, &start)
-            .await
-            .unwrap();
-        assert_eq!(scanner.get_subscribed_buckets(), vec![(bucket.clone(), 8)]);
-    }
-    scanner
-        .subscribe_with_initializer(buckets, &OffsetsInitializer::committed(&group))
-        .await
-        .unwrap();
+    scanner.subscribe_from_committed(buckets).unwrap();
     assert!(matches!(
         fluss::client::RecordBatchLogReader::new_until_offsets(
             scanner.new_shared_handle(),
@@ -465,9 +439,7 @@ async fn multi_table_auto_commit_and_admin_management_preserve_positions() {
         scanner.register_table(&second).await.unwrap().table_id,
         b.table_id()
     );
-    scanner
-        .subscribe_from_committed(&buckets, &OffsetsInitializer::earliest())
-        .unwrap();
+    scanner.subscribe_from_committed(&buckets).unwrap();
     let first_poll = scanner.poll(Duration::from_secs(10)).await.unwrap();
     assert_eq!(first_poll.count(), 2);
     let first_bucket = first_poll
@@ -548,13 +520,7 @@ async fn multi_table_auto_commit_and_admin_management_preserve_positions() {
         .unwrap()
         .create_record_batch_log_scanner()
         .unwrap();
-    restored
-        .subscribe_with_initializer(
-            &buckets,
-            &OffsetsInitializer::committed_with_fallback(&group, OffsetsInitializer::fail()),
-        )
-        .await
-        .unwrap();
+    restored.subscribe_from_committed(&buckets).unwrap();
     let mut starts = HashMap::new();
     for _ in 0..2 {
         for batch in restored.poll(Duration::from_secs(10)).await.unwrap() {
@@ -618,10 +584,7 @@ async fn multi_table_assignment_failure_and_partial_commits_do_not_hide_progress
         .unwrap()
         .create_log_scanner()
         .unwrap();
-    scanner
-        .subscribe_with_initializer(std::slice::from_ref(&a), &OffsetsInitializer::offset(4))
-        .await
-        .unwrap();
+    scanner.subscribe(&a, 4).await.unwrap();
     success(
         admin
             .alter_consumer_offsets(
@@ -633,11 +596,7 @@ async fn multi_table_assignment_failure_and_partial_commits_do_not_hide_progress
     );
     assert!(
         scanner
-            .subscribe_with_initializer(
-                &[a.clone(), b.clone()],
-                &OffsetsInitializer::committed_with_fallback(&group, OffsetsInitializer::fail())
-            )
-            .await
+            .subscribe_from_committed(&[a.clone(), TableBucket::new(b.table_id(), -1)])
             .is_err()
     );
     let records = scanner.poll(Duration::from_secs(10)).await.unwrap();

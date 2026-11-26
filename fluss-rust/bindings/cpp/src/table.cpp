@@ -2404,13 +2404,13 @@ std::future<OffsetCommitResult> start_commit(ffi::LogScanner* scanner, bool curr
 }
 }  // namespace
 
-Result LogScanner::Subscribe(const std::vector<TableBucket>& buckets,
-                             const OffsetsInitializer& initializer) {
-    return SubscribeOffsets(buckets, initializer, false);
+Result LogScanner::Subscribe(const TableBucket& bucket, int64_t start_offset) {
+    if (!Available()) return utils::make_client_error("LogScanner not available");
+    return utils::from_ffi_result(scanner_->subscribe_table_bucket(offset_entry(bucket), start_offset));
 }
-Result LogScanner::SubscribeFromCommitted(const std::vector<TableBucket>& buckets,
-                                          const OffsetsInitializer& fallback) {
-    return SubscribeOffsets(buckets, fallback, true);
+Result LogScanner::SubscribeFromCommitted(const std::vector<TableBucket>& buckets) {
+    if (!Available()) return utils::make_client_error("LogScanner not available");
+    return utils::from_ffi_result(scanner_->subscribe_from_committed(offset_buckets(buckets)));
 }
 Result LogScanner::RegisterTable(const TablePath& path, int64_t& table_id) {
     if (!Available()) return utils::make_client_error("LogScanner not available");
@@ -2422,17 +2422,6 @@ OffsetCommitResult LogScanner::Close() {
     return commit_result(ffi::close_log_scanner(
         rust::Box<ffi::LogScanner>::from_raw(std::exchange(scanner_, nullptr))));
 }
-Result LogScanner::SubscribeOffsets(const std::vector<TableBucket>& buckets,
-                                    const OffsetsInitializer& initializer, bool deferred) {
-    if (!Available()) return utils::make_client_error("LogScanner not available");
-    rust::Vec<ffi::FfiOffsetsInitializer> steps;
-    for (const auto& step : initializer.steps_) {
-        steps.push_back({step.kind, step.value, rust::String(step.group_id)});
-    }
-    return utils::from_ffi_result(
-        scanner_->subscribe_with_initializer(offset_buckets(buckets), std::move(steps), deferred));
-}
-
 Result Admin::GetConsumerOffsets(const std::string& group_id,
                                  const std::vector<TableBucket>& buckets,
                                  std::vector<CommittedOffset>& out) {
@@ -2525,13 +2514,11 @@ OffsetCommitResult LogScanner::CommitSync(const std::vector<ConsumerOffset>& off
     return CommitAsync(offsets).get();
 }
 
-Result RecordBatchLogScanner::Subscribe(const std::vector<TableBucket>& buckets,
-                                        const OffsetsInitializer& initializer) {
-    return scanner_.Subscribe(buckets, initializer);
+Result RecordBatchLogScanner::Subscribe(const TableBucket& bucket, int64_t start_offset) {
+    return scanner_.Subscribe(bucket, start_offset);
 }
-Result RecordBatchLogScanner::SubscribeFromCommitted(const std::vector<TableBucket>& buckets,
-                                                     const OffsetsInitializer& fallback) {
-    return scanner_.SubscribeFromCommitted(buckets, fallback);
+Result RecordBatchLogScanner::SubscribeFromCommitted(const std::vector<TableBucket>& buckets) {
+    return scanner_.SubscribeFromCommitted(buckets);
 }
 Result RecordBatchLogScanner::RegisterTable(const TablePath& path, int64_t& id) {
     return scanner_.RegisterTable(path, id);

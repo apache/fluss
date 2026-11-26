@@ -20,61 +20,8 @@ use crate::client::consumer_offsets::{ConsumerGroup, invalid};
 use crate::client::{OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle, OffsetCommitResult};
 use crate::error::Result;
 use crate::metadata::TableBucket;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-/// Starting-position strategy for manually assigned log buckets.
-/// Fallbacks apply only to missing commits, never to authorization or RPC errors.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OffsetsInitializer(Initializer);
-
-#[derive(Debug, Clone, PartialEq)]
-enum Initializer {
-    Earliest,
-    LatestOnPoll,
-    Offset(i64),
-    Lookup(crate::rpc::message::OffsetSpec),
-    Fail,
-    Committed(String, Box<OffsetsInitializer>),
-}
-
-impl OffsetsInitializer {
-    /// Starts at the earliest available record.
-    pub fn earliest() -> Self {
-        Self(Initializer::Earliest)
-    }
-    /// Starts at the current end of each bucket.
-    pub fn latest() -> Self {
-        Self(Initializer::Lookup(crate::rpc::message::OffsetSpec::Latest))
-    }
-    /// Resolves each bucket's end independently during poll.
-    pub fn latest_on_poll() -> Self {
-        Self(Initializer::LatestOnPoll)
-    }
-    /// Starts at the first offset at or after a Unix timestamp in milliseconds.
-    pub fn timestamp(timestamp_ms: i64) -> Self {
-        Self(Initializer::Lookup(
-            crate::rpc::message::OffsetSpec::Timestamp(timestamp_ms),
-        ))
-    }
-    /// Starts every selected bucket at this explicit nonnegative offset.
-    pub fn offset(offset: i64) -> Self {
-        Self(Initializer::Offset(offset))
-    }
-    /// Fails initialization if a preceding strategy could not resolve every bucket.
-    pub fn fail() -> Self {
-        Self(Initializer::Fail)
-    }
-    /// Restores saved positions, starting missing buckets at earliest.
-    pub fn committed(group_id: impl Into<String>) -> Self {
-        Self::committed_with_fallback(group_id, Self::earliest())
-    }
-    /// Restores saved positions and resolves only missing buckets with `fallback`.
-    /// The source group is independent of the scanner's configured commit group.
-    pub fn committed_with_fallback(group_id: impl Into<String>, fallback: Self) -> Self {
-        Self(Initializer::Committed(group_id.into(), Box::new(fallback)))
-    }
-}
 
 /// Failure while committing an automatic offset snapshot.
 #[derive(Debug, thiserror::Error)]
@@ -150,13 +97,13 @@ impl AutoCommit {
 /// its snapshot before it can change the scanner position.
 #[derive(Default)]
 pub(super) struct PendingStarts {
-    pub(super) buckets: HashMap<TableBucket, OffsetsInitializer>,
+    pub(super) buckets: HashSet<TableBucket>,
     lookup: Option<tokio::task::JoinHandle<Result<HashMap<TableBucket, i64>>>>,
 }
 
 impl PendingStarts {
     pub(super) fn forget(&mut self, bucket: &TableBucket) {
-        if self.buckets.remove(bucket).is_some()
+        if self.buckets.remove(bucket)
             && let Some(task) = self.lookup.take()
         {
             task.abort();
@@ -171,20 +118,13 @@ impl LogScannerInner {
         }
     }
 
-    pub(super) fn defer_committed(
-        &self,
-        buckets: &[TableBucket],
-        fallback: &OffsetsInitializer,
-    ) -> Result<()> {
+    pub(super) fn defer_committed(&self, buckets: &[TableBucket]) -> Result<()> {
         self.check_no_active_reader()?;
         self.validate_group_buckets(buckets)?;
         self.group()?;
         for bucket in buckets {
             self.unassign_bucket(bucket);
-            self.pending_starts
-                .lock()
-                .buckets
-                .insert(bucket.clone(), fallback.clone());
+            self.pending_starts.lock().buckets.insert(bucket.clone());
         }
         // Previously pending buckets may share a lookup that did not include the additions.
         if let Some(task) = self.pending_starts.lock().lookup.take() {
@@ -213,34 +153,22 @@ impl LogScannerInner {
             use std::task::{Poll, ready};
             let mut pending = self.pending_starts.lock();
             if pending.lookup.is_none() {
-                let buckets = pending.buckets.clone();
-                let scanner = self.clone();
+                let ids: Vec<_> = pending.buckets.iter().cloned().collect();
+                let group = self.consumer_group.as_ref().unwrap().clone();
+                let scanner = Arc::downgrade(self);
                 pending.lookup = Some(tokio::spawn(async move {
-                    let group = scanner.group()?;
-                    let ids: Vec<_> = buckets.keys().cloned().collect();
-                    let saved = group.fetch_positions(&ids).await?;
-                    let mut offsets = HashMap::new();
-                    // Resolve fallbacks together for buckets registered by the same subscription.
-                    let mut missing: Vec<(OffsetsInitializer, Vec<TableBucket>)> = Vec::new();
-                    for (bucket, fallback) in buckets {
-                        if let Some(value) = &saved[&bucket] {
-                            offsets.insert(bucket, value.offset);
-                        } else if let Some((_, ids)) =
-                            missing.iter_mut().find(|(f, _)| *f == fallback)
-                        {
-                            ids.push(bucket);
-                        } else {
-                            missing.push((fallback, vec![bucket]));
-                        }
-                    }
-                    for (fallback, ids) in missing {
-                        if fallback == OffsetsInitializer::latest() {
-                            offsets
-                                .extend(ids.into_iter().map(|b| (b, crate::client::LATEST_OFFSET)));
-                        } else {
-                            offsets.extend(scanner.resolve_initializer(&ids, &fallback).await?);
-                        }
-                    }
+                    let offsets = group
+                        .fetch_positions(&ids)
+                        .await?
+                        .into_iter()
+                        .map(|(bucket, saved)| {
+                            (
+                                bucket,
+                                saved.map_or(crate::client::EARLIEST_OFFSET, |v| v.offset),
+                            )
+                        })
+                        .collect();
+                    let scanner = scanner.upgrade().ok_or_else(|| invalid("Scanner closed"))?;
                     scanner.prepare_bucket_metadata(&offsets).await?;
                     Ok(offsets)
                 }));
@@ -285,141 +213,15 @@ impl LogScannerInner {
         self.check_no_active_reader()?;
         Ok(self.group()?.delivered.lock().clone())
     }
-
-    async fn subscribe_with_initializer(
-        &self,
-        buckets: &[TableBucket],
-        initializer: &OffsetsInitializer,
-    ) -> Result<()> {
-        let offsets = self.resolve_initializer(buckets, initializer).await?;
-        self.do_subscribe_buckets(offsets, false).await
-    }
-
-    pub(super) async fn resolve_initializer(
-        &self,
-        buckets: &[TableBucket],
-        initializer: &OffsetsInitializer,
-    ) -> Result<HashMap<TableBucket, i64>> {
-        self.check_no_active_reader()?;
-        self.validate_group_buckets(buckets)?;
-        let mut pending = buckets.to_vec();
-        let mut offsets = HashMap::new();
-        let admin =
-            crate::client::FlussAdmin::new(self.log_fetcher.conns.clone(), self.metadata.clone());
-        let mut strategy = initializer;
-        while !pending.is_empty() {
-            match &strategy.0 {
-                Initializer::Committed(group_id, fallback) => {
-                    let saved = match self
-                        .consumer_group
-                        .as_ref()
-                        .and_then(|g| g.client_for(group_id))
-                    {
-                        Some(client) => client.fetch(&pending).await?,
-                        None => admin.get_consumer_offsets(group_id, &pending).await?,
-                    };
-                    pending.retain(|bucket| {
-                        if let Some(value) = &saved[bucket] {
-                            offsets.insert(bucket.clone(), value.offset);
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                    strategy = fallback;
-                }
-                Initializer::Fail => {
-                    return Err(invalid("No committed offset and no fallback provided"));
-                }
-                Initializer::LatestOnPoll => {
-                    offsets.extend(pending.drain(..).map(|b| (b, crate::client::LATEST_OFFSET)));
-                }
-                Initializer::Earliest => {
-                    offsets.extend(
-                        pending
-                            .drain(..)
-                            .map(|bucket| (bucket, crate::client::EARLIEST_OFFSET)),
-                    );
-                }
-                Initializer::Offset(offset) => {
-                    if *offset < 0 {
-                        return Err(invalid("Starting offset must be nonnegative"));
-                    }
-                    offsets.extend(pending.drain(..).map(|bucket| (bucket, *offset)));
-                }
-                Initializer::Lookup(spec) => {
-                    let mut partitions: HashMap<Option<i64>, Vec<i32>> = HashMap::new();
-                    for bucket in &pending {
-                        partitions
-                            .entry(bucket.partition_id())
-                            .or_default()
-                            .push(bucket.bucket_id());
-                    }
-                    for (partition, ids) in partitions {
-                        let values = if let Some(id) = partition {
-                            self.metadata
-                                .check_and_update_partition_metadata_by_ids(&self.table_path, &[id])
-                                .await?;
-                            let name = self
-                                .metadata
-                                .get_cluster()
-                                .get_partition_name(id)
-                                .cloned()
-                                .ok_or_else(|| {
-                                    invalid("Partition not found for offset initialization")
-                                })?;
-                            admin
-                                .list_partition_offsets(&self.table_path, &name, &ids, spec.clone())
-                                .await?
-                        } else {
-                            admin
-                                .list_offsets(&self.table_path, &ids, spec.clone())
-                                .await?
-                        };
-                        for id in ids {
-                            let offset = *values
-                                .get(&id)
-                                .filter(|offset| **offset >= 0)
-                                .ok_or_else(|| invalid("No offset returned for initializer"))?;
-                            offsets.insert(
-                                TableBucket::new_with_partition(self.table_id, partition, id),
-                                offset,
-                            );
-                        }
-                    }
-                    pending.clear();
-                }
-            }
-        }
-        // Resolve every bucket before changing subscriptions, including fallback failures.
-        Ok(offsets)
-    }
 }
 
 macro_rules! group_methods {
     ($scanner:ty) => {
         impl $scanner {
-            /// Resolves starting positions, then subscribes the selected buckets together.
-            /// Other subscriptions are retained. No subscription changes on resolution failure.
-            /// Assignment is manual; drive subscriptions and polls from one consumer task.
-            pub async fn subscribe_with_initializer(
-                &self,
-                buckets: &[TableBucket],
-                initializer: &OffsetsInitializer,
-            ) -> Result<()> {
-                self.inner
-                    .subscribe_with_initializer(buckets, initializer)
-                    .await
-            }
-
-            /// Registers buckets for restore from this scanner's group on the next poll.
-            /// The lookup shares the poll timeout. Only missing offsets use the fallback.
-            pub fn subscribe_from_committed(
-                &self,
-                buckets: &[TableBucket],
-                fallback: &OffsetsInitializer,
-            ) -> Result<()> {
-                self.inner.defer_committed(buckets, fallback)
+            /// Restores this scanner's group on the next poll. Buckets without a saved
+            /// offset start at the earliest available record. Lookup errors propagate from poll.
+            pub fn subscribe_from_committed(&self, buckets: &[TableBucket]) -> Result<()> {
+                self.inner.defer_committed(buckets)
             }
 
             /// Commits current positions, including seeks and ranges skipped by the filter.

@@ -107,7 +107,6 @@ impl OffsetSpec {
 fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register all classes
     m.add_class::<OffsetAndMetadata>()?;
-    m.add_class::<OffsetsInitializer>()?;
     m.add_class::<OffsetOperationOutcome>()?;
     m.add_class::<OffsetCommitResult>()?;
     m.add_class::<MultiTableLogScanner>()?;

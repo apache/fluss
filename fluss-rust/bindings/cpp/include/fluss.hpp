@@ -1293,39 +1293,6 @@ struct OffsetAndMetadata {
     std::optional<std::string> metadata;
 };
 
-/// Starting positions for manually assigned log buckets. Fallback is used only for missing commits.
-class OffsetsInitializer {
-   public:
-    static OffsetsInitializer Earliest() { return OffsetsInitializer({5, 0, {}}); }
-    static OffsetsInitializer Latest() { return OffsetsInitializer({1, 0, {}}); }
-    /// Resolve each bucket end independently on poll, including multi-table scans.
-    static OffsetsInitializer LatestOnPoll() { return OffsetsInitializer({6, 0, {}}); }
-    /// Unix timestamp in milliseconds.
-    static OffsetsInitializer Timestamp(int64_t timestamp_ms) {
-        return OffsetsInitializer({2, timestamp_ms, {}});
-    }
-    /// Explicit nonnegative offset for every selected bucket.
-    static OffsetsInitializer Offset(int64_t offset) { return OffsetsInitializer({0, offset, {}}); }
-    /// Fail if a preceding strategy leaves any bucket unresolved.
-    static OffsetsInitializer Fail() { return OffsetsInitializer({3, 0, {}}); }
-    /// Restore saved offsets; default fallback is earliest. Group may differ from the commit group.
-    static OffsetsInitializer Committed(std::string group_id,
-                                        OffsetsInitializer fallback = Earliest()) {
-        fallback.steps_.insert(fallback.steps_.begin(), {4, 0, std::move(group_id)});
-        return fallback;
-    }
-
-   private:
-    friend class LogScanner;
-    struct Step {
-        int32_t kind;
-        int64_t value;
-        std::string group_id;
-    };
-    explicit OffsetsInitializer(Step step) : steps_{std::move(step)} {}
-    std::vector<Step> steps_;
-};
-
 struct ConsumerGroupOptions {
     std::string group_id;
     uint64_t timeout_ms{30000};
@@ -2448,16 +2415,12 @@ class LogScanner {
 
     bool Available() const;
 
-    /// Resolve positions before updating selected buckets; retain other subscriptions.
-    /// Resolution failure leaves subscriptions unchanged. Assignment remains manual.
-    Result Subscribe(const std::vector<TableBucket>& buckets,
-                     const OffsetsInitializer& initializer);
+    /// Seeks one table-qualified bucket on a multi-table scanner.
+    Result Subscribe(const TableBucket& bucket, int64_t start_offset);
     /// Commits current next positions. Process all returned records first.
     OffsetCommitResult CommitSync();
-    /// Resolves this group's positions on poll. Only missing commits use the fallback.
-    Result SubscribeFromCommitted(
-        const std::vector<TableBucket>& buckets,
-        const OffsetsInitializer& fallback = OffsetsInitializer::Earliest());
+    /// Resolves this group's positions on poll. Buckets without a commit start at earliest.
+    Result SubscribeFromCommitted(const std::vector<TableBucket>& buckets);
     /// Registers a table on a multi-table scanner and returns its current ID.
     Result RegisterTable(const TablePath& path, int64_t& table_id);
     /// Submits an automatic commit if due and waits for pending commits up to the group timeout.
@@ -2488,8 +2451,6 @@ class LogScanner {
     friend class ConsumerGroupScan;
     friend class Connection;
     friend class RecordBatchLogScanner;
-    Result SubscribeOffsets(const std::vector<TableBucket>& buckets,
-                            const OffsetsInitializer& initializer, bool deferred);
     LogScanner(ffi::LogScanner* scanner) noexcept;
 
     void Destroy() noexcept;
@@ -2542,13 +2503,10 @@ class RecordBatchLogScanner {
     /// Process all batches returned by Poll before calling no-argument CommitSync/Async.
     /// Use explicit offsets for partially processed batches. Drive the scanner from one
     /// consumer thread; the scanner submits commits in order and guards rewinds after an unknown outcome.
-    Result Subscribe(const std::vector<TableBucket>& buckets,
-                     const OffsetsInitializer& initializer);
+    Result Subscribe(const TableBucket& bucket, int64_t start_offset);
     OffsetCommitResult CommitSync();
-    /// Resolves this group's positions on poll. Only missing commits use the fallback.
-    Result SubscribeFromCommitted(
-        const std::vector<TableBucket>& buckets,
-        const OffsetsInitializer& fallback = OffsetsInitializer::Earliest());
+    /// Resolves this group's positions on poll. Buckets without a commit start at earliest.
+    Result SubscribeFromCommitted(const std::vector<TableBucket>& buckets);
     /// Registers a table on a multi-table scanner and returns its current ID.
     Result RegisterTable(const TablePath& path, int64_t& table_id);
     /// Submits an automatic commit if due and waits for pending commits up to the group timeout.

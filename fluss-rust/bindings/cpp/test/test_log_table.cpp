@@ -2753,7 +2753,7 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     EXPECT_NE(std::find(groups.begin(), groups.end(), group), groups.end());
     fluss::RecordBatchLogScanner restored;
     ASSERT_OK(conn.CreateMultiTableRecordBatchLogScanner(paths, {group}, restored));
-    ASSERT_OK(restored.Subscribe(buckets, fluss::OffsetsInitializer::Committed(group)));
+    ASSERT_OK(restored.SubscribeFromCommitted(buckets));
     fluss::ArrowRecordBatches batches;
     ASSERT_OK(restored.Poll(10000, batches));
     ASSERT_FALSE(batches.Empty());
@@ -2764,7 +2764,7 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     fluss::LogScanner single;
     ASSERT_OK(
         single_table.NewScan().WithConsumerGroup({group, 30000, 10}).CreateLogScanner(single));
-    ASSERT_OK(single.Subscribe({buckets[0]}, fluss::OffsetsInitializer::Offset(1)));
+    ASSERT_OK(single.Subscribe(buckets[0].bucket_id, 1));
     fluss::ScanRecords remaining;
     ASSERT_OK(single.Poll(10000, remaining));
     EXPECT_EQ(remaining.Count(), 2);
@@ -2773,6 +2773,8 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     // The source remains readable even when the server rejects the group's commits.
     ASSERT_OK(
         single_table.NewScan().WithConsumerGroup({"bad.group", 30000, 1}).CreateLogScanner(single));
+    ASSERT_OK(single.SubscribeFromCommitted({buckets[0]}));
+    EXPECT_EQ(single.Poll(10000, remaining).error_code, 75);
     ASSERT_OK(single.Subscribe(0, 1));
     ASSERT_OK(single.Poll(10000, remaining));
     EXPECT_EQ(remaining.Count(), 2);

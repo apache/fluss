@@ -21,10 +21,10 @@ use crate::table::TableResource;
 use crate::{RUNTIME, async_nif, atoms};
 use fluss::client::{
     ConsumerGroupOptions, MultiTableLogScanner, OffsetAndMetadata, OffsetCommitError,
-    OffsetCommitOutcome, OffsetsInitializer,
+    OffsetCommitOutcome,
 };
 use fluss::metadata::{Column, TableBucket, TablePath};
-use rustler::{Encoder, Env, NifMap, NifTaggedEnum, NifUnitEnum, ResourceArc, Term};
+use rustler::{Encoder, Env, NifMap, NifUnitEnum, ResourceArc, Term};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -136,33 +136,6 @@ fn values(
     }
     Ok(values)
 }
-#[derive(NifTaggedEnum)]
-pub enum Initializer {
-    Earliest,
-    Latest,
-    LatestOnPoll,
-    Timestamp(i64),
-    Offset(i64),
-    Fail,
-    Committed(String),
-}
-fn initializer(steps: Vec<Initializer>) -> OffsetsInitializer {
-    let mut value = OffsetsInitializer::fail();
-    for step in steps.into_iter().rev() {
-        value = match step {
-            Initializer::Earliest => OffsetsInitializer::earliest(),
-            Initializer::Latest => OffsetsInitializer::latest(),
-            Initializer::LatestOnPoll => OffsetsInitializer::latest_on_poll(),
-            Initializer::Timestamp(ms) => OffsetsInitializer::timestamp(ms),
-            Initializer::Offset(offset) => OffsetsInitializer::offset(offset),
-            Initializer::Fail => OffsetsInitializer::fail(),
-            Initializer::Committed(group) => {
-                OffsetsInitializer::committed_with_fallback(group, value)
-            }
-        };
-    }
-    value
-}
 #[derive(Default)]
 struct Delivery {
     owner: Option<rustler::LocalPid>,
@@ -264,20 +237,26 @@ fn consumer_scanner_multi_new(
     })
 }
 #[rustler::nif]
-fn consumer_scanner_subscribe(
+fn consumer_scanner_subscribe_from_committed(
     env: Env<'_>,
     scanner: ResourceArc<ConsumerScannerResource>,
     buckets: Vec<Bucket>,
-    steps: Vec<Initializer>,
 ) -> Term<'_> {
     async_nif::spawn_task(env, async move {
         scanner
             .inner
-            .subscribe_with_initializer(
-                &buckets.into_iter().map(bucket).collect::<Vec<_>>(),
-                &initializer(steps),
-            )
-            .await
+            .subscribe_from_committed(&buckets.into_iter().map(bucket).collect::<Vec<_>>())
+    })
+}
+#[rustler::nif]
+fn consumer_scanner_subscribe(
+    env: Env<'_>,
+    scanner: ResourceArc<ConsumerScannerResource>,
+    value: Bucket,
+    offset: i64,
+) -> Term<'_> {
+    async_nif::spawn_task(env, async move {
+        scanner.inner.subscribe(&bucket(value), offset).await
     })
 }
 #[rustler::nif]

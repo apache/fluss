@@ -434,8 +434,7 @@ Configure a group before creating a scanner. Committed offsets always identify t
 
 ```python
 scanner = await table.new_scan().with_consumer_group("orders").create_log_scanner()
-await scanner.subscribe_with_initializer(
-    [bucket], fluss.OffsetsInitializer.committed("orders"))
+scanner.subscribe_from_committed([bucket])
 records = await scanner.poll(1000)
 # Finish processing every returned record before committing.
 result = await scanner.commit_async()
@@ -445,11 +444,11 @@ assert all(value.status == "success" for value in result.buckets.values())
 
 `commit_sync()` blocks with the GIL released; `commit_async()` enqueues immediately and returns an awaitable. Both accept an optional list of `(TableBucket, OffsetAndMetadata(next_offset, metadata))` for partial processing or rewinds. `None` metadata and an empty string are distinct. Commits on one scanner retain invocation order; cancelling the awaitable stops waiting but leaves the queued commit running. After a possibly late write, the scanner accepts a higher offset for that bucket or the same offset and metadata. An unsafe rewind returns `needs_recovery`, even after a seek. A late write may cause replay. The server does not fence competing writers.
 
-`OffsetsInitializer.committed(group, fallback=None)` uses earliest for missing commits by default. Alternatives are `latest()`, `timestamp(epoch_ms)`, `offset(next_offset)`, or `fail()`. Authorization and transport failures are propagated, never treated as missing commits.
+Buckets with no saved position start at earliest; poll propagates authorization and transport errors.
 
 `table.new_scan().with_consumer_group(group).with_auto_commit(interval_ms)` configures poll-triggered asynchronous commits (default: 5000 ms for a group; zero disables them). Process the previous poll completely before polling again. No background timer commits during processing, and dropping a scanner does not commit the final batch. Use a scanner without a consumer group for bounded reads. Await each poll and finish processing its result before the next poll or commit. If conversion fails or the await is cancelled, recreate the scanner from committed offsets.
 
-For multiple tables use `await connection.create_multi_table_scanner(paths, group, auto_commit_interval_ms=None, arrow=False)`. Assign table-qualified buckets with `subscribe_with_initializer`, then use `poll(timeout_ms)` or, with `arrow=True`, `poll_record_batch(timeout_ms)`. Each table retains its own schema. Polls, assignment changes and commits must be driven by one consumer task. Subscription is manual; there is no automatic membership or rebalance.
+For multiple tables use `await connection.create_multi_table_scanner(paths, group, auto_commit_interval_ms=None, arrow=False)`. Assign table-qualified buckets with `subscribe_from_committed`, then use `poll(timeout_ms)` or, with `arrow=True`, `poll_record_batch(timeout_ms)`. Each table retains its own schema. Polls, assignment changes and commits must be driven by one consumer task. Subscription is manual; there is no automatic membership or rebalance.
 
 | Admin method | Result and permissions |
 | --- | --- |

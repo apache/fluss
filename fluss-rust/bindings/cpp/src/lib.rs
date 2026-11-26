@@ -136,11 +136,6 @@ mod ffi {
         unknown: bool,
     }
 
-    struct FfiOffsetsInitializer {
-        kind: i32,
-        value: i64,
-        group_id: String,
-    }
     struct FfiConsumerGroupResult {
         group_id: String,
         result: FfiResult,
@@ -924,11 +919,14 @@ mod ffi {
         ) -> Result<Box<ValueInner>>;
 
         // LogScanner
-        fn subscribe_with_initializer(
+        fn subscribe_from_committed(
             self: &LogScanner,
             buckets: Vec<FfiConsumerOffset>,
-            initializer: Vec<FfiOffsetsInitializer>,
-            deferred: bool,
+        ) -> FfiResult;
+        fn subscribe_table_bucket(
+            self: &LogScanner,
+            bucket: FfiConsumerOffset,
+            offset: i64,
         ) -> FfiResult;
         fn list_consumer_offsets(self: &Admin, group_id: &str) -> FfiConsumerOffsetsResult;
         fn alter_consumer_offsets(

@@ -29,7 +29,10 @@ defmodule Fluss.Native do
   def consumer_scanner_multi_new(_conn, _tables, _group, _timeout_ms, _auto_commit_ms),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def consumer_scanner_subscribe(_scanner, _buckets, _steps),
+  def consumer_scanner_subscribe_from_committed(_scanner, _buckets),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def consumer_scanner_subscribe(_scanner, _bucket, _offset),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def consumer_scanner_unsubscribe(_scanner, _bucket), do: :erlang.nif_error(:nif_not_loaded)

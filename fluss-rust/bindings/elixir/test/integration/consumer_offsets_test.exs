@@ -51,7 +51,7 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
     # restore, not commit the dead consumer's native cursor.
     orphan_group = group <> "-orphan"
     {:ok, orphan} = Fluss.LogScanner.new_multi(conn, tables, group_id: orphan_group)
-    :ok = Fluss.LogScanner.subscribe_with_initializer(orphan, buckets, {:committed, orphan_group})
+    :ok = Fluss.LogScanner.subscribe_from_committed(orphan, buckets)
     assert :ok = Task.async(fn -> Fluss.LogScanner.poll(orphan, 1000) end) |> Task.await()
     assert {:ok, %{request: %{status: :rejected}}} = Fluss.LogScanner.commit_sync(orphan)
     assert {:ok, orphan_offsets} = Fluss.Admin.get_consumer_offsets(admin, orphan_group, buckets)
@@ -59,7 +59,7 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
 
     [a, b] = buckets
     {:ok, scanner} = Fluss.LogScanner.new_multi(conn, tables, group_id: group)
-    :ok = Fluss.LogScanner.subscribe_with_initializer(scanner, buckets, {:committed, group})
+    :ok = Fluss.LogScanner.subscribe_from_committed(scanner, buckets)
     records = poll(scanner) ++ poll(scanner)
     assert Enum.map(Enum.filter(records, &(&1.table_bucket == a)), & &1.row.id) == [0, 1, 2]
 
@@ -103,7 +103,7 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
     {:ok, restored} = Fluss.LogScanner.new_multi(conn, tables, group_id: group)
 
     :ok =
-      Fluss.LogScanner.subscribe_with_initializer(restored, buckets, {:committed, group, :fail})
+      Fluss.LogScanner.subscribe_from_committed(restored, buckets)
 
     remaining = poll(restored) ++ poll(restored)
 
@@ -119,7 +119,7 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
         auto_commit_interval_ms: 10
       )
 
-    :ok = Fluss.LogScanner.subscribe_with_initializer(single, [a], {:offset, 1})
+    :ok = Fluss.LogScanner.subscribe(single, a, 1)
     assert length(poll(single)) == 2
     {:ok, single_commit} = Fluss.LogScanner.commit_sync(single)
     successful(single_commit)

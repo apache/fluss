@@ -59,7 +59,7 @@ pub use remote_log::{
 };
 pub use scanner::{
     AutoCommitError, LogScanner, MultiTableLogScanner, MultiTableRecordBatchLogScanner,
-    MultiTableScan, OffsetsInitializer, RecordBatchLogScanner, TableScan,
+    MultiTableScan, RecordBatchLogScanner, TableScan,
 };
 pub use upsert::{TableUpsert, UpsertWriter};
 

@@ -92,23 +92,10 @@ defmodule Fluss.LogScanner do
   defp wrap_consumer({:ok, ref}), do: {:ok, {:consumer, ref}}
   defp wrap_consumer(error), do: error
 
-  @doc """
-  Buckets are `{table_id, partition_id_or_nil, bucket_id}` tuples. Initializers are
-  `:earliest`, `:latest`, `:latest_on_poll`, `:fail`, `{:offset, n}`, `{:timestamp, ms}`,
-  `{:committed, group}` or `{:committed, group, fallback}`. Fallbacks only resolve
-  missing commits; authorization errors never select a fallback.
-  """
-  def subscribe_with_initializer({:consumer, scanner}, buckets, initializer) do
-    Native.consumer_scanner_subscribe(scanner, buckets, initializer_steps(initializer))
-    |> Native.await_nif()
+  @doc "Resumes the configured group on poll. Buckets without a saved offset start at earliest."
+  def subscribe_from_committed({:consumer, scanner}, buckets) do
+    Native.consumer_scanner_subscribe_from_committed(scanner, buckets) |> Native.await_nif()
   end
-
-  defp initializer_steps({:committed, group}), do: [{:committed, group}, :earliest]
-
-  defp initializer_steps({:committed, group, fallback}),
-    do: [{:committed, group} | initializer_steps(fallback)]
-
-  defp initializer_steps(value), do: [value]
 
   @doc """
   Captures offsets immediately and returns a reference; receive `{ref, {:ok, result}}`.
@@ -132,7 +119,10 @@ defmodule Fluss.LogScanner do
     end
   end
 
-  @spec subscribe(reference(), integer(), integer()) :: :ok | {:error, Fluss.Error.t()}
+  @spec subscribe(t(), integer() | bucket(), integer()) :: :ok | {:error, Fluss.Error.t()}
+  def subscribe({:consumer, scanner}, bucket, offset),
+    do: Native.consumer_scanner_subscribe(scanner, bucket, offset) |> Native.await_nif()
+
   def subscribe(scanner, bucket, offset) do
     scanner
     |> Native.log_scanner_subscribe(bucket, offset)

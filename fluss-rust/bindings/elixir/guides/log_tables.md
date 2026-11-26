@@ -80,7 +80,7 @@ Partitioned log tables can't be scanned yet.
 ```elixir
 {:ok, scanner} = Fluss.LogScanner.new(table, group_id: "orders")
 bucket = {table_info.table_id, nil, 0}
-:ok = Fluss.LogScanner.subscribe_with_initializer(scanner, [bucket], {:committed, "orders"})
+:ok = Fluss.LogScanner.subscribe_from_committed(scanner, [bucket])
 :ok = Fluss.LogScanner.poll(scanner, 1_000)
 receive do
   {:fluss_records, records} ->
@@ -92,9 +92,9 @@ receive do
 end
 ```
 
-For multiple tables, call `Fluss.LogScanner.new_multi(conn, [{"db", "table_a"}, {"db", "table_b"}], group_id: "orders")`. Records include `:table_bucket` and retain their source table's schema. Consumer scanners use table-qualified `{table_id, partition_id_or_nil, bucket_id}` tuples with `subscribe_with_initializer/3` and `unsubscribe/2`. Drive polling, assignment and commits from one process; receive and process one poll result before issuing another.
+For multiple tables, call `Fluss.LogScanner.new_multi(conn, [{"db", "table_a"}, {"db", "table_b"}], group_id: "orders")`. Records include `:table_bucket` and retain their source table's schema. Consumer scanners use table-qualified `{table_id, partition_id_or_nil, bucket_id}` tuples with `subscribe_from_committed/2`, `subscribe/3` and `unsubscribe/2`. Drive polling, assignment and commits from one process; receive and process one poll result before issuing another.
 
-`{:committed, group}` defaults missing commits to `:earliest`. A third element selects `:latest`, `{:timestamp, epoch_ms}`, `{:offset, next_offset}`, or `:fail`. Authorization and transport failures never select a fallback. Assignment is manual, without membership or rebalance.
+On poll, each bucket resumes at the group’s saved offset, or at earliest if it has no commit. Lookup errors are returned to the consumer. Assignment is manual, without membership or rebalance.
 
 Explicit commits take `[{bucket, {next_offset, metadata_or_nil}}]`; nil and empty metadata remain distinct. `commit_async/2` enqueues immediately and returns a reference for `{ref, {:ok, result}}`. Not receiving the result does not cancel the ordered operation. Inspect `result.request` and every `result.buckets` outcome: statuses are `:success`, `:rejected`, `:unknown`, or `:needs_recovery`, with `:error_code` and `:message`. After a possibly late write, the scanner accepts a higher offset for that bucket or the same offset and metadata. An unsafe rewind returns `:needs_recovery`, even after a seek. A late write may cause replay.
 

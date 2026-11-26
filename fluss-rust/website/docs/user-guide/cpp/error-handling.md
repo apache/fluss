@@ -45,11 +45,13 @@ When a group has no saved offset for a bucket, `SubscribeFromCommitted` defaults
 
 1. Log the group ID, `Result::error_code` and `error_message`. On this fetch path, C++ currently returns `ErrorCode::CLIENT_ERROR` (-2); the message includes the requested offset. Other errors also use -2, so do not reset offsets based on that code alone.
 2. For the assigned buckets, use `Admin::GetConsumerOffsets` to read the saved next offsets. Compare each with `Admin::ListOffsets` using `OffsetSpec::Earliest()` and `Latest()`; for partitioned tables use `ListPartitionOffsets` with the partition name. A saved offset below the earliest confirms a retention gap. An offset equal to the end is valid: the reader is caught up.
-3. If every record is required, pause consumption and backfill the missing range before resuming. If the application can skip the expired records, reposition just the affected bucket on the existing scanner:
+3. If every record is required, pause consumption and backfill the missing range before resuming. If the application can skip the expired records, reposition just the affected bucket on the existing single-table scanner:
 
    ```cpp
    // bucket is the fluss::TableBucket whose saved offset is below the log start.
-   auto status = scanner.Subscribe({bucket}, fluss::OffsetsInitializer::Earliest());
+   auto status = bucket.partition_id
+       ? scanner.SubscribePartitionBuckets(*bucket.partition_id, bucket.bucket_id, fluss::EARLIEST_OFFSET)
+       : scanner.Subscribe(bucket.bucket_id, fluss::EARLIEST_OFFSET);
    if (!status.Ok()) {
        return status;
    }

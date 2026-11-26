@@ -38,61 +38,6 @@ impl OffsetAndMetadata {
     }
 }
 
-#[pyclass(from_py_object)]
-#[derive(Clone)]
-pub struct OffsetsInitializer {
-    pub(crate) inner: fcore::client::OffsetsInitializer,
-}
-#[pymethods]
-impl OffsetsInitializer {
-    #[staticmethod]
-    fn earliest() -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::earliest(),
-        }
-    }
-    #[staticmethod]
-    fn latest_on_poll() -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::latest_on_poll(),
-        }
-    }
-    #[staticmethod]
-    fn latest() -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::latest(),
-        }
-    }
-    #[staticmethod]
-    fn timestamp(timestamp_ms: i64) -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::timestamp(timestamp_ms),
-        }
-    }
-    #[staticmethod]
-    fn offset(offset: i64) -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::offset(offset),
-        }
-    }
-    #[staticmethod]
-    fn fail() -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::fail(),
-        }
-    }
-    #[staticmethod]
-    #[pyo3(signature=(group_id, fallback=None))]
-    fn committed(group_id: String, fallback: Option<Self>) -> Self {
-        Self {
-            inner: fcore::client::OffsetsInitializer::committed_with_fallback(
-                group_id,
-                fallback.unwrap_or_else(Self::earliest).inner,
-            ),
-        }
-    }
-}
-
 /// status is success, rejected, unknown, or needs_recovery. Check every bucket as well.
 #[pyclass(from_py_object, get_all)]
 #[derive(Clone)]
@@ -301,25 +246,27 @@ pub struct MultiTableLogScanner {
 }
 #[pymethods]
 impl MultiTableLogScanner {
-    /// Resolves every selected bucket before assignment. Other subscriptions are retained.
-    fn subscribe_with_initializer<'py>(
+    /// Resume this group on poll; a bucket with no saved position starts at earliest.
+    fn subscribe_from_committed(&self, buckets: Vec<TableBucket>) -> PyResult<()> {
+        let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
+        match self.inner.as_ref() {
+            MultiKind::Record(s) => s.subscribe_from_committed(&buckets),
+            MultiKind::Batch(s) => s.subscribe_from_committed(&buckets),
+        }
+        .map_err(|error| FlussError::from_core_error(&error))
+    }
+    fn subscribe<'py>(
         &self,
         py: Python<'py>,
-        buckets: Vec<TableBucket>,
-        initializer: OffsetsInitializer,
+        bucket: TableBucket,
+        offset: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let scanner = self.inner.clone();
-        let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
         future_into_py(py, async move {
+            let bucket = bucket.to_core();
             match scanner.as_ref() {
-                MultiKind::Record(s) => {
-                    s.subscribe_with_initializer(&buckets, &initializer.inner)
-                        .await
-                }
-                MultiKind::Batch(s) => {
-                    s.subscribe_with_initializer(&buckets, &initializer.inner)
-                        .await
-                }
+                MultiKind::Record(s) => s.subscribe(&bucket, offset).await,
+                MultiKind::Batch(s) => s.subscribe(&bucket, offset).await,
             }
             .map_err(|error| FlussError::from_core_error(&error))
         })

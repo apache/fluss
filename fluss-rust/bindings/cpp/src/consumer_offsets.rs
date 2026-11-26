@@ -124,48 +124,38 @@ impl LogScanner {
         }
     }
 
-    pub(super) fn subscribe_with_initializer(
+    pub(super) fn subscribe_from_committed(
         &self,
         buckets: Vec<ffi::FfiConsumerOffset>,
-        initializer: Vec<ffi::FfiOffsetsInitializer>,
-        deferred: bool,
     ) -> ffi::FfiResult {
-        use fcore::client::OffsetsInitializer;
         let buckets: Vec<_> = buckets.iter().map(bucket).collect();
-        let mut strategy = OffsetsInitializer::fail();
-        for step in initializer.into_iter().rev() {
-            strategy = match step.kind {
-                0 => OffsetsInitializer::offset(step.value),
-                1 => OffsetsInitializer::latest(),
-                2 => OffsetsInitializer::timestamp(step.value),
-                3 => OffsetsInitializer::fail(),
-                4 => OffsetsInitializer::committed_with_fallback(step.group_id, strategy),
-                5 => OffsetsInitializer::earliest(),
-                6 => OffsetsInitializer::latest_on_poll(),
-                _ => {
-                    return err_from_core_error(&fcore::error::Error::IllegalArgument {
-                        message: "Unknown offsets initializer".into(),
-                    });
-                }
-            };
+        let result = match &self.scanner {
+            ScannerKind::Record(s) => s.subscribe_from_committed(&buckets),
+            ScannerKind::Batch(s) => s.subscribe_from_committed(&buckets),
+            ScannerKind::MultiRecord(s) => s.subscribe_from_committed(&buckets),
+            ScannerKind::MultiBatch(s) => s.subscribe_from_committed(&buckets),
+        };
+        match result {
+            Ok(()) => ok_result(),
+            Err(error) => err_from_core_error(&error),
         }
-        let result = RUNTIME.block_on(async {
-            macro_rules! subscribe {
-                ($s:expr) => {
-                    if deferred {
-                        $s.subscribe_from_committed(&buckets, &strategy)
-                    } else {
-                        $s.subscribe_with_initializer(&buckets, &strategy).await
-                    }
-                };
+    }
+
+    pub(super) fn subscribe_table_bucket(
+        &self,
+        value: ffi::FfiConsumerOffset,
+        offset: i64,
+    ) -> ffi::FfiResult {
+        let bucket = bucket(&value);
+        let result = match &self.scanner {
+            ScannerKind::MultiRecord(s) => RUNTIME.block_on(s.subscribe(&bucket, offset)),
+            ScannerKind::MultiBatch(s) => RUNTIME.block_on(s.subscribe(&bucket, offset)),
+            _ => {
+                return client_err(
+                    "Table-qualified subscribe requires a multi-table scanner".into(),
+                );
             }
-            match &self.scanner {
-                ScannerKind::Record(s) => subscribe!(s),
-                ScannerKind::Batch(s) => subscribe!(s),
-                ScannerKind::MultiRecord(s) => subscribe!(s),
-                ScannerKind::MultiBatch(s) => subscribe!(s),
-            }
-        });
+        };
         match result {
             Ok(()) => ok_result(),
             Err(error) => err_from_core_error(&error),

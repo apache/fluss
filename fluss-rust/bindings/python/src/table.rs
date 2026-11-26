@@ -2526,21 +2526,14 @@ pub struct LogScanner {
 
 #[pymethods]
 impl LogScanner {
-    fn subscribe_with_initializer<'py>(
-        &self,
-        py: Python<'py>,
-        buckets: Vec<TableBucket>,
-        initializer: OffsetsInitializer,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let scanner = self.kind.clone();
+    /// Resume this group on poll; a bucket with no saved position starts at earliest.
+    fn subscribe_from_committed(&self, buckets: Vec<TableBucket>) -> PyResult<()> {
         let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
-        future_into_py(py, async move {
-            with_scanner!(
-                &scanner,
-                subscribe_with_initializer(&buckets, &initializer.inner)
-            )
-            .map_err(|error| FlussError::from_core_error(&error))
-        })
+        match self.kind.as_ref() {
+            ScannerKind::Record(s) => s.subscribe_from_committed(&buckets),
+            ScannerKind::Batch(s) => s.subscribe_from_committed(&buckets),
+        }
+        .map_err(|error| FlussError::from_core_error(&error))
     }
     /// Captures offsets immediately. Cancellation only stops waiting; commits stay ordered.
     #[pyo3(signature=(offsets=None))]

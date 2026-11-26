@@ -55,9 +55,7 @@ async def test_multi_table_restore_and_management(connection, admin):
         await writer.flush()
 
     scanner = await connection.create_multi_table_scanner(paths, group)
-    await scanner.subscribe_with_initializer(
-        buckets, fluss.OffsetsInitializer.committed(group)
-    )
+    scanner.subscribe_from_committed(buckets)
     received = {}
     for _ in range(2):
         records = await scanner.poll(10000)
@@ -102,10 +100,7 @@ async def test_multi_table_restore_and_management(connection, admin):
     assert saved[buckets[1]].metadata == "checkpoint"
     assert group in await admin.list_consumer_groups()
     restored = await connection.create_multi_table_scanner(paths, group, arrow=True)
-    await restored.subscribe_with_initializer(
-        buckets,
-        fluss.OffsetsInitializer.committed(group, fluss.OffsetsInitializer.fail()),
-    )
+    restored.subscribe_from_committed(buckets)
     starts = {}
     for _ in range(2):
         for batch in await restored.poll_record_batch(10000):
@@ -119,9 +114,7 @@ async def test_multi_table_restore_and_management(connection, admin):
         .with_auto_commit(10)
         .create_log_scanner()
     )
-    await single.subscribe_with_initializer(
-        [buckets[0]], fluss.OffsetsInitializer.offset(1)
-    )
+    single.subscribe(buckets[0].bucket_id, 1)
     assert (await single.poll(10000)).count() == 2
     successful(single.commit_sync())
     successful(await admin.delete_consumer_offsets(group, [buckets[0]]))
@@ -151,9 +144,7 @@ async def test_undelivered_poll_cannot_advance_committed_offset(connection, admi
 
     async def restore(**options):
         scanner = await connection.create_multi_table_scanner([path], group, **options)
-        await scanner.subscribe_with_initializer(
-            [bucket], fluss.OffsetsInitializer.committed(group)
-        )
+        scanner.subscribe_from_committed([bucket])
         return scanner
 
     scanner = await restore(auto_commit_interval_ms=1)

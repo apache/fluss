@@ -219,37 +219,6 @@ impl MultiTableInner {
         Arc::make_mut(&mut self.scanners.write()).push(scanner.clone());
         Ok(scanner)
     }
-
-    async fn subscribe(
-        &self,
-        buckets: &[TableBucket],
-        initializer: &OffsetsInitializer,
-    ) -> Result<()> {
-        if buckets.is_empty() || buckets.iter().collect::<HashSet<_>>().len() != buckets.len() {
-            return Err(invalid("Assignment needs distinct, nonempty buckets"));
-        }
-        let mut tables: HashMap<i64, Vec<TableBucket>> = HashMap::new();
-        for bucket in buckets {
-            self.scanner(bucket.table_id())?
-                .validate_group_buckets(std::iter::once(bucket))?;
-            tables
-                .entry(bucket.table_id())
-                .or_default()
-                .push(bucket.clone());
-        }
-        let mut resolved = Vec::new();
-        for (id, buckets) in tables {
-            let scanner = self.scanner(id)?;
-            let offsets = scanner.resolve_initializer(&buckets, initializer).await?;
-            scanner.prepare_bucket_metadata(&offsets).await?;
-            resolved.push((scanner, offsets));
-        }
-        // No await between assignment changes. All fallbacks and metadata have resolved.
-        for (scanner, offsets) in resolved {
-            scanner.assign_buckets(offsets);
-        }
-        Ok(())
-    }
 }
 
 /// Single-consumer record scanner across tables. Poll, assignment, and commits must be
@@ -316,11 +285,7 @@ macro_rules! multi_methods {
             }
 
             /// Resolves this group's committed positions on poll, within the poll deadline.
-            pub fn subscribe_from_committed(
-                &self,
-                buckets: &[TableBucket],
-                fallback: &OffsetsInitializer,
-            ) -> Result<()> {
+            pub fn subscribe_from_committed(&self, buckets: &[TableBucket]) -> Result<()> {
                 for bucket in buckets {
                     self.inner
                         .scanner(bucket.table_id())?
@@ -329,19 +294,23 @@ macro_rules! multi_methods {
                 for bucket in buckets {
                     self.inner
                         .scanner(bucket.table_id())?
-                        .defer_committed(std::slice::from_ref(bucket), fallback)?;
+                        .defer_committed(std::slice::from_ref(bucket))?;
                 }
                 Ok(())
             }
 
-            /// Restores starting positions across tables before changing any subscriptions.
-            /// Other assigned buckets are retained. Use this method again to seek.
-            pub async fn subscribe_with_initializer(
-                &self,
-                buckets: &[TableBucket],
-                initializer: &OffsetsInitializer,
-            ) -> Result<()> {
-                self.inner.subscribe(buckets, initializer).await
+            /// Subscribes or seeks one bucket of a registered table.
+            pub async fn subscribe(&self, bucket: &TableBucket, offset: i64) -> Result<()> {
+                let scanner = self.inner.scanner(bucket.table_id())?;
+                scanner.validate_group_buckets(std::iter::once(bucket))?;
+                match bucket.partition_id() {
+                    Some(id) => {
+                        scanner
+                            .subscribe_partition(id, bucket.bucket_id(), offset)
+                            .await
+                    }
+                    None => scanner.subscribe(bucket.bucket_id(), offset).await,
+                }
             }
 
             /// Removes one bucket from the manual assignment without committing it.
@@ -465,9 +434,8 @@ mod tests {
         ];
 
         let buckets = [TableBucket::new(1, 0)];
-        let fallback = OffsetsInitializer::earliest();
-        single.subscribe_from_committed(&buckets, &fallback)?;
-        multi.subscribe_from_committed(&buckets, &fallback)?;
+        single.subscribe_from_committed(&buckets)?;
+        multi.subscribe_from_committed(&buckets)?;
         single.poll(Duration::ZERO).await?;
         multi.poll(Duration::ZERO).await?;
         // Keep the peer connected without answering discovery.

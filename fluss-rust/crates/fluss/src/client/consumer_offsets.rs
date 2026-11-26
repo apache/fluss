@@ -200,10 +200,6 @@ impl ConsumerGroup {
         self.client.fetch(buckets).await
     }
 
-    pub(crate) fn client_for(&self, group_id: &str) -> Option<&ConsumerGroupClient> {
-        (self.client.options.group_id == group_id).then_some(&self.client)
-    }
-
     pub(crate) fn enqueue(
         self: &Arc<Self>,
         offsets: HashMap<TableBucket, OffsetAndMetadata>,
