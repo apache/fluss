@@ -35,33 +35,47 @@ import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.ExpressionVisitors;
 import org.apache.iceberg.expressions.UnboundPredicate;
 import org.apache.iceberg.io.CloseableIterable;
+import org.apache.iceberg.types.Conversions;
+import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 
 /** Iceberg split planner. */
 public class IcebergSplitPlanner implements Planner<IcebergSplit> {
 
     /**
-     * Orders splits by the data sequence number of their file. Files without a data sequence number
-     * are ordered first.
+     * Orders splits by the data sequence number of their file, which follows the commit order of
+     * the tiering rounds. Files without a data sequence number are ordered first.
+     *
+     * <p>Files of one commit share a sequence number, and Iceberg may list them in any order: a
+     * commit's files can span several manifests, which {@code planFiles()} reads in parallel. A
+     * tiering round writes each bucket with a single rolling writer, whose file names differ only
+     * in a zero-padded counter that grows as it rolls files, so the file name puts those files
+     * back in write order. The name, not the full location, is compared, since a location provider
+     * may prefix it with a hash.
      */
-    private static final Comparator<IcebergSplit> SPLIT_WRITE_ORDER =
-            Comparator.comparing(
-                    split -> split.fileScanTask().file().dataSequenceNumber(),
-                    Comparator.nullsFirst(Comparator.<Long>naturalOrder()));
+    private static final Comparator<IcebergSplit> SEQUENCE_NUMBER_ORDER =
+            Comparator.<IcebergSplit, Long>comparing(
+                            split -> split.fileScanTask().file().dataSequenceNumber(),
+                            Comparator.nullsFirst(Comparator.<Long>naturalOrder()))
+                    .thenComparing(split -> fileName(split.fileScanTask().file().location()));
 
     private final Configuration icebergConfig;
     private final TablePath tablePath;
@@ -83,12 +97,21 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
         Table table = catalog.loadTable(toIceberg(tablePath));
         Function<FileScanTask, List<String>> partitionExtract = createPartitionExtractor(table);
         Function<FileScanTask, Integer> bucketExtractor = createBucketExtractor(table);
+        // Tables tiered before FIP-27 carry the __offset column, which orders a bucket's rows
+        // exactly, also after compaction.
+        Types.NestedField offsetField = table.schema().findField(OFFSET_COLUMN_NAME);
         TableScan tableScan = table.newScan().useSnapshot(snapshotId);
+        Set<String> statsColumns = new HashSet<>();
         if (filter != null) {
-            Set<String> filterColumns = referencedColumns(filter);
-            if (!filterColumns.isEmpty()) {
-                tableScan = tableScan.includeColumnStats(filterColumns);
-            }
+            statsColumns.addAll(referencedColumns(filter));
+        }
+        if (offsetField != null) {
+            statsColumns.add(OFFSET_COLUMN_NAME);
+        }
+        if (!statsColumns.isEmpty()) {
+            tableScan = tableScan.includeColumnStats(statsColumns);
+        }
+        if (filter != null) {
             tableScan = tableScan.filter(filter);
         }
         try (CloseableIterable<FileScanTask> tasks = tableScan.planFiles()) {
@@ -102,14 +125,44 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
         }
         // Iceberg plans files in no particular order: manifests are kept in a hash set and,
         // with more than one manifest, planned concurrently on a worker pool. The Flink source
-        // reads a bucket's lake splits one after another, so put them back in write order. Each
-        // tiering round is one Iceberg commit, so the data sequence number follows write order.
-        // The sort is stable, which keeps the files of one commit in the order Iceberg appended
-        // them, since a commit's new files are listed in one manifest and read sequentially.
-        // Compaction gives the rewritten files a newer sequence number, so rows of compacted
-        // files can still be out of order within the data a single compaction rewrote.
-        splits.sort(SPLIT_WRITE_ORDER);
+        // reads a bucket's lake splits one after another, so put them back in write order.
+        sortInWriteOrder(splits, offsetField == null ? null : offsetField.fieldId());
         return splits;
+    }
+
+    /**
+     * Sorts splits so that the files of each bucket are in write order.
+     *
+     * <p>If the table has an {@code __offset} column and every file records its lower bound, the
+     * files are ordered by it. The offsets of a bucket's files do not overlap, also after
+     * compaction, which rewrites runs of files sorted by {@code __offset}, so this order is exact.
+     * Otherwise, the files are ordered by {@link #SEQUENCE_NUMBER_ORDER}.
+     */
+    @VisibleForTesting
+    static void sortInWriteOrder(List<IcebergSplit> splits, @Nullable Integer offsetFieldId) {
+        if (offsetFieldId != null
+                && splits.stream()
+                        .allMatch(split -> offsetLowerBound(split, offsetFieldId) != null)) {
+            splits.sort(
+                    Comparator.<IcebergSplit, Long>comparing(
+                                    split -> offsetLowerBound(split, offsetFieldId))
+                            .thenComparing(SEQUENCE_NUMBER_ORDER));
+        } else {
+            splits.sort(SEQUENCE_NUMBER_ORDER);
+        }
+    }
+
+    @Nullable
+    private static Long offsetLowerBound(IcebergSplit split, int offsetFieldId) {
+        Map<Integer, ByteBuffer> lowerBounds = split.fileScanTask().file().lowerBounds();
+        ByteBuffer lowerBound = lowerBounds == null ? null : lowerBounds.get(offsetFieldId);
+        return lowerBound == null
+                ? null
+                : Conversions.<Long>fromByteBuffer(Types.LongType.get(), lowerBound);
+    }
+
+    private static String fileName(String location) {
+        return location.substring(location.lastIndexOf('/') + 1);
     }
 
     @VisibleForTesting

@@ -62,7 +62,10 @@ import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
@@ -134,6 +137,41 @@ class IcebergLakeCommitterTest {
     }
 
     @Test
+    void testRewriteKeepsSequenceNumberOfStartingSnapshot() throws Exception {
+        Table table = createTableWithSmallFiles();
+        RewriteDataFileResult rewrite = planRewrite(table);
+        long startingSequenceNumber = table.snapshot(rewrite.snapshotId()).sequenceNumber();
+        DataFile tieredData = writeDataFile(table, 100L);
+
+        // The round commits its tiered data first and the rewrite after it.
+        LakeCommitResult result =
+                commit(icebergCatalog, Collections.singletonList(tieredData), rewrite);
+
+        table.refresh();
+        assertThat(table.snapshot(result.getCommittedSnapshotId()).operation())
+                .isEqualTo(DataOperations.REPLACE);
+        Map<String, Long> sequenceNumbers = new HashMap<>();
+        try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
+            tasks.forEach(
+                    task ->
+                            sequenceNumbers.put(
+                                    task.file().location(), task.file().dataSequenceNumber()));
+        }
+        Set<String> rewritten = locationsOf(rewrite.addedDataFiles());
+        assertThat(sequenceNumbers.keySet())
+                .containsExactlyInAnyOrderElementsOf(
+                        union(rewritten, Collections.singleton(tieredData.location())));
+        // Compacted rows keep the sequence number they were planned from, so they are still read
+        // before the rows tiered in the same round.
+        rewritten.forEach(
+                location ->
+                        assertThat(sequenceNumbers.get(location))
+                                .isEqualTo(startingSequenceNumber));
+        assertThat(sequenceNumbers.get(tieredData.location()))
+                .isGreaterThan(startingSequenceNumber);
+    }
+
+    @Test
     void testRewriteDeletesAddedFilesWhenConflictingWithConcurrentDelete() throws Exception {
         Table table = createTableWithSmallFiles();
         RewriteDataFileResult rewrite = planRewrite(table);
@@ -182,6 +220,13 @@ class IcebergLakeCommitterTest {
     /** Commits a tiering round that carries no new data but the given rewrites. */
     private LakeCommitResult commitRewrites(Catalog catalog, RewriteDataFileResult... rewrites)
             throws Exception {
+        return commit(catalog, Collections.emptyList(), rewrites);
+    }
+
+    /** Commits a tiering round that carries the given data files and rewrites. */
+    private LakeCommitResult commit(
+            Catalog catalog, List<DataFile> dataFiles, RewriteDataFileResult... rewrites)
+            throws Exception {
         IcebergCatalogProvider provider =
                 new IcebergCatalogProvider(configuration) {
                     @Override
@@ -190,6 +235,7 @@ class IcebergLakeCommitterTest {
                     }
                 };
         IcebergCommittable.Builder committable = IcebergCommittable.builder();
+        dataFiles.forEach(committable::addDataFile);
         for (RewriteDataFileResult rewrite : rewrites) {
             committable.addRewriteDataFileResult(rewrite);
         }
@@ -287,6 +333,12 @@ class IcebergLakeCommitterTest {
             tasks.forEach(task -> locations.add(task.file().location()));
         }
         return locations;
+    }
+
+    private static Set<String> union(Set<String> first, Set<String> second) {
+        Set<String> union = new HashSet<>(first);
+        union.addAll(second);
+        return union;
     }
 
     private static boolean exists(Table table, String location) {

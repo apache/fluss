@@ -83,7 +83,7 @@ For **log tables** (append-only), Union Read concatenates data from both sources
 For **log tables** with a bucket key, Flink Union Read returns each bucket's lake data before its Fluss log data, and the hand-off between them has no gap and no overlap. Rows from different buckets are not ordered relative to each other. Whether rows inside the lake data stay in write order depends on the lake format:
 
 - **Paimon**: the lake data of a bucket is read in write order.
-- **Iceberg**: write order is best effort. A bucket's data files are read in commit order, which is write order until the table is compacted. Compaction rewrites files without keeping row order, so rows rewritten by a single compaction run can come out of order. Data compacted in earlier runs is read before data compacted in later runs, and data written since the last compaction is read in write order.
+- **Iceberg**: tables created before Fluss 1.0, which carry the `__offset` system column, are read in write order, also after compaction. For other tables, a bucket's data files are read in commit order, which is write order until the table is compacted. Compaction rewrites files without keeping row order, so rows rewritten by a compaction run can come out of order, among themselves and relative to files of the bucket that the run did not rewrite. Compacted data is still read before data tiered after the compaction was planned.
 
 Tables without a bucket key have no per-bucket order in the lake for either format. Rescaling a job while it is still reading lake data also loses the order.
 
