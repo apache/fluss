@@ -234,13 +234,14 @@ impl LogFetchBuffer {
 
     /// Try to complete pending fetches in order, converting them to completed fetches
     pub fn try_complete(&self, table_bucket: &TableBucket) {
-        // Lock pending before completed, as add and discard_buckets do. A seek must
-        // not slip between removing a remote result here and publishing it below.
+        // Collect completed fetches while holding the pending_fetches lock,
+        // then push them to completed_fetches after releasing it to avoid
+        // holding both locks simultaneously.
         let mut completed_to_push: Vec<Box<dyn CompletedFetch>> = Vec::new();
         let mut has_completed = false;
         let mut pending_error: Option<(Error, i64)> = None;
-        let mut pending_map = self.pending_fetches.lock();
         {
+            let mut pending_map = self.pending_fetches.lock();
             if let Some(pendings) = pending_map.get_mut(table_bucket) {
                 while let Some(front) = pendings.front() {
                     if front.is_completed() {
@@ -306,18 +307,6 @@ impl LogFetchBuffer {
         // directly add to completed_fetches
         self.completed_fetches.lock().push_back(completed_fetch);
         self.not_empty_notify.notify_waiters();
-    }
-
-    pub(super) fn discard_buckets(&self, remove: impl Fn(&TableBucket) -> bool) {
-        let mut pending = self.pending_fetches.lock();
-        pending.retain(|bucket, _| !remove(bucket));
-        self.completed_fetches
-            .lock()
-            .retain(|f| !remove(f.table_bucket()));
-        let mut next = self.next_in_line_fetch.lock();
-        if next.as_ref().is_some_and(|f| remove(f.table_bucket())) {
-            *next = None;
-        }
     }
 
     /// Poll the next completed fetch

@@ -214,7 +214,7 @@ impl CommitPeer {
             .unwrap()
     }
 
-    fn enqueue(&self, offset: i64) -> Result<OffsetCommitHandle> {
+    fn enqueue(&self, offset: i64) -> Result<PendingCommit> {
         self.group.enqueue(HashMap::from([(
             TableBucket::new(1, 0),
             OffsetAndMetadata::new(offset),
@@ -315,6 +315,31 @@ async fn timeout_after_sending_guards_a_rewind() {
 }
 
 #[tokio::test]
+async fn callbacks_are_delivered_in_order_by_the_next_sync_commit() {
+    let peer = CommitPeer::start([]).await;
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let offsets = |id| HashMap::from([(TableBucket::new(1, 0), OffsetAndMetadata::new(id))]);
+    for id in [1, 2] {
+        let received = received.clone();
+        peer.group
+            .enqueue_callback(offsets(id), move |result| {
+                assert!(matches!(
+                    result.unwrap()[&TableBucket::new(1, 0)],
+                    OffsetCommitOutcome::Committed
+                ));
+                received.lock().push(id);
+            })
+            .unwrap();
+    }
+    peer.enqueue(3).unwrap().await.unwrap();
+    assert!(received.lock().is_empty());
+    peer.group.commit_sync(offsets(4)).await.unwrap();
+    assert_eq!(*received.lock(), [1, 2]);
+    peer.group.await_pending_commits().await;
+    assert_eq!(*received.lock(), [1, 2]);
+}
+
+#[tokio::test]
 async fn dropping_handle_preserves_queue_order_and_capacity() {
     let peer = CommitPeer::start([]).await;
     let connection = peer.connection().await;
@@ -392,22 +417,31 @@ async fn draining_commits_uses_one_deadline_even_when_a_reply_is_missing() {
 }
 
 #[tokio::test]
-async fn handshake_timeout_discards_stale_owner_before_next_commit() {
+async fn handshake_timeout_discards_stale_owner_for_fetch_and_commit() {
     let peer = CommitPeer::start([]).await;
     // TCP connects, but the old owner never answers ApiVersions.
     let old = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    *peer.group.client.owner.lock() = Some(ServerNode::new(
+    let stale = ServerNode::new(
         2,
         "127.0.0.1".into(),
         old.local_addr().unwrap().port().into(),
         ServerType::TabletServer,
-    ));
+    );
+    *peer.group.client.owner.lock() = Some(stale.clone());
     assert!(matches!(
         peer.commit(10).await,
         Err(OffsetCommitError::Rejected(_))
     ));
+    peer.commit(8).await.unwrap();
+    *peer.group.client.owner.lock() = Some(stale);
+    assert!(
+        peer.group
+            .fetch_committed_offsets(&[TableBucket::new(1, 0)])
+            .await
+            .is_err()
+    );
     peer.commit(9).await.unwrap();
-    assert_eq!(*peer.received.lock(), [9]);
+    assert_eq!(*peer.received.lock(), [8, 9]);
 }
 
 #[tokio::test]
