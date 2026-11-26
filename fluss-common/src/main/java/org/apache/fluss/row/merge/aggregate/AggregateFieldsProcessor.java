@@ -51,7 +51,7 @@ public final class AggregateFieldsProcessor {
      *
      * <p>This variant allows specifying a different target schema for the output, which is useful
      * when the client's newValue uses an outdated schema but we want to output using the latest
-     * server schema.
+     * target schema.
      *
      * <p>This method handles schema evolution by matching fields using column IDs across three
      * potentially different schemas: old row schema, new row schema, and target output schema.
@@ -188,7 +188,7 @@ public final class AggregateFieldsProcessor {
      *
      * <p>This variant allows specifying a different target schema for the output, which is useful
      * when the client's newValue uses an outdated schema but we want to output using the latest
-     * server schema.
+     * target schema.
      *
      * <p>For target columns, aggregate with the aggregation function. For non-target columns, keep
      * the old value unchanged. For columns that don't exist in old schema, copy from newRow. For

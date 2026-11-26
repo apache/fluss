@@ -51,8 +51,7 @@ import java.util.Set;
  * <p>This merger supports schema evolution by dynamically retrieving schemas based on schema IDs
  * when merging rows with different schema versions.
  *
- * <p>This class is thread-safe as it is guaranteed to be accessed by a single thread at a time
- * (protected by KvTablet's write lock).
+ * <p>Instances contain reusable buffers and require single-threaded access.
  */
 public class AggregateRowMerger implements RowMerger {
 
@@ -100,7 +99,7 @@ public class AggregateRowMerger implements RowMerger {
         RowEncoder encoder = targetContext.getRowEncoder();
         encoder.startNewRow();
 
-        // Aggregate using target schema context to ensure output uses server's latest schema
+        // Aggregate using target schema context to ensure output uses configured target schema
         AggregateFieldsProcessor.aggregateAllFieldsWithTargetSchema(
                 oldValue.row, newValue.row, oldContext, newContext, targetContext, encoder);
         BinaryRow mergedRow = encoder.finishRow();
@@ -231,8 +230,7 @@ public class AggregateRowMerger implements RowMerger {
      * <p>Performance optimization: Uses BitSet for O(1) target column lookup and fast path for same
      * schema scenarios.
      *
-     * <p>This class is thread-safe as it is guaranteed to be accessed by a single thread at a time
-     * (protected by KvTablet's write lock).
+     * <p>Instances contain reusable buffers and require single-threaded access.
      */
     private static class PartialAggregateRowMerger implements RowMerger {
         // Cache size and expiration configuration
@@ -301,7 +299,7 @@ public class AggregateRowMerger implements RowMerger {
             RowEncoder encoder = targetContext.getRowEncoder();
             encoder.startNewRow();
 
-            // Aggregate using target schema to ensure output uses server's latest schema
+            // Aggregate using target schema to ensure output uses configured target schema
             AggregateFieldsProcessor.aggregateTargetFieldsWithTargetSchema(
                     oldValue.row,
                     newValue.row,

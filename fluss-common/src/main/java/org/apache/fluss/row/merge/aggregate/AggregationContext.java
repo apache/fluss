@@ -42,8 +42,7 @@ import java.util.Map;
  * <p>This class supports schema evolution by using column IDs to match fields across different
  * schema versions, rather than relying on field positions.
  *
- * <p>This class is thread-safe as it is guaranteed to be accessed by a single thread at a time
- * (protected by KvTablet's write lock).
+ * <p>Instances contain reusable buffers and require single-threaded access.
  */
 public class AggregationContext {
     final Schema schema;
@@ -203,7 +202,7 @@ public class AggregationContext {
      * BinaryRow result = encoder.finishRow();
      * }</pre>
      *
-     * <p>This is safe because KvTablet ensures single-threaded access via write lock.
+     * <p>The caller must ensure single-threaded access to this context.
      *
      * @return the row encoder for this schema
      */

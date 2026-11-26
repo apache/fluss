@@ -44,7 +44,7 @@ public class DefaultRowMerger implements RowMerger {
         this.kvFormat = kvFormat;
         // for compatibility, default to ALLOW if not specified
         this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.ALLOW;
-        // TODO: share cache in server level when PartialUpdater is thread-safe
+        // TODO: share cache when PartialUpdater is thread-safe
         this.partialUpdaterCache = new PartialUpdaterCache();
     }
 
