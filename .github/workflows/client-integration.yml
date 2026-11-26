@@ -212,6 +212,10 @@ jobs:
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
+      - name: SASL proxy authorization integration test
+        run: >-
+          cargo test --features integration_tests,kv-snapshot --test test_fluss -p fluss-rs
+          -- --ignored --exact integration::sasl_auth::sasl_auth_test::test_sasl_proxy_authorization
       - name: UnionRead integration tests
         run: cargo test --locked -p fluss-lake --features integration_tests,kv-snapshot --test test_prepare --test test_union_read
         env:

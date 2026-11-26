@@ -66,13 +66,15 @@ const AUTH_JITTER: f64 = 0.2;
 pub struct SaslConfig {
     pub username: String,
     pub password: String,
+    pub authorization_id: Option<String>,
 }
 
 impl fmt::Debug for SaslConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SaslConfig")
-            .field("username", &self.username)
+            .field("username", &"[REDACTED]")
             .field("password", &"[REDACTED]")
+            .field("authorization_id", &"[REDACTED]")
             .finish()
     }
 }
@@ -318,8 +320,23 @@ impl RpcClient {
         self
     }
 
-    pub fn with_sasl(mut self, username: String, password: String) -> Self {
-        self.sasl_config = Some(SaslConfig { username, password });
+    /// Authenticate with SASL/PLAIN as the supplied user.
+    pub fn with_sasl(self, username: String, password: String) -> Self {
+        self.with_sasl_and_authorization_id(username, password, None)
+    }
+
+    /// Authenticate with SASL/PLAIN and optionally act as the given authorization ID.
+    pub fn with_sasl_and_authorization_id(
+        mut self,
+        username: String,
+        password: String,
+        authorization_id: Option<String>,
+    ) -> Self {
+        self.sasl_config = Some(SaslConfig {
+            username,
+            password,
+            authorization_id,
+        });
         self
     }
 
@@ -444,7 +461,7 @@ impl RpcClient {
             Self::check_api_versions(&connection, server_node.server_type()).await?;
 
             if let Some(ref sasl) = self.sasl_config {
-                Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+                Self::authenticate(&connection, sasl).await?;
             }
 
             Ok(connection)
@@ -483,16 +500,16 @@ impl RpcClient {
     /// connection establishment deadline. Non-retriable errors
     /// (wrong password, unknown user) propagate immediately as
     /// `Error::FlussAPIError` with the original error code.
-    async fn authenticate(
-        connection: &ServerConnection,
-        username: &str,
-        password: &str,
-    ) -> Result<(), Error> {
+    async fn authenticate(connection: &ServerConnection, sasl: &SaslConfig) -> Result<(), Error> {
         use crate::rpc::fluss_api_error::FlussError;
         use crate::rpc::message::AuthenticateRequest;
         use rand::Rng;
 
-        let initial_request = AuthenticateRequest::new_plain(username, password);
+        let initial_request = AuthenticateRequest::new_plain_with_authorization_id(
+            &sasl.username,
+            &sasl.password,
+            sasl.authorization_id.as_deref(),
+        );
         let mut retry_count: u32 = 0;
 
         loop {
@@ -977,7 +994,12 @@ impl<T: ReadType<Cursor<Vec<u8>>>> PendingResponse<T> {
             (response.data.get_ref().len() as u64).saturating_sub(response.data.position());
         request_metrics.complete(response_bytes);
 
-        if let Some(error_response) = response.header.error_response {
+        if let Some(mut error_response) = response.header.error_response {
+            if api_key == ApiKey::Authenticate {
+                // Server messages may echo credentials; discard them before errors reach logs.
+                error_response.error_message =
+                    Some("Authentication failed (details redacted)".to_string());
+            }
             return Err(Error::FlussAPIError {
                 api_error: crate::rpc::ApiError::from(error_response),
             });
@@ -1205,7 +1227,10 @@ mod tests {
     }
 
     /// Reads framed requests and echoes back error responses (resp_type=1).
-    async fn mock_error_server(mut stream: tokio::io::DuplexStream) {
+    async fn mock_error_server(
+        mut stream: tokio::io::DuplexStream,
+        error: crate::proto::ErrorResponse,
+    ) {
         use prost::Message;
 
         loop {
@@ -1222,12 +1247,8 @@ mod tests {
 
             let request_id = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
 
-            let err = crate::proto::ErrorResponse {
-                error_code: 1,
-                error_message: Some("test error".to_string()),
-            };
             let mut err_buf = Vec::new();
-            err.encode(&mut err_buf).expect("ErrorResponse encode");
+            error.encode(&mut err_buf).expect("ErrorResponse encode");
 
             let mut resp = Vec::with_capacity(5 + err_buf.len());
             resp.push(1u8); // ERROR_RESPONSE
@@ -1636,7 +1657,13 @@ mod tests {
         let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
-        tokio::spawn(mock_error_server(server));
+        tokio::spawn(mock_error_server(
+            server,
+            crate::proto::ErrorResponse {
+                error_code: 1,
+                error_message: Some("test error".to_string()),
+            },
+        ));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
         *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
@@ -1676,6 +1703,58 @@ mod tests {
             inflight_after, 0.0,
             "in-flight gauge must return to zero after API error"
         );
+    }
+
+    #[tokio::test]
+    async fn authentication_errors_redact_server_details() {
+        use crate::rpc::FlussError;
+        use crate::rpc::message::AuthenticateRequest;
+
+        for error in [
+            FlussError::AuthenticateException,
+            FlussError::RetriableAuthenticateException,
+        ] {
+            let (client, server) = tokio::io::duplex(4096);
+            let server_task = tokio::spawn(mock_error_server(
+                server,
+                crate::proto::ErrorResponse {
+                    error_code: error.code(),
+                    error_message: Some(
+                        "gateway-private user-private password-private".to_string(),
+                    ),
+                },
+            ));
+            let conn =
+                ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+            let request = AuthenticateRequest::new_plain_with_authorization_id(
+                "gateway-private",
+                "password-private",
+                Some("user-private"),
+            );
+            let result = conn.request(request).await.unwrap_err();
+            assert_eq!(result.api_error(), Some(error));
+            assert_eq!(result.is_retriable(), error.is_retriable());
+            for output in [format!("{result}"), format!("{result:?}")] {
+                for secret in ["gateway-private", "user-private", "password-private"] {
+                    assert!(!output.contains(secret));
+                }
+            }
+            drop(conn);
+            server_task.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn sasl_config_debug_redacts_credentials() {
+        let client = RpcClient::new().with_sasl_and_authorization_id(
+            "gateway-private".to_string(),
+            "password-private".to_string(),
+            Some("user-private".to_string()),
+        );
+        let debug = format!("{client:?}");
+        for secret in ["gateway-private", "user-private", "password-private"] {
+            assert!(!debug.contains(secret));
+        }
     }
 
     #[tokio::test]

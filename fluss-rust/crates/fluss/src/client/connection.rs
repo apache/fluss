@@ -79,9 +79,10 @@ impl FlussConnection {
             .with_timeout(timeout)
             .with_max_idle_time(Duration::from_millis(arg.connection_max_idle_time_ms));
         if arg.is_sasl_enabled() {
-            connections = connections.with_sasl(
+            connections = connections.with_sasl_and_authorization_id(
                 arg.security_sasl_username.clone(),
                 arg.security_sasl_password.clone(),
+                arg.security_sasl_authorization_id.clone(),
             );
         }
         let connections = Arc::new(connections);

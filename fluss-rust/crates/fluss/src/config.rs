@@ -243,6 +243,11 @@ pub struct Config {
     #[arg(long, default_value_t = String::new())]
     #[serde(skip_serializing)]
     pub security_sasl_password: String,
+
+    /// SASL/PLAIN effective user; unset or empty uses the authenticated user.
+    #[arg(long)]
+    pub security_sasl_authorization_id: Option<String>,
+
     /// Capacity of the send queue; new lookups wait when it is full.
     /// Each bucket also holds up to this many lookups while waiting for a
     /// leader. Additional lookups for that bucket fail with `BufferExhausted`.
@@ -373,8 +378,9 @@ impl std::fmt::Debug for Config {
             )
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
-            .field("security_sasl_username", &self.security_sasl_username)
+            .field("security_sasl_username", &"[REDACTED]")
             .field("security_sasl_password", &"[REDACTED]")
+            .field("security_sasl_authorization_id", &"[REDACTED]")
             .field("lookup_queue_size", &self.lookup_queue_size)
             .field("lookup_max_batch_size", &self.lookup_max_batch_size)
             .field("lookup_batch_timeout_ms", &self.lookup_batch_timeout_ms)
@@ -430,6 +436,7 @@ impl Default for Config {
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
             security_sasl_username: String::new(),
             security_sasl_password: String::new(),
+            security_sasl_authorization_id: None,
             lookup_queue_size: 25600,
             lookup_max_batch_size: 128,
             lookup_batch_timeout_ms: 100,
@@ -470,6 +477,26 @@ impl Config {
             return Err(
                 "security_sasl_password must be set when security_protocol is 'sasl'".to_string(),
             );
+        }
+        for (name, value) in [
+            (
+                "security_sasl_username",
+                self.security_sasl_username.as_str(),
+            ),
+            (
+                "security_sasl_password",
+                self.security_sasl_password.as_str(),
+            ),
+            (
+                "security_sasl_authorization_id",
+                self.security_sasl_authorization_id
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
+        ] {
+            if value.contains('\0') {
+                return Err(format!("{name} must not contain NUL bytes"));
+            }
         }
         Ok(())
     }
@@ -606,16 +633,56 @@ mod tests {
     }
 
     #[test]
-    fn test_sasl_enabled_valid() {
+    fn test_sasl_config_from_cli_and_json() {
+        for authorization_id in [None, Some(""), Some("用户")] {
+            let mut args = vec![
+                "fluss",
+                "--security-protocol=sasl",
+                "--security-sasl-username=gateway",
+                "--security-sasl-password=secret",
+            ];
+            if let Some(id) = authorization_id {
+                args.extend(["--security-sasl-authorization-id", id]);
+            }
+            let config = Config::try_parse_from(args).unwrap();
+            assert!(config.is_sasl_enabled());
+
+            let mut json = serde_json::to_value(&config).unwrap();
+            assert_eq!(json["security_sasl_username"], "gateway");
+            assert_eq!(
+                json["security_sasl_authorization_id"],
+                serde_json::json!(authorization_id)
+            );
+            assert!(json.get("security_sasl_password").is_none());
+
+            json["security_sasl_password"] = config.security_sasl_password.into();
+            if authorization_id.is_none() {
+                // Older configurations omit the authorization ID.
+                json.as_object_mut()
+                    .unwrap()
+                    .remove("security_sasl_authorization_id");
+            }
+            let restored: Config = serde_json::from_value(json).unwrap();
+            assert_eq!(
+                restored.security_sasl_authorization_id.as_deref(),
+                authorization_id
+            );
+            assert!(restored.validate_security().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_sasl_debug_redacts_credentials() {
         let config = Config {
-            security_protocol: "sasl".to_string(),
-            security_sasl_mechanism: "PLAIN".to_string(),
-            security_sasl_username: "admin".to_string(),
-            security_sasl_password: "secret".to_string(),
+            security_sasl_username: "gateway-private".to_string(),
+            security_sasl_password: "password-private".to_string(),
+            security_sasl_authorization_id: Some("user-private".to_string()),
             ..Config::default()
         };
-        assert!(config.is_sasl_enabled());
-        assert!(config.validate_security().is_ok());
+        let debug = format!("{config:?}");
+        for value in ["gateway-private", "password-private", "user-private"] {
+            assert!(!debug.contains(value));
+        }
     }
 
     #[test]
@@ -631,23 +698,29 @@ mod tests {
     }
 
     #[test]
-    fn test_sasl_missing_username() {
-        let config = Config {
-            security_protocol: "sasl".to_string(),
-            security_sasl_password: "secret".to_string(),
-            ..Config::default()
-        };
-        assert!(config.validate_security().is_err());
-    }
-
-    #[test]
-    fn test_sasl_missing_password() {
-        let config = Config {
-            security_protocol: "sasl".to_string(),
-            security_sasl_username: "admin".to_string(),
-            ..Config::default()
-        };
-        assert!(config.validate_security().is_err());
+    fn test_sasl_invalid_credentials() {
+        let missing = "must be set when security_protocol is 'sasl'";
+        let nul = "must not contain NUL bytes";
+        let invalid = "private\0value";
+        for (username, password, authorization_id, field, reason) in [
+            ("", "secret", None, "username", missing),
+            ("admin", "", None, "password", missing),
+            (invalid, "secret", None, "username", nul),
+            ("admin", invalid, None, "password", nul),
+            ("admin", "secret", Some(invalid), "authorization_id", nul),
+        ] {
+            let config = Config {
+                security_protocol: "sasl".to_string(),
+                security_sasl_username: username.to_string(),
+                security_sasl_password: password.to_string(),
+                security_sasl_authorization_id: authorization_id.map(str::to_string),
+                ..Config::default()
+            };
+            assert_eq!(
+                config.validate_security(),
+                Err(format!("security_sasl_{field} {reason}"))
+            );
+        }
     }
 
     #[test]

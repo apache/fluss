@@ -267,8 +267,19 @@ cargo build --example example-table --release
 | `connect_timeout_ms`                   | 15 s              | Connection timeout                            |
 | `connection_max_idle_time_ms`          | 10 min            | Close idle cached connections (0: disabled)   |
 | `security_sasl_username` / `security_sasl_password` | — | SASL PLAIN authentication             |
+| `security_sasl_authorization_id`        | `None`            | Act as another user with a server-side proxy grant; unset or empty uses the authenticated user |
 
 Configuration can be set programmatically or via CLI flags (using [`clap`](https://docs.rs/clap)).
+
+`security_sasl_authorization_id` (CLI: `--security-sasl-authorization-id`) does not change the service account's username or password. The server must grant the target user via `security.sasl.listener.name.<listener>.plain.proxy-users`. Use SASL/PLAIN only over a trusted encrypted transport. Serialized configuration includes the username and authorization ID and omits the password. Debug output redacts all three values. Authentication errors retain the server error code and redact the details.
+
+CI runs the proxy-authorization integration test against `fluss:dev`. Local runs opt in because the default test image (0.9.1) predates server support. The test verifies user-specific ACLs on coordinator and tablet connections, rejected proxy targets, and incorrect service credentials. For example, with a locally loaded image built from the following fixed upstream commit (which includes #3857), run from `fluss-rust`:
+
+```shell
+FLUSS_IMAGE=fluss FLUSS_VERSION=c2448838dd2cb3999fcbec29d6b28d9bae2fb649 \
+  cargo test --locked -p fluss-rs --features integration_tests \
+  --test test_fluss test_sasl_proxy_authorization -- --ignored
+```
 
 ---
 
