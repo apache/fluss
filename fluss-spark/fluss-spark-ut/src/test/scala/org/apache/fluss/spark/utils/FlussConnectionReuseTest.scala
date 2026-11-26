@@ -255,6 +255,7 @@ class FlussConnectionReuseTest extends FlussSparkTestBase {
     val tableName = scopedTableName("shared_planners")
     val path = createTablePath(tableName)
     createFlussTable(path, SparkWriteTest.logTableDescriptor)
+    flussServer.waitUntilTableReady(path)
     val info = admin.getTableInfo(path).get()
     val config = flussServer.getClientConfig
     val witness = FlussConnectionCache.acquire(config)
