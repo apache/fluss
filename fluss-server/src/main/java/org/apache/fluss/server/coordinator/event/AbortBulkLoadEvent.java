@@ -24,20 +24,25 @@ import javax.annotation.Nullable;
 import java.util.concurrent.CompletableFuture;
 
 /** Aborts a BulkLoad transaction and releases ownership. */
-public final class AbortBulkLoadEvent implements CoordinatorEvent {
+public final class AbortBulkLoadEvent implements CoordinatorEventWithResult<AbortBulkLoadResponse> {
     public final long tableId;
     public final String bulkLoadId;
     public final @Nullable String abortMessage;
-    public final CompletableFuture<AbortBulkLoadResponse> result;
+    private final CompletableFuture<AbortBulkLoadResponse> resultFuture;
 
     public AbortBulkLoadEvent(
             long tableId,
             String bulkLoadId,
             @Nullable String abortMessage,
-            CompletableFuture<AbortBulkLoadResponse> result) {
+            CompletableFuture<AbortBulkLoadResponse> resultFuture) {
         this.tableId = tableId;
         this.bulkLoadId = bulkLoadId;
         this.abortMessage = abortMessage;
-        this.result = result;
+        this.resultFuture = resultFuture;
+    }
+
+    @Override
+    public CompletableFuture<AbortBulkLoadResponse> getResultFuture() {
+        return resultFuture;
     }
 }

@@ -407,9 +407,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     event.retentionCutoff,
                     getActiveBulkLoadTable(event.tableId) == null,
                     coordinatorContext.hasPendingBulkLoadPublication(event.tableId));
-            event.result.complete(null);
+            event.getResultFuture().complete(null);
         } catch (Exception e) {
-            event.result.completeExceptionally(e);
+            event.getResultFuture().completeExceptionally(e);
         }
     }
 
@@ -449,28 +449,29 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 throw unconfirmed;
             }
             if (!published.isPresent()) {
-                event.result.complete(null);
+                event.getResultFuture().complete(null);
                 return;
             }
             coordinatorContext.putBucketLeaderAndIsr(bucket, published.get());
             notifyOnlineReplicas(bucket);
         } catch (Throwable failure) {
-            event.result.completeExceptionally(failure);
+            event.getResultFuture().completeExceptionally(failure);
             return;
         }
 
         try {
             event.snapshotStore.registerImportedSnapshot(snapshot);
-            event.result.complete(null);
+            event.getResultFuture().complete(null);
         } catch (Exception failure) {
-            event.result.completeExceptionally(
-                    new UnknownServerException(
-                            "BulkLoad snapshot "
-                                    + snapshot.getSnapshotID()
-                                    + " for "
-                                    + bucket
-                                    + " was committed, but local registration failed.",
-                            failure));
+            event.getResultFuture()
+                    .completeExceptionally(
+                            new UnknownServerException(
+                                    "BulkLoad snapshot "
+                                            + snapshot.getSnapshotID()
+                                            + " for "
+                                            + bucket
+                                            + " was committed, but local registration failed.",
+                                    failure));
         }
     }
 
@@ -1022,15 +1023,18 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         if (event instanceof BeginBulkLoadEvent) {
             BeginBulkLoadEvent beginBulkLoadEvent = (BeginBulkLoadEvent) event;
             completeFromCallable(
-                    beginBulkLoadEvent.result, () -> processBeginBulkLoad(beginBulkLoadEvent));
+                    beginBulkLoadEvent.getResultFuture(),
+                    () -> processBeginBulkLoad(beginBulkLoadEvent));
         } else if (event instanceof CommitBulkLoadEvent) {
             CommitBulkLoadEvent commitBulkLoadEvent = (CommitBulkLoadEvent) event;
             completeFromCallable(
-                    commitBulkLoadEvent.result, () -> processCommitBulkLoad(commitBulkLoadEvent));
+                    commitBulkLoadEvent.getResultFuture(),
+                    () -> processCommitBulkLoad(commitBulkLoadEvent));
         } else if (event instanceof AbortBulkLoadEvent) {
             AbortBulkLoadEvent abortBulkLoadEvent = (AbortBulkLoadEvent) event;
             completeFromCallable(
-                    abortBulkLoadEvent.result, () -> processAbortBulkLoad(abortBulkLoadEvent));
+                    abortBulkLoadEvent.getResultFuture(),
+                    () -> processAbortBulkLoad(abortBulkLoadEvent));
         } else if (event instanceof ReclaimTableBulkLoadMetadataEvent) {
             processReclaimTableBulkLoadMetadata((ReclaimTableBulkLoadMetadataEvent) event);
         } else if (event instanceof CommitBulkLoadBucketEvent) {

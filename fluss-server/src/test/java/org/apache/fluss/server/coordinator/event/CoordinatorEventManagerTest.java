@@ -251,6 +251,26 @@ class CoordinatorEventManagerTest {
         }
     }
 
+    @Test
+    void testShutdownRejectsQueuedMetadataReclamation() {
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(new TestingMetricRegistry(), "cluster1", "host", "0");
+        CoordinatorEventManager manager = new CoordinatorEventManager(event -> {}, metricGroup);
+        ReclaimTableBulkLoadMetadataEvent reclaim = new ReclaimTableBulkLoadMetadataEvent(1L, 0L);
+        try {
+            // Leave the event thread unstarted so close drains the queued reclamation.
+            manager.put(reclaim);
+            manager.close();
+
+            assertThat(reclaim.getResultFuture()).isCompletedExceptionally();
+            assertThatThrownBy(reclaim.getResultFuture()::join)
+                    .hasCauseInstanceOf(NotCoordinatorLeaderException.class)
+                    .hasRootCauseMessage("Coordinator could not process the pending event.");
+        } finally {
+            metricGroup.close();
+        }
+    }
+
     private static <T> void processAccessContext(
             AccessContextEvent<T> event, CoordinatorContext context) {
         try {

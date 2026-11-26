@@ -26,20 +26,25 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** Starts or replays a BulkLoad transaction. */
-public final class BeginBulkLoadEvent implements CoordinatorEvent {
+public final class BeginBulkLoadEvent implements CoordinatorEventWithResult<BeginBulkLoadResponse> {
     public final TablePath tablePath;
     public final @Nullable String bulkLoadId;
     public final List<String> partitionNames;
-    public final CompletableFuture<BeginBulkLoadResponse> result;
+    private final CompletableFuture<BeginBulkLoadResponse> resultFuture;
 
     public BeginBulkLoadEvent(
             TablePath tablePath,
             @Nullable String bulkLoadId,
             List<String> partitionNames,
-            CompletableFuture<BeginBulkLoadResponse> result) {
+            CompletableFuture<BeginBulkLoadResponse> resultFuture) {
         this.tablePath = tablePath;
         this.bulkLoadId = bulkLoadId;
         this.partitionNames = partitionNames;
-        this.result = result;
+        this.resultFuture = resultFuture;
+    }
+
+    @Override
+    public CompletableFuture<BeginBulkLoadResponse> getResultFuture() {
+        return resultFuture;
     }
 }

@@ -22,15 +22,23 @@ import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import java.util.concurrent.CompletableFuture;
 
 /** Commits a BulkLoad transaction after verifying bucket completion. */
-public final class CommitBulkLoadEvent implements CoordinatorEvent {
+public final class CommitBulkLoadEvent
+        implements CoordinatorEventWithResult<CommitBulkLoadResponse> {
     public final long tableId;
     public final String bulkLoadId;
-    public final CompletableFuture<CommitBulkLoadResponse> result;
+    private final CompletableFuture<CommitBulkLoadResponse> resultFuture;
 
     public CommitBulkLoadEvent(
-            long tableId, String bulkLoadId, CompletableFuture<CommitBulkLoadResponse> result) {
+            long tableId,
+            String bulkLoadId,
+            CompletableFuture<CommitBulkLoadResponse> resultFuture) {
         this.tableId = tableId;
         this.bulkLoadId = bulkLoadId;
-        this.result = result;
+        this.resultFuture = resultFuture;
+    }
+
+    @Override
+    public CompletableFuture<CommitBulkLoadResponse> getResultFuture() {
+        return resultFuture;
     }
 }

@@ -460,7 +460,7 @@ public final class BulkLoadManager {
                         coordinatorEpochZkVersion,
                         snapshotStores.getOrCreateCompletedSnapshotStore(tablePath, bucket));
         eventManager.put(event);
-        return event.result
+        return event.getResultFuture()
                 .handle(
                         (ignored, failure) -> {
                             if (failure instanceof KeeperException.NoNodeException
@@ -472,7 +472,7 @@ public final class BulkLoadManager {
                                         },
                                         ioExecutor);
                             }
-                            return event.result;
+                            return event.getResultFuture();
                         })
                 .thenCompose(result -> result);
     }
@@ -506,7 +506,8 @@ public final class BulkLoadManager {
         ReclaimTableBulkLoadMetadataEvent event =
                 new ReclaimTableBulkLoadMetadataEvent(tableId, retentionCutoff);
         eventManager.put(event);
-        return event.result.exceptionally(failure -> handleReclamationFailure(tableId, failure));
+        return event.getResultFuture()
+                .exceptionally(failure -> handleReclamationFailure(tableId, failure));
     }
 
     private Void handleReclamationFailure(long tableId, Throwable failure) {

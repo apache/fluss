@@ -20,13 +20,18 @@ package org.apache.fluss.server.coordinator.event;
 import java.util.concurrent.CompletableFuture;
 
 /** Requests BulkLoad metadata reclamation for one physical table. */
-public final class ReclaimTableBulkLoadMetadataEvent implements CoordinatorEvent {
+public final class ReclaimTableBulkLoadMetadataEvent implements CoordinatorEventWithResult<Void> {
     public final long tableId;
     public final long retentionCutoff;
-    public final CompletableFuture<Void> result = new CompletableFuture<>();
+    private final CompletableFuture<Void> resultFuture = new CompletableFuture<>();
 
     public ReclaimTableBulkLoadMetadataEvent(long tableId, long retentionCutoff) {
         this.tableId = tableId;
         this.retentionCutoff = retentionCutoff;
+    }
+
+    @Override
+    public CompletableFuture<Void> getResultFuture() {
+        return resultFuture;
     }
 }
