@@ -983,6 +983,7 @@ message PbBulkLoadHandle {
 
 message PbBulkLoadStatus {
   required PbBulkLoadHandle handle = 1;
+  // 0 = RUNNING, 1 = COMMITTED, 2 = ABORTED.
   required int32 state = 2;
   required int64 created_time = 3;
   optional int64 finished_time = 4;

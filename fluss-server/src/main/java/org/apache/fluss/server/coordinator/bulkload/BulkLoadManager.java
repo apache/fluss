@@ -111,18 +111,18 @@ public final class BulkLoadManager {
     public BeginBulkLoadResponse begin(
             TableInfo table,
             @Nullable String bulkLoadId,
-            List<String> names,
+            List<String> partitionNames,
             int maxTargets,
             Function<String, BulkLoadTarget> resolvePartitionTarget)
             throws Exception {
-        requireDistinctPartitions(names);
+        requireDistinctPartitions(partitionNames);
         String id = bulkLoadId == null ? UUID.randomUUID().toString() : bulkLoadId;
         long tableId = table.getTableId();
         if (bulkLoadId != null) {
             Optional<VersionedData<BulkLoadTransaction>> previous =
                     zooKeeperClient.getBulkLoadTransaction(tableId, id);
             if (previous.isPresent()) {
-                return replayBegin(previous.get().data(), names, table);
+                return replayBegin(previous.get().data(), partitionNames, table);
             }
         }
 
@@ -136,17 +136,18 @@ public final class BulkLoadManager {
             throw new InvalidRequestException(
                     "BulkLoad does not support tables with a merge engine.");
         }
-        if (table.isPartitioned() == names.isEmpty()) {
+        if (table.isPartitioned() == partitionNames.isEmpty()) {
             throw new InvalidRequestException("Invalid partition selection for this table.");
         }
-        if (Math.max(1, names.size()) > maxTargets) {
+        if (Math.max(1, partitionNames.size()) > maxTargets) {
             throw new InvalidRequestException("BulkLoad exceeds max-targets.");
         }
 
-        if (names.contains(HISTORICAL_PARTITION_VALUE)) {
+        if (partitionNames.contains(HISTORICAL_PARTITION_VALUE)) {
             throw new InvalidRequestException("Historical partitions are unsupported.");
         }
-        List<BulkLoadTarget> targets = resolveBeginTargets(table, names, resolvePartitionTarget);
+        List<BulkLoadTarget> targets =
+                resolveBeginTargets(table, partitionNames, resolvePartitionTarget);
         BulkLoadTransaction transaction =
                 new BulkLoadTransaction(
                         tableId,
@@ -166,7 +167,7 @@ public final class BulkLoadManager {
                     zooKeeperClient.getBulkLoadTransaction(tableId, id);
             if (current.isPresent()) {
                 BulkLoadTransaction existing = current.get().data();
-                return replayBegin(existing, names, table);
+                return replayBegin(existing, partitionNames, table);
             }
             throw e;
         }
@@ -214,8 +215,8 @@ public final class BulkLoadManager {
 
     /** Lists the running transactions owning any of the selected current physical targets. */
     public ListInProgressBulkLoadsResponse listInProgressBulkLoads(
-            TablePath path, List<String> names) throws Exception {
-        requireDistinctPartitions(names);
+            TablePath path, List<String> partitionNames) throws Exception {
+        requireDistinctPartitions(partitionNames);
         TableRegistration table =
                 zooKeeperClient
                         .getTable(path)
@@ -223,21 +224,21 @@ public final class BulkLoadManager {
                                 () ->
                                         new TableNotExistException(
                                                 "Table " + path + " does not exist."));
-        if (!table.isPartitioned() && !names.isEmpty()) {
+        if (!table.isPartitioned() && !partitionNames.isEmpty()) {
             throw new InvalidRequestException("Non-partitioned target has partition names.");
         }
 
         List<Long> ids = new ArrayList<>();
         if (table.isPartitioned()) {
             Collection<String> selected =
-                    names.isEmpty() ? zooKeeperClient.getPartitions(path) : names;
+                    partitionNames.isEmpty() ? zooKeeperClient.getPartitions(path) : partitionNames;
             Map<String, PartitionRegistration> registrations =
                     zooKeeperClient.getPartitionRegistrations(path, selected);
             for (String name : selected) {
                 PartitionRegistration partition = registrations.get(name);
                 if (partition != null && partition.getTableId() == table.tableId) {
                     ids.add(partition.getPartitionId());
-                } else if (!names.isEmpty()) {
+                } else if (!partitionNames.isEmpty()) {
                     throw partitionNotFound(name);
                 }
             }
@@ -316,7 +317,7 @@ public final class BulkLoadManager {
                                 scheduleMetadataReclamation(
                                         eventManager, retentionMillis, sweepRunning),
                         0,
-                        Duration.ofMinutes(1).toMillis());
+                        Duration.ofHours(1).toMillis());
     }
 
     /** Cancels the periodic trigger before the Coordinator event queue closes. */
@@ -529,7 +530,8 @@ public final class BulkLoadManager {
     }
 
     private BeginBulkLoadResponse replayBegin(
-            BulkLoadTransaction transaction, List<String> names, TableInfo table) throws Exception {
+            BulkLoadTransaction transaction, List<String> partitionNames, TableInfo table)
+            throws Exception {
         List<BulkLoadTarget> targets =
                 transactionStore.getTargets(transaction, table.isPartitioned());
         Set<String> original = new HashSet<>();
@@ -538,7 +540,7 @@ public final class BulkLoadManager {
                 original.add(target.partitionName);
             }
         }
-        if (!original.equals(new HashSet<>(names))) {
+        if (!original.equals(new HashSet<>(partitionNames))) {
             throw new InvalidRequestException("bulk_load_id has different targets.");
         }
         TableDescriptor descriptor = table.toTableDescriptor();
@@ -560,7 +562,7 @@ public final class BulkLoadManager {
 
     private static List<BulkLoadTarget> resolveBeginTargets(
             TableInfo table,
-            List<String> names,
+            List<String> partitionNames,
             Function<String, BulkLoadTarget> resolvePartitionTarget) {
         if (!table.isPartitioned()) {
             return Collections.singletonList(
@@ -568,7 +570,7 @@ public final class BulkLoadManager {
                             null, null, table.getNumBuckets(), table.getRemoteDataDir(), false));
         }
         List<BulkLoadTarget> targets = new ArrayList<>();
-        for (String name : names) {
+        for (String name : partitionNames) {
             BulkLoadTarget target = resolvePartitionTarget.apply(name);
             if (target == null) {
                 throw partitionNotFound(name);
@@ -621,8 +623,8 @@ public final class BulkLoadManager {
         return status;
     }
 
-    private static void requireDistinctPartitions(List<String> names) {
-        if (new HashSet<>(names).size() != names.size()) {
+    private static void requireDistinctPartitions(List<String> partitionNames) {
+        if (new HashSet<>(partitionNames).size() != partitionNames.size()) {
             throw new InvalidRequestException("Duplicate partition names.");
         }
     }
