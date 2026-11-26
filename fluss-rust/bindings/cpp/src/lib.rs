@@ -949,7 +949,7 @@ mod ffi {
         ) -> FfiConsumerOffsetsResult;
         fn delivered(self: &LogScanner);
         fn register_table(self: &mut LogScanner, db: &str, name: &str, id: &mut i64) -> FfiResult;
-        fn close_log_scanner(scanner: Box<LogScanner>) -> FfiConsumerOffsetsResult;
+        fn close_log_scanner(scanner: Box<LogScanner>) -> FfiResult;
         fn begin_commit(
             self: &LogScanner,
             current: bool,
@@ -2601,7 +2601,7 @@ unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
     }
 }
 
-fn close_log_scanner(scanner: Box<LogScanner>) -> ffi::FfiConsumerOffsetsResult {
+fn close_log_scanner(scanner: Box<LogScanner>) -> ffi::FfiResult {
     scanner.close()
 }
 

@@ -155,7 +155,7 @@ and this reader owns bucket 0. `Check` is an application helper that stops on a 
 ```cpp
 fluss::ConsumerGroupOptions group{"orders"};  // Default: 5000 ms
 fluss::LogScanner scanner;
-Check(table.NewScan().WithConsumerGroup(group).CreateLogScanner(scanner));
+Check(table.NewScan().CreateLogScanner(group, scanner));
 std::vector<fluss::TableBucket> buckets{{table.GetTableInfo().table_id, 0, std::nullopt}};
 Check(scanner.SubscribeFromCommitted(buckets));
 
@@ -173,7 +173,7 @@ Check(scanner.Close());
 On restart, use the same group and buckets. Each bucket resumes at its committed **next offset**;
 a bucket with no commit starts at its earliest available record.
 
-To change the interval to one second, set it **before** calling `WithConsumerGroup`:
+To change the interval to one second, set it **before** creating the scanner:
 
 ```cpp
 fluss::ConsumerGroupOptions group{"orders"};
@@ -193,7 +193,7 @@ Use the same bucket assignment and set the interval to zero. Commit only after p
 fluss::ConsumerGroupOptions group{"orders"};
 group.auto_commit_interval_ms = 0;
 fluss::LogScanner scanner;
-Check(table.NewScan().WithConsumerGroup(group).CreateLogScanner(scanner));
+Check(table.NewScan().CreateLogScanner(group, scanner));
 Check(scanner.SubscribeFromCommitted(buckets));
 
 while (running) {

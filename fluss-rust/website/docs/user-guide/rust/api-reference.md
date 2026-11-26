@@ -229,7 +229,7 @@ for (bucket, outcome) in outcomes {
 | `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
 | `commit_sync().await` | Commit progress from completed polls, including ranges skipped by the filter even when no rows were returned. Prefetch is excluded. Process all returned records first. |
 | `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
-| `commit_async()` / `commit_offsets_async(offsets)` | Call from a Tokio runtime to enqueue and capture the offsets. Outside a runtime, the call returns an error. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
+| `commit_async()` / `commit_offsets_async(offsets)` | Call from a Tokio runtime to enqueue and capture the offsets. Outside a runtime, the call returns an error. Await with `handle.await?` and inspect each bucket outcome. Dropping the handle lets the operation finish. |
 
 For a timestamp or another group’s position, query Admin and pass the resulting offset to `subscribe` or `subscribe_partition`.
 Existing explicit-offset subscriptions keep their behavior. Rust uses distinct names for explicit

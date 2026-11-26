@@ -67,7 +67,6 @@ use crate::client::consumer_offsets::ConsumerGroup;
 use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
 
 mod consumer_group;
-pub use consumer_group::AutoCommitError;
 mod latest_resets;
 mod multi_table;
 pub use multi_table::{MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan};

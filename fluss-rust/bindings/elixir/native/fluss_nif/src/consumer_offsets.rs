@@ -23,7 +23,7 @@ use fluss::client::{
     ConsumerGroupOptions, MultiTableLogScanner, OffsetAndMetadata, OffsetCommitError,
     OffsetCommitOutcome,
 };
-use fluss::metadata::{Column, TableBucket, TablePath};
+use fluss::metadata::{TableBucket, TablePath};
 use rustler::{Encoder, Env, NifMap, NifUnitEnum, ResourceArc, Term};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -161,7 +161,6 @@ impl Delivery {
 pub struct ConsumerScannerResource {
     delivery: std::sync::Mutex<Delivery>,
     inner: MultiTableLogScanner,
-    columns: HashMap<i64, Vec<Column>>,
 }
 impl std::panic::RefUnwindSafe for ConsumerScannerResource {}
 #[rustler::resource_impl]
@@ -184,14 +183,9 @@ async fn create(
     } else if let Some(ms) = auto_commit_ms {
         scan = scan.with_auto_commit(Duration::from_millis(ms))?;
     }
-    let mut columns = HashMap::new();
-    for info in scan.table_infos() {
-        columns.insert(info.table_id, info.schema.columns().to_vec());
-    }
     Ok(ResourceArc::new(ConsumerScannerResource {
         delivery: Default::default(),
         inner: scan.create_log_scanner()?,
-        columns,
     }))
 }
 #[rustler::nif]
@@ -295,7 +289,7 @@ fn consumer_scanner_commit(
         }
     };
     async_nif::spawn_task_with_result(env, async move {
-        let result = handle.await.unwrap_or_else(|error| Err(error.into()));
+        let result = handle.await;
         Ok(commit_result(result))
     })
 }
@@ -334,7 +328,7 @@ fn consumer_scanner_poll(
                         .encode(env),
                     false,
                 ),
-                Ok(records) => match encode_records(env, records, &scanner.columns) {
+                Ok(records) => match encode_records(env, records, &scanner.inner) {
                     Ok(records) => ((atoms::fluss_records(), records).encode(env), true),
                     Err(message) => (
                         (
@@ -359,15 +353,20 @@ fn consumer_scanner_poll(
 fn encode_records<'a>(
     env: Env<'a>,
     records: fluss::record::ScanRecords,
-    columns: &HashMap<i64, Vec<Column>>,
+    scanner: &MultiTableLogScanner,
 ) -> Result<Vec<Term<'a>>, String> {
     let mut result = Vec::new();
-    for (bucket, records) in records.into_records_by_buckets() {
-        let schema = columns
-            .get(&bucket.table_id())
-            .ok_or_else(|| "Unknown source table".to_string())?;
+    let buckets = records.into_records_by_buckets();
+    let Some(first) = buckets.keys().next() else {
+        return Ok(result);
+    };
+    let info = scanner
+        .registered_table_info(first.table_id())
+        .ok_or_else(|| "Unknown source table".to_string())?;
+    let schema = info.schema.columns();
+    let column_atoms = crate::row_convert::intern_column_atoms(env, schema);
+    for (bucket, records) in buckets {
         let key = bucket_value(bucket);
-        let column_atoms = crate::row_convert::intern_column_atoms(env, schema);
         for record in records {
             let encoded = crate::log_scanner::encode_record(env, &record, schema, &column_atoms)?;
             result.push(

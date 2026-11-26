@@ -242,7 +242,6 @@ pub(crate) enum MultiKind {
 pub struct MultiTableLogScanner {
     pub(crate) delivery: PollDelivery,
     pub(crate) inner: Arc<MultiKind>,
-    pub(crate) schemas: Arc<HashMap<i64, fcore::metadata::RowType>>,
 }
 #[pymethods]
 impl MultiTableLogScanner {
@@ -288,7 +287,6 @@ impl MultiTableLogScanner {
     /// Process the previous result completely before polling with auto-commit enabled.
     fn poll<'py>(&self, py: Python<'py>, timeout_ms: u64) -> PyResult<Bound<'py, PyAny>> {
         let scanner = self.inner.clone();
-        let schemas = self.schemas.clone();
         self.delivery.poll(py, || {
             future_into_py(py, async move {
                 let MultiKind::Record(scanner) = scanner.as_ref() else {
@@ -303,18 +301,21 @@ impl MultiTableLogScanner {
                 Python::attach(|py| {
                     let mut records_by_bucket = indexmap::IndexMap::new();
                     let total_count = records.count();
-                    for (bucket, records) in records.into_records_by_buckets() {
-                        let schema = schemas
-                            .get(&bucket.table_id())
+                    let buckets = records.into_records_by_buckets();
+                    if let Some(first) = buckets.keys().next() {
+                        let info = scanner
+                            .registered_table_info(first.table_id())
                             .ok_or_else(|| FlussError::new_err("Unknown source table"))?;
-                        let values = records
-                            .iter()
-                            .map(|record| {
-                                ScanRecord::from_core(py, record, schema)
-                                    .and_then(|record| Py::new(py, record))
-                            })
-                            .collect::<PyResult<Vec<_>>>()?;
-                        records_by_bucket.insert(TableBucket::from_core(bucket), values);
+                        for (bucket, records) in buckets {
+                            let values = records
+                                .iter()
+                                .map(|record| {
+                                    ScanRecord::from_core(py, record, info.get_row_type())
+                                        .and_then(|record| Py::new(py, record))
+                                })
+                                .collect::<PyResult<Vec<_>>>()?;
+                            records_by_bucket.insert(TableBucket::from_core(bucket), values);
+                        }
                     }
                     Ok(ScanRecords {
                         records_by_bucket,
@@ -358,11 +359,7 @@ impl MultiTableLogScanner {
     ) -> PyResult<Bound<'py, PyAny>> {
         self.delivery.check(py)?;
         let handle = self.enqueue(offsets)?;
-        future_into_py(py, async move {
-            Ok(commit_result(
-                handle.await.unwrap_or_else(|error| Err(error.into())),
-            ))
-        })
+        future_into_py(py, async move { Ok(commit_result(handle.await)) })
     }
     /// Blocks with the GIL released. Inspect request and bucket outcomes before shutdown.
     #[pyo3(signature=(offsets=None))]
@@ -373,13 +370,7 @@ impl MultiTableLogScanner {
     ) -> PyResult<OffsetCommitResult> {
         self.delivery.check(py)?;
         let handle = self.enqueue(offsets)?;
-        Ok(py.detach(|| {
-            commit_result(
-                TOKIO_RUNTIME
-                    .block_on(handle)
-                    .unwrap_or_else(|error| Err(error.into())),
-            )
-        }))
+        Ok(py.detach(|| commit_result(TOKIO_RUNTIME.block_on(handle))))
     }
 }
 impl MultiTableLogScanner {

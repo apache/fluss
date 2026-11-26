@@ -1466,9 +1466,23 @@ std::vector<size_t> TableScan::ResolveNameProjection() const {
 
 Result TableScan::CreateLogScanner(LogScanner& out) { return DoCreateScanner(out, false); }
 
+Result TableScan::CreateLogScanner(const ConsumerGroupOptions& group, LogScanner& out) {
+    return DoCreateScanner(out, false, &group);
+}
+
 Result TableScan::CreateRecordBatchLogScanner(RecordBatchLogScanner& out) {
+    return DoCreateBatchScanner(out, nullptr);
+}
+
+Result TableScan::CreateRecordBatchLogScanner(const ConsumerGroupOptions& group,
+                                             RecordBatchLogScanner& out) {
+    return DoCreateBatchScanner(out, &group);
+}
+
+Result TableScan::DoCreateBatchScanner(RecordBatchLogScanner& out,
+                                       const ConsumerGroupOptions* group) {
     LogScanner scanner;
-    auto result = DoCreateScanner(scanner, true);
+    auto result = DoCreateScanner(scanner, true, group);
     if (result.Ok()) {
         out = RecordBatchLogScanner(scanner.scanner_);
         scanner.scanner_ = nullptr;
@@ -1478,28 +1492,6 @@ Result TableScan::CreateRecordBatchLogScanner(RecordBatchLogScanner& out) {
 
 Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
     return DoCreateScanner(out, true);
-}
-
-ConsumerGroupScan TableScan::WithConsumerGroup(ConsumerGroupOptions options) {
-    return ConsumerGroupScan(std::move(*this), std::move(options));
-}
-
-Result ConsumerGroupScan::CreateLogScanner(LogScanner& out) {
-    return scan_.DoCreateScanner(out, false, &options_);
-}
-
-Result ConsumerGroupScan::CreateRecordBatchLogScanner(RecordBatchLogScanner& out) {
-    LogScanner scanner;
-    auto result = scan_.DoCreateScanner(scanner, true, &options_);
-    if (result.Ok()) {
-        out = RecordBatchLogScanner(scanner.scanner_);
-        scanner.scanner_ = nullptr;
-    }
-    return result;
-}
-
-Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
-    return DoCreateScanner(out, is_record_batch, nullptr);
 }
 
 Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch,
@@ -2417,9 +2409,9 @@ Result LogScanner::RegisterTable(const TablePath& path, int64_t& table_id) {
     return utils::from_ffi_result(
         scanner_->register_table(path.database_name, path.table_name, table_id));
 }
-OffsetCommitResult LogScanner::Close() {
+Result LogScanner::Close() {
     if (!scanner_) return {};
-    return commit_result(ffi::close_log_scanner(
+    return utils::from_ffi_result(ffi::close_log_scanner(
         rust::Box<ffi::LogScanner>::from_raw(std::exchange(scanner_, nullptr))));
 }
 Result Admin::GetConsumerOffsets(const std::string& group_id,
@@ -2523,7 +2515,7 @@ Result RecordBatchLogScanner::SubscribeFromCommitted(const std::vector<TableBuck
 Result RecordBatchLogScanner::RegisterTable(const TablePath& path, int64_t& id) {
     return scanner_.RegisterTable(path, id);
 }
-OffsetCommitResult RecordBatchLogScanner::Close() { return scanner_.Close(); }
+Result RecordBatchLogScanner::Close() { return scanner_.Close(); }
 std::future<OffsetCommitResult> RecordBatchLogScanner::CommitAsync() {
     return scanner_.CommitAsync();
 }

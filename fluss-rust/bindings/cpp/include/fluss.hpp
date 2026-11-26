@@ -2020,7 +2020,6 @@ class TableLookup {
     ffi::Table* table_{nullptr};
 };
 
-class ConsumerGroupScan;
 
 class TableScan {
    public:
@@ -2040,10 +2039,6 @@ class TableScan {
 
     TableScan& Limit(int32_t row_number);
 
-    /// Configures group offset commits and consumes this builder.
-    /// Use SubscribeFromCommitted on the scanner to resume this group's offsets.
-    ConsumerGroupScan WithConsumerGroup(ConsumerGroupOptions options);
-
     /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.
     ///
     /// Works on log tables and on primary-key (KV) tables. For a primary-key
@@ -2052,6 +2047,8 @@ class TableScan {
     /// or `-D` (delete). A log table yields `+A` (append-only). Requires the
     /// ARROW log format.
     Result CreateLogScanner(LogScanner& out);
+    /// Creates a scanner with persisted group offsets. Use SubscribeFromCommitted to resume.
+    Result CreateLogScanner(const ConsumerGroupOptions& group, LogScanner& out);
 
     /// Creates a batch-mode log scanner that yields Arrow record batches.
     ///
@@ -2060,6 +2057,8 @@ class TableScan {
     /// changelog with `CreateLogScanner()` instead. Requires the ARROW log
     /// format.
     Result CreateRecordBatchLogScanner(RecordBatchLogScanner& out);
+    /// Creates a scanner with persisted group offsets. Use SubscribeFromCommitted to resume.
+    Result CreateRecordBatchLogScanner(const ConsumerGroupOptions& group, RecordBatchLogScanner& out);
 
     /// Legacy overload. Prefer the strongly typed RecordBatchLogScanner.
     Result CreateRecordBatchLogScanner(LogScanner& out);
@@ -2086,32 +2085,16 @@ class TableScan {
     explicit TableScan(ffi::Table* table) noexcept;
 
     std::vector<size_t> ResolveNameProjection() const;
-    friend class ConsumerGroupScan;
     friend class Connection;
-    Result DoCreateScanner(LogScanner& out, bool is_record_batch);
+    Result DoCreateBatchScanner(RecordBatchLogScanner& out, const ConsumerGroupOptions* group);
     Result DoCreateScanner(LogScanner& out, bool is_record_batch,
-                           const ConsumerGroupOptions* group);
+                           const ConsumerGroupOptions* group = nullptr);
 
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
     std::vector<std::string> name_projection_;
     std::optional<Predicate> predicate_;
     std::optional<int32_t> limit_;
-};
-
-/// Scan configuration with persisted consumer offsets. Owns the moved scan builder;
-/// the originating Table must remain alive until scanner creation completes.
-class ConsumerGroupScan {
-   public:
-    Result CreateLogScanner(LogScanner& out);
-    Result CreateRecordBatchLogScanner(RecordBatchLogScanner& out);
-
-   private:
-    friend class TableScan;
-    ConsumerGroupScan(TableScan scan, ConsumerGroupOptions options)
-        : scan_(std::move(scan)), options_(std::move(options)) {}
-    TableScan scan_;
-    ConsumerGroupOptions options_;
 };
 
 class WriteResult {
@@ -2425,7 +2408,7 @@ class LogScanner {
     Result RegisterTable(const TablePath& path, int64_t& table_id);
     /// Submits an automatic commit if due and waits for pending commits up to the group timeout.
     /// Use CommitSync() before Close() to confirm the final positions.
-    OffsetCommitResult Close();
+    Result Close();
     /// Commits explicit next offsets, allowing partially processed poll results.
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     /// Enqueues a snapshot now. Calls on one scanner execute in invocation order.
@@ -2448,7 +2431,6 @@ class LogScanner {
    private:
     friend class Table;
     friend class TableScan;
-    friend class ConsumerGroupScan;
     friend class Connection;
     friend class RecordBatchLogScanner;
     LogScanner(ffi::LogScanner* scanner) noexcept;
@@ -2511,7 +2493,7 @@ class RecordBatchLogScanner {
     Result RegisterTable(const TablePath& path, int64_t& table_id);
     /// Submits an automatic commit if due and waits for pending commits up to the group timeout.
     /// Use CommitSync() before Close() to confirm the final positions.
-    OffsetCommitResult Close();
+    Result Close();
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     std::future<OffsetCommitResult> CommitAsync();
     std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);
@@ -2535,7 +2517,6 @@ class RecordBatchLogScanner {
 
    private:
     friend class TableScan;
-    friend class ConsumerGroupScan;
     friend class Connection;
     explicit RecordBatchLogScanner(ffi::LogScanner* scanner) noexcept;
 

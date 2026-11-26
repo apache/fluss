@@ -2545,9 +2545,7 @@ impl LogScanner {
         self.delivery.check(py)?;
         let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
         future_into_py(py, async move {
-            Ok(crate::consumer_offsets::commit_result(
-                handle.await.unwrap_or_else(|error| Err(error.into())),
-            ))
+            Ok(crate::consumer_offsets::commit_result(handle.await))
         })
     }
     /// Blocks with the GIL released. Check request and every bucket outcome.
@@ -2559,13 +2557,7 @@ impl LogScanner {
     ) -> PyResult<OffsetCommitResult> {
         self.delivery.check(py)?;
         let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
-        Ok(py.detach(|| {
-            crate::consumer_offsets::commit_result(
-                TOKIO_RUNTIME
-                    .block_on(handle)
-                    .unwrap_or_else(|error| Err(error.into())),
-            )
-        }))
+        Ok(py.detach(|| crate::consumer_offsets::commit_result(TOKIO_RUNTIME.block_on(handle))))
     }
 
     /// Subscribe to a single bucket at a specific offset (non-partitioned tables).

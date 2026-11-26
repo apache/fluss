@@ -178,12 +178,11 @@ impl LogScanner {
         }
     }
 
-    pub(super) fn close(self) -> ffi::FfiConsumerOffsetsResult {
-        use fcore::client::AutoCommitError;
+    pub(super) fn close(self) -> ffi::FfiResult {
         if let Err(error) = self.check_delivery() {
-            return commit_response(Err(OffsetCommitError::Rejected(error)));
+            return err_from_core_error(&error);
         }
-        let result = RUNTIME.block_on(async {
+        RUNTIME.block_on(async {
             match self.scanner {
                 ScannerKind::Record(s) => s.close().await,
                 ScannerKind::Batch(s) => s.close().await,
@@ -191,11 +190,7 @@ impl LogScanner {
                 ScannerKind::MultiBatch(s) => s.close().await,
             }
         });
-        commit_response(match result {
-            Ok(()) => Ok(Default::default()),
-            Err(AutoCommitError::Request(err)) => Err(err),
-            Err(AutoCommitError::Buckets(buckets)) => Ok(buckets),
-        })
+        ok_result()
     }
 
     pub(super) fn begin_commit(
@@ -208,7 +203,7 @@ impl LogScanner {
         match self.enqueue_commit(current, offsets) {
             Ok(handle) => {
                 RUNTIME.spawn(async move {
-                    let result = handle.await.unwrap_or_else(|error| Err(error.into()));
+                    let result = handle.await;
                     promise.pin_mut().resolve(&mut commit_response(result));
                 });
             }

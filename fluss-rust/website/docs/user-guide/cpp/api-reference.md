@@ -1349,7 +1349,7 @@ inline const char* ChangeTypeShortString(ChangeType ct) {
 
 ## Consumer offset management
 
-Use `WithConsumerGroup(options)` to configure the group, then `SubscribeFromCommitted(buckets)` to resume its offsets. See [Resuming a consumer group](./example/log-tables.md#resuming-a-consumer-group) for automatic commits, a custom interval, and manual commits after processing.
+Use `table.NewScan().CreateLogScanner(options, scanner)` to configure the group, then `SubscribeFromCommitted(buckets)` to resume its offsets. See [Resuming a consumer group](./example/log-tables.md#resuming-a-consumer-group) for automatic commits, a custom interval, and manual commits after processing.
 
 Buckets include table ID and optional partition ID. Explicit commits accept `std::vector<ConsumerOffset>`; offsets identify the **next** record to read. Metadata distinguishes `std::nullopt` from an empty string. `CommitAsync()` queues immediately and returns a `std::future<OffsetCommitResult>`. Invocations on a scanner stay ordered even when their futures are awaited in another order. Releasing a future may wait for completion; it does not cancel the queued write.
 

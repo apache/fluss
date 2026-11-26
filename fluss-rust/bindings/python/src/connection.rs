@@ -75,10 +75,6 @@ impl FlussConnection {
                     .with_auto_commit(Duration::from_millis(ms))
                     .map_err(|error| FlussError::from_core_error(&error))?;
             }
-            let mut schemas = std::collections::HashMap::new();
-            for info in scan.table_infos() {
-                schemas.insert(info.table_id, info.get_row_type().clone());
-            }
             let inner = if arrow {
                 crate::consumer_offsets::MultiKind::Batch(
                     scan.create_record_batch_log_scanner()
@@ -93,7 +89,6 @@ impl FlussConnection {
             Ok(MultiTableLogScanner {
                 delivery: crate::consumer_offsets::PollDelivery::new(true)?,
                 inner: Arc::new(inner),
-                schemas: Arc::new(schemas),
             })
         })
     }
