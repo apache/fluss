@@ -1505,7 +1505,7 @@ When using the `aggregation` merge engine, be aware of the following critical li
 
 ### Exactly-Once Semantics
 
-When writing to an aggregate merge engine table using the Flink engine, Fluss does provide exactly-once guarantees. Thanks to Flink's checkpointing mechanism, in the event of a failure and recovery, the Flink connector automatically performs an undo operation to roll back the table state to what it was at the last successful checkpoint. This ensures no over-counting or under-counting: data remains consistent and accurate.
+Flink provides exactly-once writes to an aggregation table when a single Flink job is the only writer, or when multiple Flink jobs use explicit partial updates on non-overlapping sets of non-primary-key columns. Thanks to Flink's checkpointing mechanism, in the event of a failure and recovery, the Flink connector automatically performs an undo operation to roll back the table state to what it was at the last successful checkpoint. This ensures no over-counting or under-counting: data remains consistent and accurate.
 
 However, when using the Fluss client API directly (outside of Flink), exactly-once is not provided out of the box. In such cases, users must implement their own recovery logic (similar to what the Flink connector does) by explicitly resetting the table state to a previous version by performing undo operations.
 
