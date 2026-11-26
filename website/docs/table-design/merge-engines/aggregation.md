@@ -1505,11 +1505,19 @@ When using the `aggregation` merge engine, be aware of the following critical li
 
 ### Exactly-Once Semantics
 
-When writing to an aggregate merge engine table using the Flink engine, Fluss does provide exactly-once guarantees. Thanks to Flink's checkpointing mechanism, in the event of a failure and recovery, the Flink connector automatically performs an undo operation to roll back the table state to what it was at the last successful checkpoint. This ensures no over-counting or under-counting: data remains consistent and accurate.
+Flink provides exactly-once writes to an aggregation table when a single Flink job is the only writer, or when multiple Flink jobs use explicit partial updates on non-overlapping sets of non-primary-key columns. Thanks to Flink's checkpointing mechanism, in the event of a failure and recovery, the Flink connector automatically performs an undo operation to roll back the table state to what it was at the last successful checkpoint. This ensures no over-counting or under-counting: data remains consistent and accurate.
 
 However, when using the Fluss client API directly (outside of Flink), exactly-once is not provided out of the box. In such cases, users must implement their own recovery logic (similar to what the Flink connector does) by explicitly resetting the table state to a previous version by performing undo operations.
 
 For detailed information about Exactly-Once implementation, please refer to: [FIP-21: Aggregation Merge Engine](https://cwiki.apache.org/confluence/display/FLUSS/FIP-21%3A+Aggregation+Merge+Engine)
+
+### Undo Recovery for Full-Row Writes
+
+When a Flink job writes full rows to an aggregation table, restoring the job from a checkpoint can undo other writers’ changes in the same bucket. For each bucket, undo starts at the recovery offset. That offset can already be behind the end of the bucket log when the checkpoint is taken, so recovery can undo another writer’s changes made before the checkpoint.
+
+For example, Job A writes a row with key `1` and takes a checkpoint. Job B then inserts a row with key `1001` in the same bucket. When Job A recovers from its checkpoint, it deletes the row Job B inserted.
+
+When two Flink jobs use explicit partial updates on the same key, recovering one job preserves the other job’s updates if they update separate sets of non-key columns. For example, if Job A updates only `price` and Job B updates only `stock`, recovering Job A preserves Job B’s `stock` update.
 
 :::
 
