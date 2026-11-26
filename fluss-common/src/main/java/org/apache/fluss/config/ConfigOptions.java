@@ -217,7 +217,9 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(1000)
                     .withDescription(
-                            "Maximum physical targets selected by one BulkLoad transaction.");
+                            "Maximum number of targets in one bulk load transaction. A bulk load target is"
+                                    + " an entire non-partitioned table or one selected partition of a partitioned table,"
+                                    + " regardless of how many buckets it contains.");
 
     public static final ConfigOption<Duration> COORDINATOR_BULKLOAD_RESULT_RETENTION =
             key("coordinator.bulkload.result-retention")
