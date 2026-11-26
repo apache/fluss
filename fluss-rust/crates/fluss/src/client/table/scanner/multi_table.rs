@@ -397,6 +397,10 @@ macro_rules! multi_methods {
 
             /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
             pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
+                let scanners = self.inner.scanners.read().clone();
+                for scanner in scanners.iter() {
+                    scanner.cancel_position_lookup().await;
+                }
                 AutoCommit::finish(self.inner.auto_commit.as_ref(), &self.inner.group).await;
                 Ok(())
             }
@@ -427,3 +431,53 @@ multi_methods!(
     Vec::new(),
     |p: PolledBatches| p.batches
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{build_cluster_with_tables, build_table_info};
+
+    #[tokio::test]
+    async fn close_releases_scanners_during_committed_offset_lookup() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let path = TablePath::new("db", "tbl");
+        let cluster = build_cluster_with_tables(
+            &[(&path, 1, 1)],
+            listener.local_addr().unwrap().port().into(),
+        );
+        let metadata = Arc::new(Metadata::new_for_test(Arc::new(cluster)));
+        let conn = FlussConnection::new_for_test(metadata.clone());
+        let info = build_table_info(path, 1, 1);
+        let group = ConsumerGroupOptions::new("closing");
+        let single = TableScan::new(&conn, info.clone(), metadata)
+            .with_consumer_group(group.clone())?
+            .create_log_scanner()?;
+        let multi = MultiTableScan {
+            connection: &conn,
+            tables: vec![info],
+            group,
+            auto_commit: None,
+        }
+        .create_log_scanner()?;
+        let refs = [
+            Arc::downgrade(&single.inner),
+            Arc::downgrade(&multi.inner.scanners.read()[0]),
+        ];
+
+        let buckets = [TableBucket::new(1, 0)];
+        let fallback = OffsetsInitializer::earliest();
+        single.subscribe_from_committed(&buckets, &fallback)?;
+        multi.subscribe_from_committed(&buckets, &fallback)?;
+        single.poll(Duration::ZERO).await?;
+        multi.poll(Duration::ZERO).await?;
+        // Keep the peer connected without answering discovery.
+        let _peer = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        single.close().await.unwrap();
+        multi.close().await.unwrap();
+        assert!(refs.iter().all(|scanner| scanner.upgrade().is_none()));
+        Ok(())
+    }
+}

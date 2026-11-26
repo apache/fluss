@@ -193,6 +193,15 @@ impl LogScannerInner {
         Ok(())
     }
 
+    pub(super) async fn cancel_position_lookup(&self) {
+        let lookup = self.pending_starts.lock().lookup.take();
+        if let Some(task) = lookup {
+            task.abort();
+            // Wait until the task releases its scanner reference.
+            let _ = task.await;
+        }
+    }
+
     pub(super) async fn prepare_positions(
         self: &Arc<Self>,
         budget: std::time::Duration,
@@ -440,6 +449,7 @@ macro_rules! group_methods {
             /// To confirm the final position, call `commit_sync` and inspect its result before close.
             /// Dropping the scanner without closing it does not commit.
             pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
+                self.inner.cancel_position_lookup().await;
                 if let Some(group) = &self.inner.consumer_group {
                     AutoCommit::finish(self.inner.auto_commit.as_ref(), group).await;
                 }
