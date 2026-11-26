@@ -233,7 +233,7 @@ class MetadataUpdaterITCase {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testGetTableLoadsTableMetadata(boolean partitioned) throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "mapping_only_" + partitioned);
+        TablePath tablePath = tableNames.tablePath("fluss", "mapping_only_" + partitioned);
         TableDescriptor.Builder builder =
                 TableDescriptor.builder()
                         .schema(
