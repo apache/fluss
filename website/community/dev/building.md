@@ -10,6 +10,7 @@ This page covers how to build Fluss from sources.
 In order to build Fluss you need to get the source code by [cloning the git repository](https://github.com/apache/fluss).
 
 In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Fluss requires **Java 11** to build.
+To build for Java 8 instead, see [Building for Java 8](#building-for-java-8).
 
 The Iceberg 1.12 lake plugin (`fluss-lake-iceberg-1.12`) also needs a **JDK 17** installation, which it uses as a
 [Maven toolchain](https://maven.apache.org/guides/mini/guide-using-toolchains.html) while Maven itself keeps running on Java 11.
@@ -60,6 +61,21 @@ mvn clean install -DskipTests -T 1C
 **NOTE**:
 - For local testing, it's recommend to use directory `${project}/build-target` in project.
 - For deploying distributed cluster, it's recommend to use binary file named `fluss-xxx-bin.tgz`, the file is in directory `${project}/fluss-dist/target`.
+
+## Building for Java 8
+
+Fluss compiles for Java 11 by default. To compile for Java 8, run Maven on a JDK 8 installation and turn on the `java8` profile:
+
+```bash
+mvn clean install -DskipTests -Pjava8
+```
+
+The `java8` profile compiles the Java sources with a Java 8 target and leaves out the parts that cannot build on Java 8:
+- the Iceberg lake plugins (`fluss-lake-iceberg` and `fluss-lake-iceberg-1.12`) are not compiled, because the Iceberg versions they use need a newer Java
+- the Spark tests that use Iceberg are excluded
+- the Spotless code formatting check is skipped
+
+CI checks this build in its `Compile Java 8` job.
 
 ## Building the Rust client (fluss-rust)
 
