@@ -17,22 +17,14 @@
 
 use super::{LogScanner, LogScannerInner, RecordBatchLogScanner};
 use crate::client::consumer_offsets::{ConsumerGroup, invalid};
-use crate::client::{OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle, OffsetCommitResult};
+use crate::client::{
+    OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle, OffsetCommitOutcome,
+    OffsetCommitResult,
+};
 use crate::error::Result;
 use crate::metadata::TableBucket;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-/// Failure while committing an automatic offset snapshot.
-#[derive(Debug, thiserror::Error)]
-pub enum AutoCommitError {
-    /// Request failure. A possibly late write restricts rewinds on its buckets.
-    #[error("Automatic commit failed: {0}")]
-    Request(#[from] OffsetCommitError),
-    /// At least one bucket was rejected or has an unknown outcome.
-    #[error("Automatic commit contains unsuccessful buckets: {0:?}")]
-    Buckets(OffsetCommitResult),
-}
 
 pub(super) struct AutoCommit {
     interval: std::time::Duration,
@@ -64,24 +56,22 @@ impl AutoCommit {
         match group.enqueue(offsets.clone()) {
             Ok(handle) => {
                 tokio::spawn(async move {
-                    if let Err(error) = Self::check(handle).await {
-                        log::warn!("Periodic offset commit failed: {error}");
+                    match handle.await {
+                        Err(error) => log::warn!("Periodic offset commit failed: {error}"),
+                        Ok(result)
+                            if result
+                                .values()
+                                .any(|v| !matches!(v, OffsetCommitOutcome::Committed)) =>
+                        {
+                            log::warn!(
+                                "Periodic offset commit contains unsuccessful buckets: {result:?}"
+                            )
+                        }
+                        Ok(_) => {}
                     }
                 });
             }
             Err(error) => log::warn!("Periodic offset commit not queued: {error}"),
-        }
-    }
-
-    async fn check(handle: OffsetCommitHandle) -> std::result::Result<(), AutoCommitError> {
-        let result = handle.await.map_err(OffsetCommitError::from)??;
-        if result
-            .values()
-            .any(|v| !matches!(v, crate::client::OffsetCommitOutcome::Committed))
-        {
-            Err(AutoCommitError::Buckets(result))
-        } else {
-            Ok(())
         }
     }
 
@@ -232,7 +222,7 @@ macro_rules! group_methods {
             }
 
             /// Enqueues explicit next offsets from a Tokio runtime, in call order.
-            /// Dropping or aborting the handle does not cancel the commit. No ordering or fencing is
+            /// Dropping the handle does not cancel the commit. No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
             /// At most 64 commits may be pending per scanner. A full queue returns
             /// `Error::BufferExhausted` before enqueueing; retry after a pending commit finishes.
@@ -250,12 +240,11 @@ macro_rules! group_methods {
             /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
             /// To confirm the final position, call `commit_sync` and inspect its result before close.
             /// Dropping the scanner without closing it does not commit.
-            pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
+            pub async fn close(self) {
                 self.inner.cancel_position_lookup().await;
                 if let Some(group) = &self.inner.consumer_group {
                     AutoCommit::finish(self.inner.auto_commit.as_ref(), group).await;
                 }
-                Ok(())
             }
 
             /// Awaits persistence of the current scanner positions.
@@ -263,7 +252,9 @@ macro_rules! group_methods {
             pub async fn commit_sync(
                 &self,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                await_commit(self.commit_async().map_err(OffsetCommitError::Rejected)?).await
+                self.commit_async()
+                    .map_err(OffsetCommitError::Rejected)?
+                    .await
             }
 
             /// Awaits persistence of explicit next offsets and optional metadata.
@@ -272,20 +263,12 @@ macro_rules! group_methods {
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                await_commit(
-                    self.commit_offsets_async(offsets)
-                        .map_err(OffsetCommitError::Rejected)?,
-                )
-                .await
+                self.commit_offsets_async(offsets)
+                    .map_err(OffsetCommitError::Rejected)?
+                    .await
             }
         }
     };
 }
 group_methods!(LogScanner);
 group_methods!(RecordBatchLogScanner);
-
-async fn await_commit(
-    handle: OffsetCommitHandle,
-) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-    handle.await?
-}

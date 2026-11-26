@@ -58,12 +58,6 @@ impl FlussConnection {
 }
 
 impl MultiTableScan<'_> {
-    /// Table metadata captured for this scan. Use these schemas to decode returned records;
-    /// a later Admin lookup may observe a newer schema than the scanner uses.
-    pub fn table_infos(&self) -> &[TableInfo] {
-        &self.tables
-    }
-
     /// Enables poll-triggered commits of the previous completed polls across all tables.
     /// Process all returned records before polling again. Drop does not perform a final commit.
     pub fn with_auto_commit(mut self, interval: Duration) -> Result<Self> {
@@ -231,10 +225,22 @@ pub struct MultiTableRecordBatchLogScanner {
     inner: MultiTableInner,
 }
 
+impl MultiTableLogScanner {
+    /// Returns the schema used by this scanner for a registered table.
+    pub fn registered_table_info(&self, id: i64) -> Option<Arc<TableInfo>> {
+        self.inner
+            .scanners
+            .read()
+            .iter()
+            .find(|s| s.table_id == id)
+            .map(|s| s.table_info.clone())
+    }
+}
+
 macro_rules! multi_methods {
     ($type:ty, $result:ty, $poll:ident, $empty:expr, $output:expr) => {
         impl $type {
-            /// Polls fairly across tables. Process the previous result before polling again
+            /// Each nonempty poll returns buckets from one ready table. Process the previous result before polling again
             /// when auto-commit is enabled. An error never discards another table's returned data.
             pub async fn poll(&self, timeout: Duration) -> Result<$result> {
                 let deadline = tokio::time::Instant::now() + timeout;
@@ -267,16 +273,6 @@ macro_rules! multi_methods {
                     }
                     tokio::time::sleep((deadline - now).min(Duration::from_millis(10))).await;
                 }
-            }
-
-            /// Returns the schema used by this scanner for a registered table.
-            pub fn registered_table_info(&self, id: i64) -> Option<Arc<TableInfo>> {
-                self.inner
-                    .scanners
-                    .read()
-                    .iter()
-                    .find(|s| s.table_id == id)
-                    .map(|s| s.table_info.clone())
             }
 
             /// Registers a table by path on demand, returning the schema used to decode its rows.
@@ -361,17 +357,16 @@ macro_rules! multi_methods {
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
                 self.commit_async()
                     .map_err(OffsetCommitError::Rejected)?
-                    .await?
+                    .await
             }
 
             /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
-            pub async fn close(self) -> std::result::Result<(), AutoCommitError> {
+            pub async fn close(self) {
                 let scanners = self.inner.scanners.read().clone();
                 for scanner in scanners.iter() {
                     scanner.cancel_position_lookup().await;
                 }
                 AutoCommit::finish(self.inner.auto_commit.as_ref(), &self.inner.group).await;
-                Ok(())
             }
 
             /// Commits explicit next offsets. After an unknown outcome, unsafe rewinds are rejected for the affected buckets.
@@ -381,7 +376,7 @@ macro_rules! multi_methods {
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
                 self.commit_offsets_async(offsets)
                     .map_err(OffsetCommitError::Rejected)?
-                    .await?
+                    .await
             }
         }
     };
@@ -443,8 +438,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        single.close().await.unwrap();
-        multi.close().await.unwrap();
+        single.close().await;
+        multi.close().await;
         assert!(refs.iter().all(|scanner| scanner.upgrade().is_none()));
         Ok(())
     }

@@ -58,8 +58,8 @@ pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
 pub use scanner::{
-    AutoCommitError, LogScanner, MultiTableLogScanner, MultiTableRecordBatchLogScanner,
-    MultiTableScan, RecordBatchLogScanner, TableScan,
+    LogScanner, MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan,
+    RecordBatchLogScanner, TableScan,
 };
 pub use upsert::{TableUpsert, UpsertWriter};
 
