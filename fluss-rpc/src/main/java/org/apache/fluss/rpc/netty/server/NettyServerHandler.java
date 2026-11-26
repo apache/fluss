@@ -40,7 +40,7 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.CorruptedFrameException;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -65,11 +65,10 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLooku
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 
 /** Implementation of the channel handler to process inbound requests for RPC server. */
-public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
+public final class NettyServerHandler extends RequestAdmissionHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(NettyServerHandler.class);
 
-    private final RequestChannel requestChannel;
     private final ApiManager apiManager;
     private final boolean isInternal;
     private final String listenerName;
@@ -89,7 +88,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             boolean isInternal,
             RequestsMetrics requestsMetrics,
             ServerAuthenticator authenticator) {
-        this.requestChannel = requestChannel;
+        super(requestChannel);
         this.apiManager = apiManager;
         this.listenerName = listenerName;
         this.isInternal = isInternal;
@@ -99,34 +98,41 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        CompletableFuture<ApiMessage> future = new CompletableFuture<>();
-        ByteBuf buffer = (ByteBuf) msg;
-        int frameLength = buffer.readInt();
-        short apiKey = buffer.readShort();
-        short apiVersion = buffer.readShort();
-        int requestId = buffer.readInt();
-        int messageSize = frameLength - MessageCodec.REQUEST_HEADER_LENGTH;
+    protected boolean handlesInline(ByteBuf frame) {
+        if (frame.readableBytes() < Integer.BYTES + Short.BYTES) {
+            return true;
+        }
+        return handlesInline(frame.getShort(frame.readerIndex() + Integer.BYTES));
+    }
 
-        boolean needRelease = false;
+    private boolean handlesInline(short apiKey) {
+        return apiKey == ApiKeys.AUTHENTICATE.id
+                || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id);
+    }
+
+    @Override
+    protected void handleFrame(ChannelHandlerContext ctx, ByteBuf buffer) {
+        if (buffer.readableBytes() < Integer.BYTES + MessageCodec.REQUEST_HEADER_LENGTH) {
+            buffer.release();
+            handleFailure(ctx, new CorruptedFrameException("RPC frame is shorter than its header"));
+            return;
+        }
+        CompletableFuture<ApiMessage> future = new CompletableFuture<>();
+        boolean needRelease = true;
         try {
+            int frameLength = buffer.readInt();
+            short apiKey = buffer.readShort();
+            short apiVersion = buffer.readShort();
+            int requestId = buffer.readInt();
+            int messageSize = frameLength - MessageCodec.REQUEST_HEADER_LENGTH;
             ApiMethod api = apiManager.getApi(apiKey);
             if (api == null) {
                 LOG.warn("Received unknown API key {}.", apiKey);
-                needRelease = true;
                 return;
             }
 
             ApiMessage requestMessage = api.getRequestConstructor().get();
             requestMessage.parseFrom(buffer, messageSize);
-            // Most request types are parsed entirely into objects at this point. For those we can
-            // release the underlying buffer.
-            // However, some (like produce) retain a reference to the buffer. For those requests we
-            // cannot release the buffer early, but only when request processing is done.
-            if (!requestMessage.isLazilyParsed()) {
-                needRelease = true;
-            }
-
             FlussRequest request =
                     new FlussRequest(
                             apiKey,
@@ -147,20 +153,20 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             if (!state.isActive()) {
                 LOG.warn("Received a request on an inactive channel: {}", remoteAddress);
                 request.fail(new NetworkException("Channel is inactive"));
-                needRelease = true;
                 return;
             }
 
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
-            if (apiKey == ApiKeys.AUTHENTICATE.id
-                    || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
+            if (handlesInline(apiKey)) {
                 // handle to authentication for 3 cases:
                 // 1. the channel is in authing state, and the request is auth request, normal case
                 // 2. the channel is in authentication state, but receive non-auth request, error
                 // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
             } else {
-                requestChannel.putRequest(request);
+                enqueue(request);
+                // Lazily parsed requests transfer the buffer to the worker.
+                needRelease = !requestMessage.isLazilyParsed();
             }
 
         } catch (Throwable t) {
@@ -184,10 +190,6 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                         ? ConnectionState.READY
                         : ConnectionState.AUTHENTICATING);
 
-        // Register this channel with its RequestChannel. The RequestChannel will manage this
-        // channel's lifecycle and backpressure state.
-        requestChannel.registerChannel(ctx.channel());
-
         // TODO: connection metrics (count, client tags, receive request avg idle time, etc.)
     }
 
@@ -195,9 +197,6 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         try {
             IOUtils.closeQuietly(authenticator);
-            // Unregister this channel from its RequestChannel. The RequestChannel will clean up
-            // both the association and any paused state.
-            requestChannel.unregisterChannel(ctx.channel());
         } finally {
             super.channelInactive(ctx);
         }
@@ -215,7 +214,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+    protected void handleFailure(ChannelHandlerContext ctx, Throwable cause) {
         // debug level to avoid too many logs if NLB(Network Load Balancer is mounted, see
         // more detail in #377
         // may revert to warn level if we found warn level is necessary

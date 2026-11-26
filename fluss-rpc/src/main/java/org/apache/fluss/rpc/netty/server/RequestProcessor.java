@@ -75,7 +75,11 @@ final class RequestProcessor implements Runnable {
                         // RpcGateway shouldn't hold the reference to the request/ByteBuf after
                         // the invoking of RPC method, i.e. async execution shouldn't retain the
                         // request/ByteBuf. The request/ByteBuf is released after the RPC method.
-                        request.releaseBuffer();
+                        try {
+                            request.releaseBuffer();
+                        } finally {
+                            requestChannel.requestFinished();
+                        }
                     }
                 }
             }
@@ -100,7 +104,7 @@ final class RequestProcessor implements Runnable {
 
     public void initiateShutdown() {
         try {
-            requestChannel.putShutdownRequest();
+            requestChannel.close();
         } catch (Exception e) {
             LOG.warn("Failed to send shutdown request to request channel.", e);
         }

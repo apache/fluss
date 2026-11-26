@@ -52,20 +52,19 @@ final class RequestProcessorPool {
     public RequestProcessorPool(
             int numProcessors,
             int totalQueueCapacity,
+            int maxPendingPerConnection,
             RpcGatewayService service,
             RequestHandler<?>[] requestHandlers,
             RequestsMetrics requestsMetrics,
             int processorIndexOffset,
             String threadName) {
         this.processors = new RequestProcessor[numProcessors];
-        this.requestChannels = new RequestChannel[numProcessors];
+        this.requestChannels =
+                RequestChannel.forGroup(numProcessors, totalQueueCapacity, maxPendingPerConnection);
         this.threadName = threadName;
 
         for (int i = 0; i < numProcessors; i++) {
-            RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
-            requestChannels[i] = requestChannel;
-            // bind processor to a single channel to make requests from the
-            // same channel processed serializable
+            RequestChannel requestChannel = requestChannels[i];
             int processorIndex = processorIndexOffset + i;
             processors[i] =
                     new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
@@ -78,11 +77,7 @@ final class RequestProcessorPool {
     }
 
     public int getRequestQueueSize() {
-        // sum all the requests in all the requestChannels
-        return Arrays.stream(requestChannels)
-                .map(RequestChannel::requestsCount)
-                .reduce(Integer::sum)
-                .orElse(0);
+        return requestChannels[0].groupRequestsCount();
     }
 
     public RequestChannel[] getRequestChannels() {

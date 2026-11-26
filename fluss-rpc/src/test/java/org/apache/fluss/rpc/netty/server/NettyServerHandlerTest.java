@@ -69,10 +69,12 @@ import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
 
 import org.junit.jupiter.api.Disabled;
@@ -81,6 +83,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -803,6 +806,74 @@ final class NettyServerHandlerTest {
         assertThat(inflightApiVersionResponses.size()).isEqualTo(5);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {2, 3, 5})
+    void testPendingLimitStopsAndResumesFlussFramesInOrder(int depth) {
+        RequestChannel worker = RequestChannel.forGroup(1, 100, depth)[0];
+        TestEmbeddedChannel connection = new TestEmbeddedChannel(newServerHandler(worker));
+        try {
+            for (int id = 0; id <= depth; id++) {
+                connection.writeInbound(apiVersionsFrame(id));
+            }
+            assertThat(connection.config().isAutoRead()).isFalse();
+            assertThat(worker.requestsCount()).isEqualTo(depth);
+
+            for (int id = 0; id <= depth; id++) {
+                FlussRequest request = (FlussRequest) worker.pollRequest(0);
+                assertThat(request).isNotNull();
+                assertThat(request.getRequestId()).isEqualTo(id);
+                connection.runPendingTasks();
+                if (id == 0) {
+                    assertThat(worker.requestsCount()).isEqualTo(depth);
+                }
+                request.releaseBuffer();
+                worker.requestFinished();
+            }
+            assertThat(connection.config().isAutoRead()).isTrue();
+        } finally {
+            connection.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testFramingFailureAfterBufferedRequestPreservesValidPrefix() {
+        RequestChannel worker = new RequestChannel(1);
+        TestEmbeddedChannel connection = new TestEmbeddedChannel(newServerHandler(worker));
+        connection.pipeline().addFirst(new LengthFieldBasedFrameDecoder(256, 0, 4, 0, 0));
+        ByteBuf batch =
+                Unpooled.wrappedBuffer(
+                        apiVersionsFrame(1), apiVersionsFrame(2), Unpooled.buffer(4).writeInt(512));
+        try {
+            connection.writeInbound(batch);
+            assertThat(connection.isActive()).isTrue();
+            assertThat(worker.requestsCount()).isOne();
+
+            FlussRequest first = (FlussRequest) worker.pollRequest(0);
+            assertThat(first.getRequestId()).isOne();
+            worker.requestFinished();
+
+            connection.runPendingTasks();
+            assertThat(connection.isActive()).isFalse();
+            FlussRequest second = (FlussRequest) worker.pollRequest(0);
+            assertThat(second.getRequestId()).isEqualTo(2);
+            worker.requestFinished();
+            assertThat(batch.refCnt()).isZero();
+        } finally {
+            connection.finishAndReleaseAll();
+        }
+    }
+
+    private static ByteBuf apiVersionsFrame(int requestId) {
+        return MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.API_VERSIONS.id,
+                ApiKeys.API_VERSIONS.highestSupportedVersion,
+                requestId,
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("admission-test")
+                        .setClientSoftwareVersion("1"));
+    }
+
     private static NettyServerHandler newServerHandler(RequestChannel requestChannel) {
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         return new NettyServerHandler(
@@ -896,9 +967,9 @@ final class NettyServerHandlerTest {
         }
 
         @Override
-        public void putRequest(RpcRequest request) {
+        public boolean putRequest(Connection connection, RpcRequest request) {
             putRequestInvocations++;
-            super.putRequest(request);
+            return super.putRequest(connection, request);
         }
 
         private int getPutRequestInvocations() {
@@ -919,8 +990,8 @@ final class NettyServerHandlerTest {
         }
 
         @Override
-        public void putRequest(RpcRequest request) {
-            super.putRequest(request);
+        public boolean putRequest(Connection connection, RpcRequest request) {
+            boolean full = super.putRequest(connection, request);
             if (request != ShutdownRequest.INSTANCE) {
                 try {
                     getWithTimeout(capturedRecords, "request processor to capture records");
@@ -929,6 +1000,7 @@ final class NettyServerHandlerTest {
                     throw t;
                 }
             }
+            return full;
         }
     }
 

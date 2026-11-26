@@ -17,8 +17,14 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
+import org.apache.fluss.rpc.netty.server.FlussRequest;
+import org.apache.fluss.rpc.netty.server.NettyServerHandler;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
+import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
@@ -39,6 +45,8 @@ import org.apache.kafka.common.requests.RequestUtils;
 import org.apache.kafka.common.requests.ResponseHeader;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 
 import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
@@ -166,6 +174,7 @@ public class KafkaCommandDecoderTest extends KafkaServerTestBase {
             channel.writeInbound(produceBuffer);
             channel.writeInbound(apiVersionsBuffer);
             KafkaRequest first = (KafkaRequest) requestChannel.pollRequest(1000);
+            requestChannel.requestFinished();
             KafkaRequest second = (KafkaRequest) requestChannel.pollRequest(1000);
             assertThat(first).isNotNull();
             assertThat(second).isNotNull();
@@ -204,6 +213,82 @@ public class KafkaCommandDecoderTest extends KafkaServerTestBase {
         } finally {
             channel.finishAndReleaseAll();
         }
+    }
+
+    @Test
+    void testFlussAndKafkaShareAdmissionAndDisconnectDropsBufferedFrame() {
+        RequestChannel worker = new RequestChannel(1);
+        EmbeddedChannel fluss =
+                new EmbeddedChannel(
+                        new NettyServerHandler(
+                                worker,
+                                new ApiManager(ServerType.TABLET_SERVER),
+                                "FLUSS",
+                                false,
+                                createRequestMetrics(),
+                                new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator())) {
+                    @Override
+                    protected SocketAddress remoteAddress0() {
+                        return new InetSocketAddress("127.0.0.1", 8000);
+                    }
+                };
+        EmbeddedChannel firstKafka = kafkaConnection(worker);
+        EmbeddedChannel secondKafka = kafkaConnection(worker);
+        org.apache.fluss.rpc.protocol.ApiKeys versions =
+                org.apache.fluss.rpc.protocol.ApiKeys.API_VERSIONS;
+        ByteBuf firstKafkaFrame = kafkaVersionsFrame(1);
+        try {
+            fluss.writeInbound(
+                    MessageCodec.encodeRequest(
+                            fluss.alloc(),
+                            versions.id,
+                            versions.highestSupportedVersion,
+                            1,
+                            new org.apache.fluss.rpc.messages.ApiVersionsRequest()
+                                    .setClientSoftwareName("admission-test")
+                                    .setClientSoftwareVersion("1")));
+            firstKafka.writeInbound(firstKafkaFrame);
+            secondKafka.writeInbound(kafkaVersionsFrame(2));
+            assertThat(worker.requestsCount()).isOne();
+            assertThat(firstKafka.config().isAutoRead()).isFalse();
+            assertThat(secondKafka.config().isAutoRead()).isFalse();
+
+            firstKafka.close();
+            assertThat(firstKafkaFrame.refCnt()).isZero();
+
+            FlussRequest first = (FlussRequest) worker.pollRequest(0);
+            assertThat(first).isNotNull();
+            first.releaseBuffer();
+            secondKafka.runPendingTasks();
+            assertThat(worker.requestsCount())
+                    .as("admission does not wait for handler return")
+                    .isOne();
+            worker.requestFinished();
+
+            KafkaRequest second = (KafkaRequest) worker.pollRequest(0);
+            assertThat(second).isNotNull();
+            assertThat(second.header().correlationId()).isEqualTo(2);
+            second.releaseBuffer();
+            worker.requestFinished();
+            secondKafka.runPendingTasks();
+            assertThat(secondKafka.config().isAutoRead()).isTrue();
+        } finally {
+            fluss.finishAndReleaseAll();
+            firstKafka.finishAndReleaseAll();
+            secondKafka.finishAndReleaseAll();
+        }
+    }
+
+    private static EmbeddedChannel kafkaConnection(RequestChannel worker) {
+        return new EmbeddedChannel(
+                new KafkaCommandDecoder(worker, "KAFKA", null, createRequestMetrics()));
+    }
+
+    private static ByteBuf kafkaVersionsFrame(int correlationId) {
+        ApiVersionsRequest request = new ApiVersionsRequest.Builder().build((short) 0);
+        return serialize(
+                new RequestHeader(ApiKeys.API_VERSIONS, (short) 0, "client", correlationId),
+                request);
     }
 
     private static ByteBuf serialize(RequestHeader header, AbstractRequest request) {

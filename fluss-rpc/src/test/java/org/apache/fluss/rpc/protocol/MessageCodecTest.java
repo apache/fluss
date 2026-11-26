@@ -77,6 +77,7 @@ class MessageCodecTest {
                         RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
+        serverHandler.handlerAdded(ctx);
         serverHandler.channelActive(ctx);
     }
 

@@ -17,268 +17,388 @@
 
 package org.apache.fluss.rpc.netty.server;
 
-import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.ArrayDeque;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
-/**
- * A queue channel that can receive requests and send responses.
- *
- * <p>Uses an unbounded LinkedBlockingQueue to ensure that putRequest() never blocks, preventing
- * EventLoop threads from being blocked. Backpressure is applied at the TCP level by pausing channel
- * reads when the queue size exceeds the backpressure threshold.
- *
- * <p>Each RequestChannel instance manages its own associated Netty channels (those hashed to this
- * RequestChannel) and independently controls their backpressure state. This design encapsulates all
- * backpressure logic within the RequestChannel, eliminating the need for global state management.
- */
+import static org.apache.fluss.utils.Preconditions.checkState;
+
+/** A worker's view of the TCP connection queues in its listener resource group. */
 @ThreadSafe
 public class RequestChannel {
-    private static final Logger LOG = LoggerFactory.getLogger(RequestChannel.class);
+    private final Group group;
+    private final Condition available;
+    private final ArrayDeque<Connection> ready = new ArrayDeque<>();
+    private Connection running;
+    private boolean waiting;
+    private boolean stealWakeup;
+    // Updates still use the group lock. Per-worker gauges read a single snapshot.
+    private volatile int queued;
 
-    /** Unbounded blocking queue to hold incoming requests. Never blocks on put. */
-    protected final BlockingQueue<RpcRequest> requestQueue;
-
-    /**
-     * The threshold at which backpressure should be applied (pausing channel reads). When queue
-     * size exceeds this value, channels should be paused to prevent memory exhaustion.
-     */
-    private final int backpressureThreshold;
-
-    /**
-     * The threshold at which to resume paused channels. Set to 50% of backpressureThreshold to
-     * provide hysteresis and avoid thrashing.
-     */
-    private final int resumeThreshold;
-
-    /**
-     * All Netty channels that are hashed to this RequestChannel. Channels are registered when they
-     * become active and unregistered when they become inactive.
-     *
-     * <p>When backpressure is applied, ALL channels in this set are paused simultaneously. When
-     * backpressure is released, ALL channels are resumed simultaneously.
-     */
-    private final Set<Channel> associatedChannels = ConcurrentHashMap.newKeySet();
-
-    /**
-     * Indicates whether backpressure is currently active. When true, all associated channels have
-     * been paused (setAutoRead(false)). When false, all channels are running normally.
-     *
-     * <p>Volatile ensures visibility for fast-path reads (outside the lock). All modifications are
-     * protected by backpressureLock, so atomicity is guaranteed by the lock, not by atomic
-     * operations.
-     */
-    private volatile boolean isBackpressureActive = false;
-
-    /**
-     * Lock to protect backpressure state transitions and task submissions. This lock ensures that:
-     * 1. State checks and task submissions are atomic (preventing permanent channel blocking) 2.
-     * Pause and resume operations are mutually exclusive 3. New channel registration correctly
-     * synchronizes with current backpressure state
-     *
-     * <p>The lock eliminates the need for CAS operations - simple boolean checks and assignments
-     * under the lock are sufficient for correctness.
-     */
-    private final ReentrantLock backpressureLock = new ReentrantLock();
-
-    public RequestChannel(int backpressureThreshold) {
-        this.requestQueue = new LinkedBlockingQueue<>();
-        this.backpressureThreshold = Math.max(1, backpressureThreshold);
-        this.resumeThreshold = this.backpressureThreshold / 2;
+    /** Creates a standalone request channel. */
+    public RequestChannel(int queueCapacity) {
+        this(new Group(1, queueCapacity, queueCapacity));
+        group.workers[0] = this;
     }
 
-    /**
-     * Send a request to be handled. Since this uses an unbounded queue, this method never blocks,
-     * ensuring EventLoop threads are never blocked by queue operations.
-     *
-     * <p>After adding the request, automatically checks if backpressure should be applied. If the
-     * queue size exceeds the backpressure threshold, ALL channels associated with this
-     * RequestChannel will be paused to prevent further memory growth.
-     *
-     * <p>The common path uses lock-free state and queue-size reads. The lock is acquired only when
-     * a backpressure transition may be required.
-     */
-    public void putRequest(RpcRequest request) {
-        requestQueue.add(request);
-        reconcileBackpressure();
+    private RequestChannel(Group group) {
+        this.group = group;
+        this.available = group.lock.newCondition();
     }
 
-    /**
-     * Sends a shutdown request to the channel. This can allow request processor gracefully
-     * shutdown.
-     */
-    public void putShutdownRequest() {
-        putRequest(ShutdownRequest.INSTANCE);
+    static RequestChannel[] forGroup(int workers, int capacity, int perConnection) {
+        Group group = new Group(workers, capacity, perConnection);
+        RequestChannel[] channels = group.workers;
+        for (int i = 0; i < workers; i++) {
+            channels[i] = new RequestChannel(group);
+        }
+        return channels;
     }
 
-    /**
-     * Get the next request, waiting up to the specified timeout if the queue is empty. After
-     * successfully polling a request, attempts to resume paused channels if the queue size has
-     * dropped below the resume threshold.
-     *
-     * @return the head of this queue, or null if the specified waiting time elapses before an
-     *     element is available.
-     */
-    public RpcRequest pollRequest(long timeoutMs) {
+    /** Creates an initially empty TCP connection with a callback to schedule read resumption. */
+    public Connection newConnection(Runnable scheduleResume) {
+        return new Connection(this, scheduleResume);
+    }
+
+    /** Reserves a slot before delivering the next complete frame to the protocol handler. */
+    public boolean acquireRead(Connection connection) {
+        group.lock.lock();
         try {
-            RpcRequest request = requestQueue.poll(timeoutMs, TimeUnit.MILLISECONDS);
-            if (request != null) {
-                reconcileBackpressure();
+            if (group.closed || connection.closed) {
+                return false;
             }
+            if (connection.readPermit) {
+                return true;
+            }
+            if (connection.pending.size() == group.perConnection) {
+                connection.wait = ReadWait.LOCAL_FRAME;
+            } else if (group.used == group.capacity) {
+                connection.wait = ReadWait.GROUP_FRAME;
+                group.readWaiters.add(connection);
+            } else {
+                group.reserve(connection);
+                return true;
+            }
+            return false;
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    boolean canReadSocket(Connection connection) {
+        group.lock.lock();
+        try {
+            return !group.closed && connection.pending.size() < group.perConnection;
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    /** Returns an unused permit after inline processing or parsing failure. */
+    public void returnRead(Connection connection) {
+        group.lock.lock();
+        try {
+            group.returnPermit(connection);
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    /** Stops admitting frames and releases the connection's unused reading permit. */
+    public void closeConnection(Connection connection) {
+        group.lock.lock();
+        try {
+            if (connection.wait == ReadWait.GROUP_FRAME) {
+                group.readWaiters.remove(connection);
+            }
+            connection.wait = ReadWait.NONE;
+            connection.closed = true;
+            group.returnPermit(connection);
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    /**
+     * Converts the read permit into a queued request. Returns whether the local FIFO reached its
+     * limit.
+     */
+    public boolean putRequest(Connection connection, RpcRequest request) {
+        group.lock.lock();
+        try {
+            checkState(!group.closed && !connection.closed, "Connection is closed for requests.");
+            checkState(connection.readPermit, "Request has no reading permit.");
+            connection.readPermit = false;
+            RequestChannel owner = connection.owner;
+            connection.pending.addLast(request);
+            int size = connection.pending.size();
+            owner.queued++;
+            if (size == 1 && owner.running != connection) {
+                owner.makeReady(connection);
+            }
+            if (size == group.perConnection) {
+                connection.wait = ReadWait.LOCAL_IDLE;
+                return true;
+            }
+            return false;
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    /** Claims a connection head and advances that connection only after synchronous completion. */
+    public RpcRequest pollRequest(long timeoutMs) {
+        group.lock.lock();
+        try {
+            checkState(running == null, "Previous request has not finished.");
+            long remaining = TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+            Connection connection;
+            while ((connection = claimReady()) == null) {
+                if (group.closed) {
+                    return ShutdownRequest.INSTANCE;
+                }
+                if (remaining <= 0) {
+                    return null;
+                }
+                waiting = true;
+                try {
+                    remaining = available.awaitNanos(remaining);
+                } finally {
+                    waiting = false;
+                }
+            }
+            running = connection;
+            queued--;
+            signalThief();
+            if (stealWakeup) {
+                stealWakeup = false;
+                // Local work may have arrived before this worker resumed its steal.
+                for (RequestChannel donor : group.workers) {
+                    if (donor != this && donor.signalThief()) {
+                        break;
+                    }
+                }
+            }
+            RpcRequest request = connection.pending.removeFirst();
+            group.releaseQueueSlot(connection);
             return request;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;
+        } finally {
+            group.lock.unlock();
         }
     }
 
-    /** Get the number of requests in the queue. */
-    public int requestsCount() {
-        return requestQueue.size();
-    }
-
-    /**
-     * Registers a Netty channel as being associated with this RequestChannel. This is called when a
-     * channel becomes active and is hashed to this RequestChannel.
-     *
-     * <p>IMPORTANT: New channels are NOT immediately paused even if backpressure is active. This is
-     * critical for system health: 1. Health check connections must not be blocked at startup 2. New
-     * connections will naturally be controlled by the next backpressure check 3. Immediately
-     * pausing new connections can cause deadlock at startup when queue is full but processing is
-     * slow
-     *
-     * @param channel the channel to register
-     */
-    public void registerChannel(Channel channel) {
-        associatedChannels.add(channel);
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug(
-                    "Registered channel {} to RequestChannel (backpressure threshold: {}, associated channels: {}, backpressure active: {})",
-                    channel.remoteAddress(),
-                    backpressureThreshold,
-                    associatedChannels.size(),
-                    isBackpressureActive);
-        }
-    }
-
-    /**
-     * Unregisters a Netty channel from this RequestChannel. This is called when a channel becomes
-     * inactive.
-     *
-     * @param channel the channel to unregister
-     */
-    public void unregisterChannel(Channel channel) {
-        associatedChannels.remove(channel);
-        if (LOG.isDebugEnabled()) {
-            LOG.debug(
-                    "Unregistered channel {} from RequestChannel (associated channels: {}, backpressure active: {})",
-                    channel.remoteAddress(),
-                    associatedChannels.size(),
-                    isBackpressureActive);
-        }
-    }
-
-    /** Reconciles the backpressure state with the current queue size. */
-    private void reconcileBackpressure() {
-        int queueSize = requestQueue.size();
-        boolean backpressureActive = isBackpressureActive;
-        if (backpressureActive ? queueSize > resumeThreshold : queueSize < backpressureThreshold) {
-            return;
-        }
-
-        backpressureLock.lock();
+    /** Makes the next request from the claimed connection eligible to run. */
+    public void requestFinished() {
+        group.lock.lock();
         try {
-            while (true) {
-                queueSize = requestQueue.size();
-                if (isBackpressureActive) {
-                    if (queueSize > resumeThreshold) {
-                        return;
-                    }
-                    isBackpressureActive = false;
-                    resumeAllChannels(queueSize);
-                } else {
-                    if (queueSize < backpressureThreshold) {
-                        return;
-                    }
-                    isBackpressureActive = true;
-                    pauseAllChannels(queueSize);
-                }
+            Connection connection = running;
+            running = null;
+            if (!connection.pending.isEmpty()) {
+                makeReady(connection);
             }
         } finally {
-            backpressureLock.unlock();
+            group.lock.unlock();
         }
     }
 
-    private void pauseAllChannels(int queueSize) {
-        for (Channel channel : associatedChannels) {
-            if (channel.isActive()) {
-                // Submit to the channel's EventLoop to ensure thread safety
-                executeOnEventLoop(
-                        channel,
-                        () -> {
-                            if (channel.isActive() && channel.config().isAutoRead()) {
-                                channel.config().setAutoRead(false);
-                                LOG.warn(
-                                        "Queue size ({}) reached backpressure threshold ({}), paused channel: {}",
-                                        queueSize,
-                                        backpressureThreshold,
-                                        channel.remoteAddress());
-                            }
-                        });
-            }
-        }
+    /** Returns the number of requests queued for this worker. */
+    public int requestsCount() {
+        return queued;
     }
 
-    private void resumeAllChannels(int queueSize) {
-        for (Channel channel : associatedChannels) {
-            if (channel.isActive()) {
-                // Submit resume task to the channel's EventLoop to ensure thread safety
-                executeOnEventLoop(
-                        channel,
-                        () -> {
-                            if (channel.isActive() && !channel.config().isAutoRead()) {
-                                channel.config().setAutoRead(true);
-                                LOG.info(
-                                        "Queue size ({}) reached resume threshold ({}), resumed channel: {}",
-                                        queueSize,
-                                        resumeThreshold,
-                                        channel.remoteAddress());
-                            }
-                        });
-            }
-        }
-    }
-
-    /**
-     * Executes the task on the channel's EventLoop. The EventLoop may already be shutting down
-     * (e.g. during server shutdown) even though the channel was still active when checked; in that
-     * case the task is skipped, because the channel is about to be closed anyway. Letting the
-     * rejection propagate would kill the calling request processor thread, and its shutdown future
-     * would never complete.
-     *
-     * <p>A skipped task leaves {@link #isBackpressureActive} out of sync with the channel's actual
-     * auto-read state. This is harmless, as the channel is closed together with its EventLoop.
-     */
-    private static void executeOnEventLoop(Channel channel, Runnable task) {
+    int groupRequestsCount() {
+        group.lock.lock();
         try {
-            channel.eventLoop().execute(task);
-        } catch (RejectedExecutionException e) {
-            LOG.debug(
-                    "Skip backpressure task for channel {} because its event loop is shutting down.",
-                    channel.remoteAddress(),
-                    e);
+            int total = 0;
+            for (RequestChannel worker : group.workers) {
+                total += worker.queued;
+            }
+            return total;
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    void close() {
+        group.lock.lock();
+        try {
+            if (group.closed) {
+                return;
+            }
+            group.closed = true;
+            group.readWaiters.clear();
+            for (RequestChannel worker : group.workers) {
+                worker.signal();
+            }
+        } finally {
+            group.lock.unlock();
+        }
+    }
+
+    private void makeReady(Connection connection) {
+        connection.readyOrder = group.nextReadyOrder++;
+        ready.addLast(connection);
+        signal();
+        signalThief();
+    }
+
+    private Connection claimReady() {
+        if (!ready.isEmpty()) {
+            return ready.removeFirst();
+        }
+        Connection oldest = null;
+        for (RequestChannel donor : group.workers) {
+            if (!donor.canShare()) {
+                continue;
+            }
+            Connection head = donor.ready.getFirst();
+            if (donor.running == null) {
+                // Keep the donor's first head available for its local claim.
+                Iterator<Connection> candidates = donor.ready.iterator();
+                candidates.next();
+                head = candidates.next();
+            }
+            if (oldest == null || head.readyOrder < oldest.readyOrder) {
+                oldest = head;
+            }
+        }
+        if (oldest != null) {
+            RequestChannel donor = oldest.owner;
+            donor.ready.removeFirstOccurrence(oldest);
+            int pending = oldest.pending.size();
+            donor.queued -= pending;
+            queued += pending;
+            oldest.owner = this;
+            donor.signalThief();
+            return oldest;
+        }
+        return null;
+    }
+
+    private boolean canShare() {
+        // Leave a head for the donor if it is between handlers.
+        return ready.size() > (running == null ? 1 : 0);
+    }
+
+    private boolean signalThief() {
+        if (canShare()) {
+            for (RequestChannel worker : group.workers) {
+                if (worker.waiting && worker != this) {
+                    worker.stealWakeup = true;
+                    worker.signal();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void signal() {
+        if (waiting) {
+            waiting = false;
+            available.signal();
+        }
+    }
+
+    /** The FIFO and current worker assignment for one TCP connection. */
+    public static final class Connection {
+        private final ArrayDeque<RpcRequest> pending = new ArrayDeque<>(1);
+        private final Runnable scheduleResume;
+        private RequestChannel owner;
+        private long readyOrder;
+        private ReadWait wait = ReadWait.NONE;
+        private boolean readPermit;
+        private boolean closed;
+
+        private Connection(RequestChannel owner, Runnable scheduleResume) {
+            this.owner = owner;
+            this.scheduleResume = scheduleResume;
+        }
+    }
+
+    private enum ReadWait {
+        NONE,
+        LOCAL_IDLE,
+        LOCAL_FRAME,
+        GROUP_FRAME
+    }
+
+    private static final class Group {
+        private final ReentrantLock lock = new ReentrantLock();
+        private final RequestChannel[] workers;
+        private final int capacity;
+        private final int perConnection;
+        private final LinkedHashSet<Connection> readWaiters = new LinkedHashSet<>();
+        private int used;
+        private long nextReadyOrder;
+        private boolean closed;
+
+        private Group(int workers, int capacity, int perConnection) {
+            this.workers = new RequestChannel[workers];
+            this.capacity = Math.max(1, capacity);
+            this.perConnection = Math.max(1, perConnection);
+        }
+
+        private void reserve(Connection connection) {
+            used++;
+            connection.readPermit = true;
+            connection.wait = ReadWait.NONE;
+        }
+
+        private void returnPermit(Connection connection) {
+            if (connection.readPermit) {
+                connection.readPermit = false;
+                used--;
+                grantWaitingRead();
+            }
+        }
+
+        private void releaseQueueSlot(Connection connection) {
+            used--;
+            ReadWait wait = connection.wait;
+            if (wait == ReadWait.LOCAL_FRAME) {
+                connection.wait = ReadWait.GROUP_FRAME;
+                readWaiters.add(connection);
+            } else if (wait == ReadWait.LOCAL_IDLE) {
+                connection.wait = ReadWait.NONE;
+                if (!closed) {
+                    scheduleResume(connection);
+                }
+            }
+            grantWaitingRead();
+        }
+
+        private void grantWaitingRead() {
+            while (!closed && used < capacity && !readWaiters.isEmpty()) {
+                Iterator<Connection> iterator = readWaiters.iterator();
+                Connection connection = iterator.next();
+                iterator.remove();
+                reserve(connection);
+                if (scheduleResume(connection)) {
+                    return;
+                }
+                connection.readPermit = false;
+                used--;
+            }
+        }
+
+        private boolean scheduleResume(Connection connection) {
+            try {
+                connection.scheduleResume.run();
+                return true;
+            } catch (RejectedExecutionException ignored) {
+                connection.closed = true;
+                return false;
+            }
         }
     }
 }

@@ -1355,14 +1355,18 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(500)
                     .withDescription(
-                            "The queued-request backpressure threshold per listener resource group, "
-                                    + "divided among its worker threads. When a worker queue reaches its "
-                                    + "threshold, reads are paused on its associated connections. Queues "
-                                    + "are unbounded; this is not a hard limit on queued requests. When "
-                                    + "the server binds both the listener selected by internal.listener.name "
-                                    + "and external listeners, the internal listener uses a dedicated "
-                                    + "group and all external listeners share another group. Otherwise, "
-                                    + "all listeners share one group.");
+                            "The maximum number of requests waiting to be claimed by workers "
+                                    + "in each listener resource group, including reserved reads. "
+                                    + "A separate internal listener has its own quota. All external "
+                                    + "listeners share one quota.");
+
+    public static final ConfigOption<Integer> NETTY_SERVER_MAX_PENDING_REQUESTS_PER_CONNECTION =
+            key("netty.server.max-pending-requests-per-connection")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of requests waiting to be claimed by a worker "
+                                    + "on each TCP connection, including a reserved read.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
             key("netty.server.max-queued-historical-requests")

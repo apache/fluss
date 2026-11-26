@@ -24,7 +24,6 @@ import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldPrepender;
-import org.apache.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
 import org.apache.fluss.utils.MathUtils;
 
 import javax.annotation.Nullable;
@@ -71,7 +70,6 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
         addIdleStateHandler(ch);
         ch.pipeline().addLast(prepender);
         addFrameDecoder(ch, maxRequestSize, 4, false);
-        ch.pipeline().addLast("flowController", new FlowControlHandler());
         ch.pipeline()
                 .addLast(
                         new KafkaCommandDecoder(

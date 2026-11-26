@@ -65,11 +65,20 @@ class NettyServerShutdownTest {
                         Collections.singletonList(testingProtocol(handler, channels)));
         TestingRequest first = new TestingRequest();
         TestingRequest second = new TestingRequest();
+        TestingRequest follower = new TestingRequest();
         try {
             server.start();
             assertThat(channels).hasSize(2);
-            channels.get(0)[0].putRequest(first);
-            channels.get(1)[0].putRequest(second);
+            RequestChannel firstGroup = channels.get(0)[0];
+            RequestChannel secondGroup = channels.get(1)[0];
+            RequestChannel.Connection firstConnection = firstGroup.newConnection(() -> {});
+            RequestChannel.Connection secondConnection = secondGroup.newConnection(() -> {});
+            assertThat(firstGroup.acquireRead(firstConnection)).isTrue();
+            firstGroup.putRequest(firstConnection, first);
+            assertThat(firstGroup.acquireRead(firstConnection)).isTrue();
+            firstGroup.putRequest(firstConnection, follower);
+            assertThat(secondGroup.acquireRead(secondConnection)).isTrue();
+            secondGroup.putRequest(secondConnection, second);
             first.started.get(10, TimeUnit.SECONDS);
             second.started.get(10, TimeUnit.SECONDS);
 
@@ -85,6 +94,9 @@ class NettyServerShutdownTest {
             assertThat(handler.closeCalls).hasValue(0);
 
             second.release.complete(null);
+            follower.started.get(10, TimeUnit.SECONDS);
+            assertThat(closed).isNotDone();
+            follower.release.complete(null);
             CompletableFuture.allOf(closed, closedAgain).get(10, TimeUnit.SECONDS);
             assertThat(first.bufferReleased).isCompleted();
             assertThat(second.bufferReleased).isCompleted();
@@ -93,6 +105,7 @@ class NettyServerShutdownTest {
         } finally {
             first.release.complete(null);
             second.release.complete(null);
+            follower.release.complete(null);
             server.closeAsync().handle((ignored, failure) -> null).get(10, TimeUnit.SECONDS);
         }
     }

@@ -18,6 +18,7 @@
 package org.apache.fluss.kafka;
 
 import org.apache.fluss.kafka.security.KafkaSaslConnection;
+import org.apache.fluss.rpc.netty.server.RequestAdmissionHandler;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.security.auth.ServerAuthenticator;
@@ -26,7 +27,6 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
@@ -61,10 +61,9 @@ import static org.apache.kafka.common.protocol.ApiKeys.PRODUCE;
  * A decoder that decodes the incoming ByteBuf into Kafka requests and sends them to the
  * corresponding RequestChannel.
  */
-public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
+public class KafkaCommandDecoder extends RequestAdmissionHandler {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaCommandDecoder.class);
 
-    private final RequestChannel requestChannel;
     private final String listenerName;
     private final KafkaSaslConnection saslConnection;
     private final RequestsMetrics requestMetrics;
@@ -84,8 +83,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
             String listenerName,
             @Nullable Supplier<ServerAuthenticator> authenticatorSupplier,
             RequestsMetrics requestMetrics) {
-        super(false);
-        this.requestChannel = requestChannel;
+        super(requestChannel);
         this.listenerName = listenerName;
         this.requestMetrics = requestMetrics;
         this.saslConnection =
@@ -95,7 +93,12 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     }
 
     @Override
-    public void channelRead0(ChannelHandlerContext ctx, ByteBuf buffer) throws Exception {
+    protected boolean handlesInline(ByteBuf frame) {
+        return saslConnection.isAuthenticatingWithRawTokens();
+    }
+
+    @Override
+    protected void handleFrame(ChannelHandlerContext ctx, ByteBuf buffer) {
         CompletableFuture<AbstractResponse> future = new CompletableFuture<>();
         KafkaRequest request = null;
         try {
@@ -120,7 +123,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
                             ctx, future, buffer, listenerName, saslConnection, header, nioBuffer);
             inflightResponses.addLast(request);
             future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
-            requestChannel.putRequest(request);
+            enqueue(request);
 
             if (!isActive.get()) {
                 LOG.warn("Received a request on an inactive channel: {}", remoteAddress);
@@ -303,7 +306,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     }
 
     @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+    protected void handleFailure(ChannelHandlerContext ctx, Throwable cause) {
         LOG.error("Exception caught on channel {}", remoteAddress, cause);
         close();
     }
