@@ -16,9 +16,7 @@
 // under the License.
 
 use super::*;
-use fcore::client::{
-    OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle, OffsetCommitOutcome,
-};
+use fcore::client::{OffsetAndMetadata, OffsetCommitError, OffsetCommitOutcome};
 use fcore::metadata::TableBucket;
 
 fn bucket(value: &ffi::FfiConsumerOffset) -> TableBucket {
@@ -96,6 +94,17 @@ impl Admin {
             }
         }
     }
+}
+
+macro_rules! with_commit_scanner {
+    ($kind:expr, $s:ident, $body:expr) => {
+        match $kind {
+            ScannerKind::Record($s) => $body,
+            ScannerKind::Batch($s) => $body,
+            ScannerKind::MultiRecord($s) => $body,
+            ScannerKind::MultiBatch($s) => $body,
+        }
+    };
 }
 
 impl LogScanner {
@@ -197,68 +206,51 @@ impl LogScanner {
         &self,
         current: bool,
         offsets: Vec<ffi::FfiConsumerOffset>,
-        mut promise: cxx::UniquePtr<ffi::CommitPromise>,
-    ) {
+        mut callback: cxx::UniquePtr<ffi::CommitCallback>,
+    ) -> ffi::FfiResult {
         let _enter = RUNTIME.enter();
-        match self.enqueue_commit(current, offsets) {
-            Ok(handle) => {
-                RUNTIME.spawn(async move {
-                    let result = handle.await;
-                    promise.pin_mut().resolve(&mut commit_response(result));
-                });
-            }
-            Err(error) => {
-                promise
-                    .pin_mut()
-                    .resolve(&mut commit_response(Err(OffsetCommitError::Rejected(
-                        error,
-                    ))))
-            }
+        let result = self.check_delivery().and_then(|()| {
+            let values = commit_offsets(offsets)?;
+            let done = move |result| callback.pin_mut().complete(&mut commit_response(result));
+            with_commit_scanner!(
+                &self.scanner,
+                s,
+                if current {
+                    s.commit_async(done)
+                } else {
+                    s.commit_offsets_async(values, done)
+                }
+            )
+        });
+        match result {
+            Ok(()) => ok_result(),
+            Err(error) => err_from_core_error(&error),
         }
     }
 
-    fn enqueue_commit(
+    pub(super) fn commit_sync(
         &self,
         current: bool,
         offsets: Vec<ffi::FfiConsumerOffset>,
-    ) -> fcore::error::Result<OffsetCommitHandle> {
-        self.check_delivery()?;
-        let values = commit_offsets(offsets)?;
-        match &self.scanner {
-            ScannerKind::Record(scanner) => {
+    ) -> ffi::FfiConsumerOffsetsResult {
+        commit_response(RUNTIME.block_on(async {
+            self.check_delivery().map_err(OffsetCommitError::Rejected)?;
+            let values = commit_offsets(offsets).map_err(OffsetCommitError::Rejected)?;
+            with_commit_scanner!(
+                &self.scanner,
+                s,
                 if current {
-                    scanner.commit_async()
+                    s.commit_sync().await
                 } else {
-                    scanner.commit_offsets_async(values)
+                    s.commit_offsets_sync(values).await
                 }
-            }
-            ScannerKind::Batch(scanner) => {
-                if current {
-                    scanner.commit_async()
-                } else {
-                    scanner.commit_offsets_async(values)
-                }
-            }
-            ScannerKind::MultiRecord(scanner) => {
-                if current {
-                    scanner.commit_async()
-                } else {
-                    scanner.commit_offsets_async(values)
-                }
-            }
-            ScannerKind::MultiBatch(scanner) => {
-                if current {
-                    scanner.commit_async()
-                } else {
-                    scanner.commit_offsets_async(values)
-                }
-            }
-        }
+            )
+        }))
     }
 }
 
-// SAFETY: one completion task owns the promise; resolving it never invokes user code.
-unsafe impl Send for ffi::CommitPromise {}
+// The closure exclusively owns this callback; the C++ trampoline contains exceptions.
+unsafe impl Send for ffi::CommitCallback {}
 
 impl Connection {
     pub(super) fn create_multi_table_scanner(

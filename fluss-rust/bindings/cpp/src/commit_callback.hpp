@@ -19,26 +19,26 @@
 
 #pragma once
 
-#include "fluss.hpp"
+#include <cstdio>
+#include <functional>
+#include <utility>
 
 namespace fluss::ffi {
 struct FfiConsumerOffsetsResult;
 
-class CommitPromise {
+class CommitCallback {
    public:
-    using Convert = OffsetCommitResult (*)(FfiConsumerOffsetsResult&);
-    explicit CommitPromise(Convert convert) : convert_(convert) {}
-    std::future<OffsetCommitResult> future() { return promise_.get_future(); }
-    void resolve(FfiConsumerOffsetsResult& value) noexcept {
+    explicit CommitCallback(std::function<void(FfiConsumerOffsetsResult&)> fn)
+        : fn_(std::move(fn)) {}
+    void complete(FfiConsumerOffsetsResult& value) noexcept {
         try {
-            promise_.set_value(convert_(value));
+            fn_(value);
         } catch (...) {
-            promise_.set_exception(std::current_exception());
+            std::fputs("Fluss offset commit callback threw an exception\n", stderr);
         }
     }
 
    private:
-    Convert convert_;
-    std::promise<OffsetCommitResult> promise_;
+    std::function<void(FfiConsumerOffsetsResult&)> fn_;
 };
 }  // namespace fluss::ffi

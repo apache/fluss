@@ -67,21 +67,36 @@ async def test_multi_table_restore_and_management(connection, admin):
         value is None
         for value in (await admin.get_consumer_offsets(group, buckets)).values()
     )
-    partial = await scanner.commit_async(
+    results = []
+    scanner.commit_async(
+        results.append,
         [
             (buckets[0], fluss.OffsetAndMetadata(1)),
             (buckets[1], fluss.OffsetAndMetadata(1, "x" * 5000)),
-        ]
+        ],
     )
+
+    async def poll_until_callback():
+        while not results:
+            await scanner.poll(20)
+
+    await asyncio.wait_for(poll_until_callback(), timeout=10)
+    (partial,) = results
     assert partial.request.status == "success"
     assert partial.buckets[buckets[0]].status == "success"
     assert partial.buckets[buckets[1]].status == "rejected"
     assert partial.buckets[buckets[1]].error_code == 80
-    # Enqueued invocation order is preserved even when completion is awaited in reverse.
-    first = scanner.commit_async([(buckets[0], fluss.OffsetAndMetadata(2, ""))])
-    second = scanner.commit_async([(buckets[0], fluss.OffsetAndMetadata(1))])
-    successful(await second)
-    successful(await first)
+    calls = []
+    scanner.commit_async(
+        lambda r: calls.append((1, r)), [(buckets[0], fluss.OffsetAndMetadata(2, ""))]
+    )
+    scanner.commit_async(
+        lambda r: calls.append((2, r)), [(buckets[0], fluss.OffsetAndMetadata(1))]
+    )
+    successful(scanner.commit_sync([]))
+    assert [index for index, _ in calls] == [1, 2]
+    for _, result in calls:
+        successful(result)
     saved = await admin.get_consumer_offsets(group, buckets)
     assert saved[buckets[0]].offset == 1
     assert saved[buckets[0]].metadata is None
@@ -100,6 +115,8 @@ async def test_multi_table_restore_and_management(connection, admin):
     assert saved[buckets[1]].metadata == "checkpoint"
     assert group in await admin.list_consumer_groups()
     restored = await connection.create_multi_table_scanner(paths, group, arrow=True)
+    with pytest.raises(fluss.FlussError, match="poll_record_batch"):
+        await restored.poll(0)
     restored.subscribe_from_committed(buckets)
     starts = {}
     for _ in range(2):
@@ -114,6 +131,8 @@ async def test_multi_table_restore_and_management(connection, admin):
         .with_auto_commit(10)
         .create_log_scanner()
     )
+    with pytest.raises(fluss.FlussError, match="batch-based"):
+        await single.poll_record_batch(0)
     single.subscribe(buckets[0].bucket_id, 1)
     assert (await single.poll(10000)).count() == 2
     successful(single.commit_sync())
@@ -151,7 +170,7 @@ async def test_undelivered_poll_cannot_advance_committed_offset(connection, admi
     with pytest.raises(ValueError, match="year 0"):
         await scanner.poll(5000)
     with pytest.raises(fluss.FlussError, match="recreate"):
-        await scanner.commit_async()
+        scanner.commit_async(successful)
     with pytest.raises(fluss.FlussError, match="recreate"):
         await scanner.poll(100)
     assert (await admin.get_consumer_offsets(group, [bucket]))[bucket] is None
@@ -167,5 +186,5 @@ async def test_undelivered_poll_cannot_advance_committed_offset(connection, admi
 
     scanner = await restore(arrow=True)
     assert [b.base_offset for b in await scanner.poll_record_batch(5000)] == [0]
-    successful(await scanner.commit_async())
+    successful(scanner.commit_sync())
     await admin.drop_table(path)

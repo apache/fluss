@@ -2728,10 +2728,17 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
         EXPECT_FALSE(entry.outcome_unknown);
         EXPECT_EQ(entry.result.Ok(), entry.bucket == buckets[0]);
     }
-    auto earlier = scanner.CommitAsync({{buckets[0], {2, std::string("")}}});
-    auto later = scanner.CommitAsync({{buckets[0], {1, std::nullopt}}});
-    EXPECT_TRUE(later.get().Ok());
-    EXPECT_TRUE(earlier.get().Ok());
+    std::vector<int> completions;
+    ASSERT_OK(scanner.CommitAsync({{buckets[0], {2, std::string("")}}}, [&](const auto& result) {
+        EXPECT_TRUE(result.Ok());
+        completions.push_back(1);
+    }));
+    ASSERT_OK(scanner.CommitAsync({{buckets[0], {1, std::nullopt}}}, [&](const auto& result) {
+        EXPECT_TRUE(result.Ok());
+        completions.push_back(2);
+    }));
+    ASSERT_TRUE(scanner.CommitSync({}).Ok());
+    EXPECT_EQ(completions, (std::vector<int>{1, 2}));
     std::vector<fluss::CommittedOffset> saved;
     ASSERT_OK(adm.GetConsumerOffsets(group, buckets, saved));
     ASSERT_EQ(saved.size(), 2);
@@ -2768,7 +2775,18 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     ASSERT_OK(single_arrow.Poll(10000, batches));
     ASSERT_FALSE(batches.Empty());
     EXPECT_EQ(batches[0]->GetBaseOffset(), 1);
-    ASSERT_OK(single_arrow.Close());
+    bool closed_commit = false;
+    ASSERT_OK(single_arrow.CommitAsync([&](const auto& r) {
+        EXPECT_TRUE(r.Ok());
+        EXPECT_TRUE(single_arrow.Close().Ok());
+        closed_commit = true;
+    }));
+    // Poll drives the callback; the callback can close this same scanner.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!closed_commit && std::chrono::steady_clock::now() < deadline) {
+        ASSERT_OK(single_arrow.Poll(20, batches));
+    }
+    EXPECT_TRUE(closed_commit);
     EXPECT_FALSE(single_arrow.Available());
     // The source remains readable even when the server rejects the group's commits.
     fluss::LogScanner single;
@@ -2779,8 +2797,10 @@ TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
     ASSERT_OK(single.Subscribe(0, 1));
     ASSERT_OK(single.Poll(10000, remaining));
     EXPECT_EQ(remaining.Count(), 2);
-    EXPECT_EQ(single.CommitSync().result.error_code, 75);
+    int commit_error = 0;
+    ASSERT_OK(single.CommitAsync([&](const auto& r) { commit_error = r.result.error_code; }));
     ASSERT_OK(single.Close());
+    EXPECT_EQ(commit_error, 75);
     EXPECT_FALSE(single.Available());
     EXPECT_TRUE(adm.DeleteConsumerOffsets(group, {buckets[0]}).Ok());
     std::vector<fluss::ConsumerGroupDeleteResult> deleted;

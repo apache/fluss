@@ -268,29 +268,44 @@ fn consumer_scanner_commit(
     env: Env<'_>,
     scanner: ResourceArc<ConsumerScannerResource>,
     offsets: Option<Vec<(Bucket, SavedOffset)>>,
+    sync: bool,
 ) -> Term<'_> {
-    // Enqueue before returning to BEAM; async wait scheduling cannot reorder invocations.
+    let checked = scanner
+        .delivery
+        .lock()
+        .unwrap()
+        .check(env.pid())
+        .and_then(|()| offsets.map(values).transpose());
+    if sync {
+        return async_nif::spawn_task_with_result(env, async move {
+            let result = match checked {
+                Ok(None) => scanner.inner.commit_sync().await,
+                Ok(Some(v)) => scanner.inner.commit_offsets_sync(v).await,
+                Err(error) => Err(OffsetCommitError::Rejected(error)),
+            };
+            Ok(commit_result(result))
+        });
+    }
     let _guard = RUNTIME.enter();
-    let state = scanner.delivery.lock().unwrap();
-    let handle = state.check(env.pid()).and_then(|()| match offsets {
-        None => scanner.inner.commit_async(),
-        Some(offsets) => {
-            values(offsets).and_then(|values| scanner.inner.commit_offsets_async(values))
-        }
-    });
-    drop(state);
-    let handle = match handle {
-        Ok(handle) => handle,
-        Err(error) => {
-            let reference = *env.make_ref();
-            let result = commit_result(Err(OffsetCommitError::Rejected(error)));
-            let _ = env.send(&env.pid(), (reference, (atoms::ok(), result)));
-            return reference;
-        }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let done = move |result| {
+        let _ = tx.send(result);
     };
+    let queued = checked.and_then(|offsets| match offsets {
+        None => scanner.inner.commit_async(done),
+        Some(v) => scanner.inner.commit_offsets_async(v, done),
+    });
     async_nif::spawn_task_with_result(env, async move {
-        let result = handle.await;
-        Ok(commit_result(result))
+        match queued {
+            Err(error) => Ok(commit_result(Err(OffsetCommitError::Rejected(error)))),
+            Ok(()) => {
+                rx.await
+                    .map(commit_result)
+                    .map_err(|_| fluss::error::Error::IllegalArgument {
+                        message: "Scanner dropped before commit callback delivery".into(),
+                    })
+            }
+        }
     })
 }
 #[rustler::nif]

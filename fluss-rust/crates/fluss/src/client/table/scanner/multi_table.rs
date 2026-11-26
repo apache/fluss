@@ -18,9 +18,7 @@
 use super::consumer_group::AutoCommit;
 use super::*;
 use crate::client::consumer_offsets::invalid;
-use crate::client::{
-    ConsumerGroupOptions, OffsetCommitError, OffsetCommitHandle, OffsetCommitResult,
-};
+use crate::client::{ConsumerGroupOptions, OffsetCommitError, OffsetCommitResult};
 use std::sync::atomic::AtomicUsize;
 
 /// Configures manually assigned scans over several tables using one commit queue.
@@ -246,15 +244,11 @@ macro_rules! multi_methods {
                 let deadline = tokio::time::Instant::now() + timeout;
                 let scanners = self.inner.scanners.read().clone();
                 for scanner in scanners.iter() {
-                    if !scanner
-                        .restore_committed_offsets(
-                            deadline.saturating_duration_since(tokio::time::Instant::now()),
-                        )
-                        .await?
-                    {
+                    if !scanner.restore_committed_offsets(deadline).await? {
                         return Ok($empty);
                     }
                 }
+                self.inner.group.invoke_callbacks(false);
                 if let Some(auto) = &self.inner.auto_commit {
                     auto.before_poll(&self.inner.group);
                 }
@@ -337,8 +331,15 @@ macro_rules! multi_methods {
             }
 
             /// Enqueues all delivered next offsets across assigned tables, in scanner call order.
-            pub fn commit_async(&self) -> Result<OffsetCommitHandle> {
-                self.commit_offsets_async(self.inner.group.delivered.lock().clone())
+            /// Ready callbacks run on subsequent polls, commits or explicit close, in submission order.
+            pub fn commit_async(
+                &self,
+                callback: impl FnOnce(std::result::Result<OffsetCommitResult, OffsetCommitError>)
+                + Send
+                + 'static,
+            ) -> Result<()> {
+                let offsets = self.inner.group.delivered.lock().clone();
+                self.commit_offsets_async(offsets, callback)
             }
 
             /// Enqueues explicit offsets from a Tokio runtime, preserving partial failures and unknown
@@ -346,8 +347,13 @@ macro_rules! multi_methods {
             pub fn commit_offsets_async(
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
-            ) -> Result<OffsetCommitHandle> {
-                self.inner.group.enqueue(offsets)
+                callback: impl FnOnce(std::result::Result<OffsetCommitResult, OffsetCommitError>)
+                + Send
+                + 'static,
+            ) -> Result<()> {
+                let group = &self.inner.group;
+                group.invoke_callbacks(false);
+                group.enqueue_callback(offsets, callback)
             }
 
             /// Commits delivered positions. Also use after processing the last poll and before
@@ -355,9 +361,8 @@ macro_rules! multi_methods {
             pub async fn commit_sync(
                 &self,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                self.commit_async()
-                    .map_err(OffsetCommitError::Rejected)?
-                    .await
+                let offsets = self.inner.group.delivered.lock().clone();
+                self.commit_offsets_sync(offsets).await
             }
 
             /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
@@ -374,9 +379,7 @@ macro_rules! multi_methods {
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                self.commit_offsets_async(offsets)
-                    .map_err(OffsetCommitError::Rejected)?
-                    .await
+                self.inner.group.commit_sync(offsets).await
             }
         }
     };

@@ -178,24 +178,69 @@ pub(crate) fn saved(
         .collect()
 }
 
-pub(crate) fn enqueue(
-    kind: &crate::table::ScannerKind,
-    offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
-) -> PyResult<fcore::client::OffsetCommitHandle> {
-    let _guard = TOKIO_RUNTIME.enter();
-    let offsets = offsets.map(values).transpose()?;
-    let result = match kind {
-        crate::table::ScannerKind::Record(scanner) => match offsets {
-            Some(offsets) => scanner.commit_offsets_async(offsets),
-            None => scanner.commit_async(),
-        },
-        crate::table::ScannerKind::Batch(scanner) => match offsets {
-            Some(offsets) => scanner.commit_offsets_async(offsets),
-            None => scanner.commit_async(),
-        },
+macro_rules! scanner_commits {
+    ($kind:ident) => {
+        impl $kind {
+            pub(crate) fn enqueue(
+                &self,
+                py: Python<'_>,
+                callback: Py<PyAny>,
+                offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
+            ) -> PyResult<()> {
+                if !callback.bind(py).is_callable() {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "callback must be callable",
+                    ));
+                }
+                let offsets = offsets.map(values).transpose()?;
+                let done = move |result| {
+                    Python::attach(|py| {
+                        if let Err(err) = callback.call1(py, (commit_result(result),)) {
+                            err.write_unraisable(py, Some(callback.bind(py)));
+                        }
+                    })
+                };
+                let _guard = TOKIO_RUNTIME.enter();
+                match self {
+                    Self::Record(s) => match offsets {
+                        Some(v) => s.commit_offsets_async(v, done),
+                        None => s.commit_async(done),
+                    },
+                    Self::Batch(s) => match offsets {
+                        Some(v) => s.commit_offsets_async(v, done),
+                        None => s.commit_async(done),
+                    },
+                }
+                .map_err(|error| FlussError::from_core_error(&error))
+            }
+
+            pub(crate) fn commit_sync(
+                &self,
+                py: Python<'_>,
+                offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
+            ) -> PyResult<OffsetCommitResult> {
+                let offsets = offsets.map(values).transpose()?;
+                Ok(py.detach(|| {
+                    commit_result(TOKIO_RUNTIME.block_on(async {
+                        match self {
+                            Self::Record(s) => match offsets {
+                                Some(v) => s.commit_offsets_sync(v).await,
+                                None => s.commit_sync().await,
+                            },
+                            Self::Batch(s) => match offsets {
+                                Some(v) => s.commit_offsets_sync(v).await,
+                                None => s.commit_sync().await,
+                            },
+                        }
+                    }))
+                }))
+            }
+        }
     };
-    result.map_err(|error| FlussError::from_core_error(&error))
 }
+use crate::table::ScannerKind;
+scanner_commits!(ScannerKind);
+scanner_commits!(MultiKind);
 
 pub(crate) struct PollDelivery(Option<Py<PyAny>>);
 
@@ -234,21 +279,22 @@ impl PollDelivery {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum MultiKind {
-    Record(fcore::client::MultiTableLogScanner),
-    Batch(fcore::client::MultiTableRecordBatchLogScanner),
+    Record(Arc<fcore::client::MultiTableLogScanner>),
+    Batch(Arc<fcore::client::MultiTableRecordBatchLogScanner>),
 }
 #[pyclass]
 pub struct MultiTableLogScanner {
     pub(crate) delivery: PollDelivery,
-    pub(crate) inner: Arc<MultiKind>,
+    pub(crate) inner: MultiKind,
 }
 #[pymethods]
 impl MultiTableLogScanner {
     /// Resume this group on poll; a bucket with no saved position starts at earliest.
     fn subscribe_from_committed(&self, buckets: Vec<TableBucket>) -> PyResult<()> {
         let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
-        match self.inner.as_ref() {
+        match &self.inner {
             MultiKind::Record(s) => s.subscribe_from_committed(&buckets),
             MultiKind::Batch(s) => s.subscribe_from_committed(&buckets),
         }
@@ -263,7 +309,7 @@ impl MultiTableLogScanner {
         let scanner = self.inner.clone();
         future_into_py(py, async move {
             let bucket = bucket.to_core();
-            match scanner.as_ref() {
+            match &scanner {
                 MultiKind::Record(s) => s.subscribe(&bucket, offset).await,
                 MultiKind::Batch(s) => s.subscribe(&bucket, offset).await,
             }
@@ -277,7 +323,7 @@ impl MultiTableLogScanner {
     ) -> PyResult<Bound<'py, PyAny>> {
         let scanner = self.inner.clone();
         future_into_py(py, async move {
-            match scanner.as_ref() {
+            match &scanner {
                 MultiKind::Record(s) => s.unsubscribe(&bucket.to_core()).await,
                 MultiKind::Batch(s) => s.unsubscribe(&bucket.to_core()).await,
             }
@@ -286,14 +332,14 @@ impl MultiTableLogScanner {
     }
     /// Process the previous result completely before polling with auto-commit enabled.
     fn poll<'py>(&self, py: Python<'py>, timeout_ms: u64) -> PyResult<Bound<'py, PyAny>> {
-        let scanner = self.inner.clone();
+        let MultiKind::Record(scanner) = &self.inner else {
+            return Err(FlussError::new_err(
+                "Use poll_record_batch for an Arrow scanner",
+            ));
+        };
+        let scanner = scanner.clone();
         self.delivery.poll(py, || {
             future_into_py(py, async move {
-                let MultiKind::Record(scanner) = scanner.as_ref() else {
-                    return Err(FlussError::new_err(
-                        "Use poll_record_batch for an Arrow scanner",
-                    ));
-                };
                 let records = scanner
                     .poll(Duration::from_millis(timeout_ms))
                     .await
@@ -331,12 +377,12 @@ impl MultiTableLogScanner {
         py: Python<'py>,
         timeout_ms: u64,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let scanner = self.inner.clone();
+        let MultiKind::Batch(scanner) = &self.inner else {
+            return Err(FlussError::new_err("Use poll for a record scanner"));
+        };
+        let scanner = scanner.clone();
         self.delivery.poll(py, || {
             future_into_py(py, async move {
-                let MultiKind::Batch(scanner) = scanner.as_ref() else {
-                    return Err(FlussError::new_err("Use poll for a record scanner"));
-                };
                 let batches = scanner
                     .poll(Duration::from_millis(timeout_ms))
                     .await
@@ -350,17 +396,18 @@ impl MultiTableLogScanner {
             })
         })
     }
-    /// Enqueues immediately; cancelling the returned awaitable does not cancel the commit.
-    #[pyo3(signature=(offsets=None))]
-    fn commit_async<'py>(
+    /// Enqueues now. Subsequent polls or commits deliver ready results to the callback.
+    #[pyo3(signature=(callback, offsets=None))]
+    fn commit_async(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
+        callback: Py<PyAny>,
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<()> {
         self.delivery.check(py)?;
-        let handle = self.enqueue(offsets)?;
-        future_into_py(py, async move { Ok(commit_result(handle.await)) })
+        self.inner.enqueue(py, callback, offsets)
     }
+
     /// Blocks with the GIL released. Inspect request and bucket outcomes before shutdown.
     #[pyo3(signature=(offsets=None))]
     fn commit_sync(
@@ -369,27 +416,6 @@ impl MultiTableLogScanner {
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
     ) -> PyResult<OffsetCommitResult> {
         self.delivery.check(py)?;
-        let handle = self.enqueue(offsets)?;
-        Ok(py.detach(|| commit_result(TOKIO_RUNTIME.block_on(handle))))
-    }
-}
-impl MultiTableLogScanner {
-    fn enqueue(
-        &self,
-        offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
-    ) -> PyResult<fcore::client::OffsetCommitHandle> {
-        let _guard = TOKIO_RUNTIME.enter();
-        let offsets = offsets.map(values).transpose()?;
-        match self.inner.as_ref() {
-            MultiKind::Record(scanner) => match offsets {
-                Some(values) => scanner.commit_offsets_async(values),
-                None => scanner.commit_async(),
-            },
-            MultiKind::Batch(scanner) => match offsets {
-                Some(values) => scanner.commit_offsets_async(values),
-                None => scanner.commit_async(),
-            },
-        }
-        .map_err(|error| FlussError::from_core_error(&error))
+        self.inner.commit_sync(py, offsets)
     }
 }

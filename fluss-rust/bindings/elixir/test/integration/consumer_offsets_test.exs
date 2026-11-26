@@ -82,6 +82,8 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
     assert partial.buckets[b].error_code == 80
     first = Fluss.LogScanner.commit_async(scanner, [{a, {2, ""}}])
     second = Fluss.LogScanner.commit_async(scanner, [{a, {1, nil}}])
+    {:ok, barrier} = Fluss.LogScanner.commit_sync(scanner, [])
+    successful(barrier)
     assert_receive {^second, {:ok, second_result}}, 30_000
     successful(second_result)
     assert_receive {^first, {:ok, first_result}}, 30_000

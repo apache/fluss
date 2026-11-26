@@ -24,6 +24,6 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=src/write_callback.hpp");
-    println!("cargo:rerun-if-changed=src/commit_promise.hpp");
+    println!("cargo:rerun-if-changed=src/commit_callback.hpp");
     println!("cargo:rerun-if-changed=include/fluss.hpp");
 }

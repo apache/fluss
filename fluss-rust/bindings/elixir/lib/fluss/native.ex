@@ -36,7 +36,7 @@ defmodule Fluss.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def consumer_scanner_unsubscribe(_scanner, _bucket), do: :erlang.nif_error(:nif_not_loaded)
-  def consumer_scanner_commit(_scanner, _offsets), do: :erlang.nif_error(:nif_not_loaded)
+  def consumer_scanner_commit(_scanner, _offsets, _sync), do: :erlang.nif_error(:nif_not_loaded)
   def consumer_scanner_poll(_scanner, _timeout_ms), do: :erlang.nif_error(:nif_not_loaded)
   def admin_get_consumer_offsets(_admin, _group, _buckets), do: :erlang.nif_error(:nif_not_loaded)
   def admin_list_consumer_offsets(_admin, _group), do: :erlang.nif_error(:nif_not_loaded)

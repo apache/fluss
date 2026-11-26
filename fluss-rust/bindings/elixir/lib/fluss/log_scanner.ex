@@ -102,14 +102,14 @@ defmodule Fluss.LogScanner do
   Inspect `result.request.status` and every `result.buckets` entry. Status is
   `:success`, `:rejected`, `:unknown`, or `:needs_recovery`. Offsets are a list of
   `{bucket, {next_offset, metadata_or_nil}}`, or nil for all delivered positions.
-  Not receiving the reply does not cancel the ordered commit.
+  A later poll or commit delivers the reply; use commit_sync to wait without polling.
   """
   def commit_async({:consumer, scanner}, offsets \\ nil),
-    do: Native.consumer_scanner_commit(scanner, offsets)
+    do: Native.consumer_scanner_commit(scanner, offsets, false)
 
   @doc "Waits for the ordered commit. After processing the last batch, call this before shutdown."
-  def commit_sync(scanner, offsets \\ nil),
-    do: commit_async(scanner, offsets) |> Native.await_nif()
+  def commit_sync({:consumer, scanner}, offsets \\ nil),
+    do: Native.consumer_scanner_commit(scanner, offsets, true) |> Native.await_nif()
 
   @spec new!(Fluss.Table.t()) :: t()
   def new!(table) do

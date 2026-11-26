@@ -437,12 +437,12 @@ scanner = await table.new_scan().with_consumer_group("orders").create_log_scanne
 scanner.subscribe_from_committed([bucket])
 records = await scanner.poll(1000)
 # Finish processing every returned record before committing.
-result = await scanner.commit_async()
+result = scanner.commit_sync()
 assert result.request.status == "success"
 assert all(value.status == "success" for value in result.buckets.values())
 ```
 
-`commit_sync()` blocks with the GIL released; `commit_async()` enqueues immediately and returns an awaitable. Both accept an optional list of `(TableBucket, OffsetAndMetadata(next_offset, metadata))` for partial processing or rewinds. `None` metadata and an empty string are distinct. Commits on one scanner retain invocation order; cancelling the awaitable stops waiting but leaves the queued commit running. After a possibly late write, the scanner accepts a higher offset for that bucket or the same offset and metadata. An unsafe rewind returns `needs_recovery`, even after a seek. A late write may cause replay. The server does not fence competing writers.
+`commit_sync()` blocks with the GIL released; `scanner.commit_async(on_commit)` enqueues immediately. A subsequent poll or commit calls `on_commit(result)`; use a short, synchronous callback. Use `commit_sync()` to confirm the final commit. Both accept an optional list of `(TableBucket, OffsetAndMetadata(next_offset, metadata))` for partial processing or rewinds. `None` metadata and an empty string are distinct. Commits on one scanner retain invocation order. After a possibly late write, the scanner accepts a higher offset for that bucket or the same offset and metadata. An unsafe rewind returns `needs_recovery`, even after a seek. A late write may cause replay. The server does not fence competing writers.
 
 Buckets with no saved position start at earliest; poll propagates authorization and transport errors.
 

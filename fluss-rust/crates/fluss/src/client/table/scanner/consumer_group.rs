@@ -18,11 +18,11 @@
 use super::{LogScanner, LogScannerInner, RecordBatchLogScanner};
 use crate::client::consumer_offsets::{ConsumerGroup, invalid};
 use crate::client::{
-    OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle, OffsetCommitOutcome,
-    OffsetCommitResult,
+    OffsetAndMetadata, OffsetCommitError, OffsetCommitOutcome, OffsetCommitResult,
 };
 use crate::error::Result;
 use crate::metadata::TableBucket;
+use futures::FutureExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -53,25 +53,18 @@ impl AutoCommit {
         if offsets.is_empty() {
             return;
         }
-        match group.enqueue(offsets.clone()) {
-            Ok(handle) => {
-                tokio::spawn(async move {
-                    match handle.await {
-                        Err(error) => log::warn!("Periodic offset commit failed: {error}"),
-                        Ok(result)
-                            if result
-                                .values()
-                                .any(|v| !matches!(v, OffsetCommitOutcome::Committed)) =>
-                        {
-                            log::warn!(
-                                "Periodic offset commit contains unsuccessful buckets: {result:?}"
-                            )
-                        }
-                        Ok(_) => {}
-                    }
-                });
+        if let Err(error) = group.enqueue_callback(offsets.clone(), |result| match result {
+            Err(error) => log::warn!("Periodic offset commit failed: {error}"),
+            Ok(result)
+                if result
+                    .values()
+                    .any(|v| !matches!(v, OffsetCommitOutcome::Committed)) =>
+            {
+                log::warn!("Periodic offset commit contains unsuccessful buckets: {result:?}")
             }
-            Err(error) => log::warn!("Periodic offset commit not queued: {error}"),
+            Ok(_) => {}
+        }) {
+            log::warn!("Periodic offset commit not queued: {error}");
         }
     }
 
@@ -135,10 +128,10 @@ impl LogScannerInner {
         }
     }
 
-    /// Returns false if the poll timed out while the lookup was still running.
+    /// If a lookup was needed, only continue fetching data within the same poll deadline.
     pub(super) async fn restore_committed_offsets(
         self: &Arc<Self>,
-        budget: std::time::Duration,
+        deadline: tokio::time::Instant,
     ) -> Result<bool> {
         if self.consumer_group.is_none() || self.pending_offset_restore.lock().buckets.is_empty() {
             return Ok(true);
@@ -171,12 +164,17 @@ impl LogScannerInner {
             pending.lookup = None;
             Poll::Ready(result)
         });
-        let Ok(result) = tokio::time::timeout(budget, wait).await else {
+        let result = if deadline <= tokio::time::Instant::now() {
+            wait.now_or_never()
+        } else {
+            tokio::time::timeout_at(deadline, wait).await.ok()
+        };
+        let Some(result) = result else {
             return Ok(false);
         };
         let offsets = result.map_err(|e| invalid(&e.to_string()))??;
         self.assign_buckets_at_offsets(offsets);
-        Ok(true)
+        Ok(tokio::time::Instant::now() < deadline)
     }
 
     fn group(&self) -> Result<&Arc<ConsumerGroup>> {
@@ -221,24 +219,37 @@ macro_rules! group_methods {
             /// Commits current positions, including seeks and ranges skipped by the filter.
             /// Process all returned records first; use `commit_offsets_async` for partial batches.
             /// Call from a Tokio runtime. Drive subscriptions, seeks and polls from one consumer task.
-            pub fn commit_async(&self) -> Result<OffsetCommitHandle> {
-                self.commit_offsets_async(self.inner.delivered_offsets()?)
+            /// Ready callbacks run on subsequent polls, commits or explicit close, in submission order.
+            /// Callbacks still pending at the close deadline receive an unknown outcome.
+            pub fn commit_async(
+                &self,
+                callback: impl FnOnce(std::result::Result<OffsetCommitResult, OffsetCommitError>)
+                + Send
+                + 'static,
+            ) -> Result<()> {
+                let offsets = self.inner.delivered_offsets()?;
+                self.commit_offsets_async(offsets, callback)
             }
 
             /// Enqueues explicit next offsets from a Tokio runtime, in call order.
-            /// Dropping the handle does not cancel the commit. No ordering or fencing is
+            /// No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
             /// At most 64 commits may be pending per scanner. A full queue returns
-            /// `Error::BufferExhausted` before enqueueing; retry after a pending commit finishes.
+            /// `Error::BufferExhausted` before enqueueing; retry after a pending commit finishes. Enqueue errors do not invoke the callback.
             /// After a possibly late write, the scanner accepts a higher offset or an identical
             /// offset and metadata for that bucket. An unsafe rewind, even after a seek, returns
             /// `NeedsRecovery`. A late write can overwrite a higher commit and cause replay.
             pub fn commit_offsets_async(
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
-            ) -> Result<OffsetCommitHandle> {
+                callback: impl FnOnce(std::result::Result<OffsetCommitResult, OffsetCommitError>)
+                + Send
+                + 'static,
+            ) -> Result<()> {
                 self.inner.check_no_active_reader()?;
-                self.inner.group()?.enqueue(offsets)
+                let group = self.inner.group()?;
+                group.invoke_callbacks(false);
+                group.enqueue_callback(offsets, callback)
             }
 
             /// Submits an automatic commit if due, then waits up to the group timeout for pending commits.
@@ -256,9 +267,11 @@ macro_rules! group_methods {
             pub async fn commit_sync(
                 &self,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                self.commit_async()
-                    .map_err(OffsetCommitError::Rejected)?
-                    .await
+                let offsets = self
+                    .inner
+                    .delivered_offsets()
+                    .map_err(OffsetCommitError::Rejected)?;
+                self.commit_offsets_sync(offsets).await
             }
 
             /// Awaits persistence of explicit next offsets and optional metadata.
@@ -267,8 +280,13 @@ macro_rules! group_methods {
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                self.commit_offsets_async(offsets)
+                self.inner
+                    .check_no_active_reader()
+                    .map_err(OffsetCommitError::Rejected)?;
+                self.inner
+                    .group()
                     .map_err(OffsetCommitError::Rejected)?
+                    .commit_sync(offsets)
                     .await
             }
         }
@@ -276,3 +294,37 @@ macro_rules! group_methods {
 }
 group_methods!(LogScanner);
 group_methods!(RecordBatchLogScanner);
+
+#[cfg(test)]
+mod poll_tests {
+    use super::*;
+    use crate::client::ConsumerGroupOptions;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn expired_poll_applies_ready_offsets_without_fetching_data() -> Result<()> {
+        let (mut scanner, _, _) = super::super::tests::scanner_fixture(false)?;
+        let group = ConsumerGroup::new(
+            ConsumerGroupOptions::new("restore"),
+            scanner.log_fetcher.conns.clone(),
+            scanner.metadata.clone(),
+        );
+        Arc::get_mut(&mut scanner).unwrap().consumer_group = Some(Arc::new(group));
+        let bucket = TableBucket::new(1, 0);
+        scanner.subscribe_from_committed(std::slice::from_ref(&bucket))?;
+        let offsets = HashMap::from([(bucket.clone(), 42)]);
+        let lookup = tokio::spawn(async move { Ok(offsets) });
+        while !lookup.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        scanner.pending_offset_restore.lock().lookup = Some(lookup);
+
+        // With no bootstrap servers, trying to fetch data in this poll would fail.
+        assert!(scanner.poll_records(Duration::ZERO).await?.is_empty());
+        assert_eq!(
+            scanner.log_scanner_status.get_bucket_offset(&bucket),
+            Some(42)
+        );
+        Ok(())
+    }
+}

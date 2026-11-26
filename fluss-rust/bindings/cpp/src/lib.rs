@@ -53,9 +53,9 @@ mod ffi {
     unsafe extern "C++" {
         include!("write_callback.hpp");
 
-        include!("commit_promise.hpp");
-        type CommitPromise;
-        fn resolve(self: Pin<&mut CommitPromise>, result: &mut FfiConsumerOffsetsResult);
+        include!("commit_callback.hpp");
+        type CommitCallback;
+        fn complete(self: Pin<&mut CommitCallback>, result: &mut FfiConsumerOffsetsResult);
 
         type WriteCallback;
 
@@ -954,8 +954,13 @@ mod ffi {
             self: &LogScanner,
             current: bool,
             offsets: Vec<FfiConsumerOffset>,
-            promise: UniquePtr<CommitPromise>,
-        );
+            callback: UniquePtr<CommitCallback>,
+        ) -> FfiResult;
+        fn commit_sync(
+            self: &LogScanner,
+            current: bool,
+            offsets: Vec<FfiConsumerOffset>,
+        ) -> FfiConsumerOffsetsResult;
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
         fn subscribe(self: &LogScanner, bucket_id: i32, start_offset: i64) -> FfiResult;
         fn subscribe_buckets(

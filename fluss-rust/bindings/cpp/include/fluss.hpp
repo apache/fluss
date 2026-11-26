@@ -1334,6 +1334,8 @@ struct OffsetCommitResult {
     }
 };
 
+using OffsetCommitCallback = std::function<void(const OffsetCommitResult&)>;
+
 struct ConsumerGroupDeleteResult {
     std::string group_id;
     Result result;
@@ -2412,12 +2414,12 @@ class LogScanner {
     /// Commits explicit next offsets, allowing partially processed poll results.
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     /// Enqueues a snapshot now. Calls on one scanner execute in invocation order.
-    /// The operation owns its resources and survives scanner destruction. Dropping
-    /// the returned future does not cancel the write. No cross-scanner fencing exists.
+    /// Ready callbacks run on a subsequent Poll, commit or Close. Keep them short.
+    /// An enqueue error is returned directly and does not invoke the callback.
     /// After an unknown outcome, unsafe rewinds are rejected.
     /// Drive polls, subscriptions and commit initiation from one consumer thread.
-    std::future<OffsetCommitResult> CommitAsync();
-    std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);
+    Result CommitAsync(OffsetCommitCallback callback);
+    Result CommitAsync(const std::vector<ConsumerOffset>& offsets, OffsetCommitCallback callback);
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
@@ -2495,8 +2497,8 @@ class RecordBatchLogScanner {
     /// Use CommitSync() before Close() to confirm the final positions.
     Result Close();
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
-    std::future<OffsetCommitResult> CommitAsync();
-    std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);
+    Result CommitAsync(OffsetCommitCallback callback);
+    Result CommitAsync(const std::vector<ConsumerOffset>& offsets, OffsetCommitCallback callback);
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);

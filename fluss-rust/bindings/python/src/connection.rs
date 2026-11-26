@@ -76,19 +76,19 @@ impl FlussConnection {
                     .map_err(|error| FlussError::from_core_error(&error))?;
             }
             let inner = if arrow {
-                crate::consumer_offsets::MultiKind::Batch(
+                crate::consumer_offsets::MultiKind::Batch(Arc::new(
                     scan.create_record_batch_log_scanner()
                         .map_err(|error| FlussError::from_core_error(&error))?,
-                )
+                ))
             } else {
-                crate::consumer_offsets::MultiKind::Record(
+                crate::consumer_offsets::MultiKind::Record(Arc::new(
                     scan.create_log_scanner()
                         .map_err(|error| FlussError::from_core_error(&error))?,
-                )
+                ))
             };
             Ok(MultiTableLogScanner {
                 delivery: crate::consumer_offsets::PollDelivery::new(true)?,
-                inner: Arc::new(inner),
+                inner,
             })
         })
     }

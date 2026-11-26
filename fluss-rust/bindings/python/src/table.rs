@@ -686,13 +686,13 @@ impl TableScan {
                     let s = table_scan
                         .create_log_scanner()
                         .map_err(|e| FlussError::from_core_error(&e))?;
-                    ScannerKind::Record(s)
+                    ScannerKind::Record(Arc::new(s))
                 }
                 ScannerType::Batch => {
                     let s = table_scan
                         .create_record_batch_log_scanner()
                         .map_err(|e| FlussError::from_core_error(&e))?;
-                    ScannerKind::Batch(s)
+                    ScannerKind::Batch(Arc::new(s))
                 }
             };
 
@@ -2471,13 +2471,14 @@ impl PyRecordBatchLogReader {
 
 /// Wraps the two scanner variants so we never have an impossible state
 /// (both None or both Some).
+#[derive(Clone)]
 pub(crate) enum ScannerKind {
-    Record(fcore::client::LogScanner),
-    Batch(fcore::client::RecordBatchLogScanner),
+    Record(Arc<fcore::client::LogScanner>),
+    Batch(Arc<fcore::client::RecordBatchLogScanner>),
 }
 
 impl ScannerKind {
-    fn as_record(&self) -> PyResult<&fcore::client::LogScanner> {
+    fn as_record(&self) -> PyResult<&Arc<fcore::client::LogScanner>> {
         match self {
             Self::Record(s) => Ok(s),
             Self::Batch(_) => Err(FlussError::new_err(
@@ -2486,7 +2487,7 @@ impl ScannerKind {
         }
     }
 
-    fn as_batch(&self) -> PyResult<&fcore::client::RecordBatchLogScanner> {
+    fn as_batch(&self) -> PyResult<&Arc<fcore::client::RecordBatchLogScanner>> {
         match self {
             Self::Batch(s) => Ok(s),
             Self::Record(_) => Err(FlussError::new_err(
@@ -2500,7 +2501,7 @@ impl ScannerKind {
 /// Both `LogScanner` and `RecordBatchLogScanner` share the same subscribe interface.
 macro_rules! with_scanner {
     ($scanner:expr, $method:ident($($arg:expr),*)) => {
-        match $scanner.as_ref() {
+        match $scanner {
             ScannerKind::Record(s) => s.$method($($arg),*).await,
             ScannerKind::Batch(s) => s.$method($($arg),*).await,
         }
@@ -2515,7 +2516,7 @@ macro_rules! with_scanner {
 #[pyclass]
 pub struct LogScanner {
     delivery: crate::consumer_offsets::PollDelivery,
-    kind: Arc<ScannerKind>,
+    kind: ScannerKind,
     admin: Arc<fcore::client::FlussAdmin>,
     table_info: fcore::metadata::TableInfo,
     /// The projected Arrow schema to use for empty table creation
@@ -2529,26 +2530,25 @@ impl LogScanner {
     /// Resume this group on poll; a bucket with no saved position starts at earliest.
     fn subscribe_from_committed(&self, buckets: Vec<TableBucket>) -> PyResult<()> {
         let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
-        match self.kind.as_ref() {
+        match &self.kind {
             ScannerKind::Record(s) => s.subscribe_from_committed(&buckets),
             ScannerKind::Batch(s) => s.subscribe_from_committed(&buckets),
         }
         .map_err(|error| FlussError::from_core_error(&error))
     }
-    /// Captures offsets immediately. Cancellation only stops waiting; commits stay ordered.
-    #[pyo3(signature=(offsets=None))]
-    fn commit_async<'py>(
+    /// Enqueues now. Subsequent polls or commits deliver ready results to the callback.
+    #[pyo3(signature=(callback, offsets=None))]
+    fn commit_async(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
+        callback: Py<PyAny>,
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<()> {
         self.delivery.check(py)?;
-        let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
-        future_into_py(py, async move {
-            Ok(crate::consumer_offsets::commit_result(handle.await))
-        })
+        self.kind.enqueue(py, callback, offsets)
     }
-    /// Blocks with the GIL released. Check request and every bucket outcome.
+
+    /// Blocks with the GIL released. Inspect request and bucket outcomes before shutdown.
     #[pyo3(signature=(offsets=None))]
     fn commit_sync(
         &self,
@@ -2556,8 +2556,7 @@ impl LogScanner {
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
     ) -> PyResult<OffsetCommitResult> {
         self.delivery.check(py)?;
-        let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
-        Ok(py.detach(|| crate::consumer_offsets::commit_result(TOKIO_RUNTIME.block_on(handle))))
+        self.kind.commit_sync(py, offsets)
     }
 
     /// Subscribe to a single bucket at a specific offset (non-partitioned tables).
@@ -2680,13 +2679,12 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scanner = Arc::clone(&self.kind);
+        let scanner = self.kind.as_record()?.clone();
         let projected_row_type = self.projected_row_type.clone();
 
         self.delivery.poll(py, || {
             future_into_py(py, async move {
                 let scan_records = scanner
-                    .as_record()?
                     .poll(timeout)
                     .await
                     .map_err(|e| FlussError::from_core_error(&e))?;
@@ -2741,12 +2739,11 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scanner = Arc::clone(&self.kind);
+        let scanner = self.kind.as_batch()?.clone();
 
         self.delivery.poll(py, || {
             future_into_py(py, async move {
                 let scan_batches = scanner
-                    .as_batch()?
                     .poll(timeout)
                     .await
                     .map_err(|e| FlussError::from_core_error(&e))?;
@@ -2781,13 +2778,12 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scanner = Arc::clone(&self.kind);
+        let scanner = self.kind.as_batch()?.clone();
         let projected_schema = self.projected_schema.clone();
 
         self.delivery.poll(py, || {
             future_into_py(py, async move {
                 let scan_batches = scanner
-                    .as_batch()?
                     .poll(timeout)
                     .await
                     .map_err(|e| FlussError::from_core_error(&e))?;
@@ -2881,7 +2877,7 @@ impl LogScanner {
         future_into_py(
             py,
             Self::scan_to_arrow_table(
-                Arc::clone(&self.kind),
+                self.kind.clone(),
                 Arc::clone(&self.admin),
                 self.projected_schema.clone(),
             ),
@@ -2898,7 +2894,7 @@ impl LogScanner {
     /// Returns:
     ///     Pandas DataFrame containing all data from subscribed buckets
     fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let kind = Arc::clone(&self.kind);
+        let kind = self.kind.clone();
         let admin = Arc::clone(&self.admin);
         let projected_schema = self.projected_schema.clone();
         future_into_py(py, async move {
@@ -2932,7 +2928,7 @@ async def _async_scan_generic(scanner, method_name, timeout_ms):
                 .unbind()
         });
 
-        let method_name = match slf.kind.as_ref() {
+        let method_name = match &slf.kind {
             ScannerKind::Record(_) => "poll",
             ScannerKind::Batch(_) => "poll_record_batch",
         };
@@ -2960,7 +2956,7 @@ impl LogScanner {
     ) -> Self {
         Self {
             delivery,
-            kind: Arc::new(scanner),
+            kind: scanner,
             admin,
             table_info,
             projected_schema,
@@ -2970,7 +2966,7 @@ impl LogScanner {
 
     /// Read until the latest offsets and build one PyArrow Table.
     async fn scan_to_arrow_table(
-        kind: Arc<ScannerKind>,
+        kind: ScannerKind,
         admin: Arc<fcore::client::FlussAdmin>,
         projected_schema: SchemaRef,
     ) -> PyResult<Py<PyAny>> {

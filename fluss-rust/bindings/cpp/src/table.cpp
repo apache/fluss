@@ -21,7 +21,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <ctime>
+#include <deque>
 #include <functional>
 
 #include "ffi_converter.hpp"
@@ -2381,18 +2383,42 @@ rust::Vec<ffi::FfiConsumerOffset> commit_values(const std::vector<ConsumerOffset
     return values;
 }
 
-std::future<OffsetCommitResult> start_commit(ffi::LogScanner* scanner, bool current,
-                                             const std::vector<ConsumerOffset>& offsets) {
-    if (!scanner) {
-        std::promise<OffsetCommitResult> result;
-        result.set_value({utils::make_client_error("LogScanner not available"), false, {}});
-        return result.get_future();
+// Core reports completions inline on the consumer thread. Run user code only
+// after the FFI call and result conversion have released the scanner.
+thread_local std::deque<std::pair<OffsetCommitCallback, OffsetCommitResult>> ready_commits;
+
+struct DeliverCommitCallbacks {
+    ~DeliverCommitCallbacks() {
+        while (!ready_commits.empty()) {
+            auto [callback, result] = std::move(ready_commits.front());
+            ready_commits.pop_front();
+            try {
+                callback(result);
+            } catch (...) {
+                std::fputs("Fluss offset commit callback threw an exception\n", stderr);
+            }
+        }
     }
-    auto promise = std::make_unique<ffi::CommitPromise>(
-        [](ffi::FfiConsumerOffsetsResult& value) { return commit_result(std::move(value)); });
-    auto future = promise->future();
-    scanner->begin_commit(current, commit_values(offsets), std::move(promise));
-    return future;
+};
+
+Result start_commit(ffi::LogScanner* scanner, bool current,
+                    const std::vector<ConsumerOffset>& offsets, OffsetCommitCallback callback) {
+    if (!scanner) return utils::make_client_error("LogScanner not available");
+    if (!callback) return utils::make_client_error("Offset commit callback is empty");
+    DeliverCommitCallbacks deliver;
+    auto done = std::make_unique<ffi::CommitCallback>(
+        [cb = std::move(callback)](ffi::FfiConsumerOffsetsResult& value) mutable {
+            ready_commits.emplace_back(std::move(cb), commit_result(std::move(value)));
+        });
+    return utils::from_ffi_result(
+        scanner->begin_commit(current, commit_values(offsets), std::move(done)));
+}
+
+OffsetCommitResult commit_sync(ffi::LogScanner* scanner, bool current,
+                               const std::vector<ConsumerOffset>& offsets) {
+    if (!scanner) return {utils::make_client_error("LogScanner not available"), false, {}};
+    DeliverCommitCallbacks deliver;
+    return commit_result(scanner->commit_sync(current, commit_values(offsets)));
 }
 }  // namespace
 
@@ -2411,6 +2437,7 @@ Result LogScanner::RegisterTable(const TablePath& path, int64_t& table_id) {
 }
 Result LogScanner::Close() {
     if (!scanner_) return {};
+    DeliverCommitCallbacks deliver;
     return utils::from_ffi_result(ffi::close_log_scanner(
         rust::Box<ffi::LogScanner>::from_raw(std::exchange(scanner_, nullptr))));
 }
@@ -2492,18 +2519,16 @@ Result RecordBatchLogScanner::Unsubscribe(const TableBucket& bucket) {
     return scanner_.Unsubscribe(bucket);
 }
 
-std::future<OffsetCommitResult> LogScanner::CommitAsync() {
-    return start_commit(scanner_, true, {});
+Result LogScanner::CommitAsync(OffsetCommitCallback callback) {
+    return start_commit(scanner_, true, {}, std::move(callback));
 }
-std::future<OffsetCommitResult> LogScanner::CommitAsync(
-    const std::vector<ConsumerOffset>& offsets) {
-    return start_commit(scanner_, false, offsets);
+Result LogScanner::CommitAsync(const std::vector<ConsumerOffset>& offsets,
+                               OffsetCommitCallback callback) {
+    return start_commit(scanner_, false, offsets, std::move(callback));
 }
-OffsetCommitResult LogScanner::CommitSync() {
-    return CommitAsync().get();
-}
+OffsetCommitResult LogScanner::CommitSync() { return commit_sync(scanner_, true, {}); }
 OffsetCommitResult LogScanner::CommitSync(const std::vector<ConsumerOffset>& offsets) {
-    return CommitAsync(offsets).get();
+    return commit_sync(scanner_, false, offsets);
 }
 
 Result RecordBatchLogScanner::Subscribe(const TableBucket& bucket, int64_t start_offset) {
@@ -2516,12 +2541,12 @@ Result RecordBatchLogScanner::RegisterTable(const TablePath& path, int64_t& id) 
     return scanner_.RegisterTable(path, id);
 }
 Result RecordBatchLogScanner::Close() { return scanner_.Close(); }
-std::future<OffsetCommitResult> RecordBatchLogScanner::CommitAsync() {
-    return scanner_.CommitAsync();
+Result RecordBatchLogScanner::CommitAsync(OffsetCommitCallback callback) {
+    return scanner_.CommitAsync(std::move(callback));
 }
-std::future<OffsetCommitResult> RecordBatchLogScanner::CommitAsync(
-    const std::vector<ConsumerOffset>& offsets) {
-    return scanner_.CommitAsync(offsets);
+Result RecordBatchLogScanner::CommitAsync(const std::vector<ConsumerOffset>& offsets,
+                                          OffsetCommitCallback callback) {
+    return scanner_.CommitAsync(offsets, std::move(callback));
 }
 OffsetCommitResult RecordBatchLogScanner::CommitSync() { return scanner_.CommitSync(); }
 OffsetCommitResult RecordBatchLogScanner::CommitSync(const std::vector<ConsumerOffset>& offsets) {
@@ -2606,6 +2631,7 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
         return utils::make_client_error("LogScanner not available");
     }
 
+    DeliverCommitCallbacks deliver;
     auto result_box = scanner_->poll(timeout_ms);
     if (result_box->sv_has_error()) {
         return utils::make_error(result_box->sv_error_code(),
@@ -2739,6 +2765,7 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
         return utils::make_client_error("LogScanner not available");
     }
 
+    DeliverCommitCallbacks deliver;
     auto ffi_result = scanner_->poll_record_batch(timeout_ms);
     auto result = utils::from_ffi_result(ffi_result.result);
     if (!result.Ok()) {

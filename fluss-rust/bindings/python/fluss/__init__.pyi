@@ -22,7 +22,7 @@ from types import TracebackType
 from typing import (
     Any,
     AsyncIterator,
-    Awaitable,
+    Callable,
     Dict,
     Iterator,
     List,
@@ -1133,8 +1133,10 @@ class LogScanner:
 
     def subscribe_from_committed(self, buckets: List[TableBucket]) -> None: ...
     def commit_async(
-        self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
-    ) -> Awaitable[OffsetCommitResult]: ...
+        self,
+        callback: Callable[[OffsetCommitResult], None],
+        offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None,
+    ) -> None: ...
     def commit_sync(
         self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
     ) -> OffsetCommitResult: ...
@@ -1627,8 +1629,10 @@ class MultiTableLogScanner:
     async def poll(self, timeout_ms: int) -> ScanRecords: ...
     async def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]: ...
     def commit_async(
-        self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
-    ) -> Awaitable[OffsetCommitResult]: ...
+        self,
+        callback: Callable[[OffsetCommitResult], None],
+        offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None,
+    ) -> None: ...
     def commit_sync(
         self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
     ) -> OffsetCommitResult: ...
