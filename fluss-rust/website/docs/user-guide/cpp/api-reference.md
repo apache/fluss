@@ -1349,18 +1349,7 @@ inline const char* ChangeTypeShortString(ChangeType ct) {
 
 ## Consumer offset management
 
-```cpp
-fluss::ConsumerGroupOptions options{"orders"};
-fluss::LogScanner scanner;
-auto status = table.NewScan().WithConsumerGroup(options).CreateLogScanner(scanner);
-// Check status before using the scanner.
-status = scanner.Subscribe(buckets, fluss::OffsetsInitializer::Committed("orders"));
-fluss::ScanRecords records;
-status = scanner.Poll(1000, records);
-// Finish processing every returned record first.
-fluss::OffsetCommitResult committed = scanner.CommitSync();
-if (!committed.Ok()) { /* inspect request and individual bucket results */ }
-```
+Use `WithConsumerGroup(options)` to configure the group, then `SubscribeFromCommitted(buckets)` to resume its offsets. See [Resuming a consumer group](./example/log-tables.md#resuming-a-consumer-group) for automatic commits, a custom interval, and manual commits after processing.
 
 Buckets include table ID and optional partition ID. Explicit commits accept `std::vector<ConsumerOffset>`; offsets identify the **next** record to read. Metadata distinguishes `std::nullopt` from an empty string. `CommitAsync()` queues immediately and returns a `std::future<OffsetCommitResult>`. Invocations on a scanner stay ordered even when their futures are awaited in another order. Releasing a future may wait for completion; it does not cancel the queued write.
 
@@ -1368,7 +1357,7 @@ Check `OffsetCommitResult::Ok()` and inspect request/per-bucket `result` and `ou
 
 `OffsetsInitializer::Committed(group)` restores saved positions and defaults missing commits to earliest. Its fallback overload accepts `Earliest()`, `Latest()`, `Timestamp(epoch_ms)`, `Offset(next_offset)` or `Fail()`. Authorization and RPC failures never select a fallback. If a saved offset has fallen behind the log start, see [Recovering a consumer group from an expired log position](./error-handling.md#recovering-a-consumer-group-from-an-expired-log-position).
 
-`ConsumerGroupOptions::auto_commit_interval_ms` defaults to 5000 ms for group scanners; zero disables automatic commits. Poll enqueues due positions without waiting for an ACK. Process each batch before polling again and call `CommitSync()` and check its result before `Close()` to confirm the final offsets. Close submits a periodic commit only if due and waits up to the group timeout for pending commits. `LatestOnPoll()` resolves each bucket end during poll; `Latest()` resolves it during subscription. Use `SubscribeFromCommitted` for lookup on poll and `RegisterTable` to add a table by path. Dropping a scanner performs no final commit; use a scanner without a consumer group for bounded reads. If importing a poll result fails, recreate the scanner from committed offsets before continuing.
+`ConsumerGroupOptions::auto_commit_interval_ms` defaults to 5000 ms for group scanners; zero disables automatic commits. Poll enqueues due positions without waiting for an ACK. Process each batch before polling again and call `CommitSync()` and check its result before `Close()` to confirm the final offsets. Close submits a periodic commit only if due and waits up to the group timeout for pending commits. `LatestOnPoll()` resolves each bucket end during poll; `Latest()` resolves it during subscription. Use `RegisterTable` to add a table by path. Dropping a scanner performs no final commit; use a scanner without a consumer group for bounded reads. If importing a poll result fails, recreate the scanner from committed offsets before continuing.
 
 `Connection::CreateMultiTableLogScanner(paths, options, out)` and `CreateMultiTableRecordBatchLogScanner` share the same group queue across tables. Table-qualified `Subscribe` and `Unsubscribe` select buckets; every result retains its source schema. Drive polling, assignment and commits from one consumer thread. Assignment is manual, without membership or rebalance.
 

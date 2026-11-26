@@ -2073,8 +2073,8 @@ class TableScan {
 
     TableScan& Limit(int32_t row_number);
 
-    /// Enables explicit offset commits. Group ID is an opaque, nonempty string.
-    /// Consumes this builder. Use Subscribe with OffsetsInitializer::Committed to restore offsets.
+    /// Configures group offset commits and consumes this builder.
+    /// Use SubscribeFromCommitted on the scanner to resume this group's offsets.
     ConsumerGroupScan WithConsumerGroup(ConsumerGroupOptions options);
 
     /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.

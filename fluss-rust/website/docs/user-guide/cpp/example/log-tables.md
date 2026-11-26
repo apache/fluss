@@ -144,6 +144,78 @@ for (size_t i = 0; i < batches.Size(); ++i) {
 }
 ```
 
+## Resuming a consumer group
+
+Assign each bucket to one reader in the group. Here `table` is an open, non-partitioned log table
+and this reader owns bucket 0. `Check` is an application helper that stops on a failed SDK result
+(`!result.Ok()`); `Process` returns only after processing succeeds.
+
+### Automatic commits
+
+```cpp
+fluss::ConsumerGroupOptions group{"orders"};  // Default: 5000 ms
+fluss::LogScanner scanner;
+Check(table.NewScan().WithConsumerGroup(group).CreateLogScanner(scanner));
+std::vector<fluss::TableBucket> buckets{{table.GetTableInfo().table_id, 0, std::nullopt}};
+Check(scanner.SubscribeFromCommitted(buckets));
+
+while (running) {
+    fluss::ScanRecords records;
+    Check(scanner.Poll(1000, records));
+    Process(records);
+}
+
+// Graceful shutdown: confirm the last processed batch even if the interval isn't due.
+Check(scanner.CommitSync());
+Check(scanner.Close());
+```
+
+On restart, use the same group and buckets. Each bucket resumes at its committed **next offset**;
+a bucket with no commit starts at its earliest available record.
+
+To change the interval to one second, set it **before** calling `WithConsumerGroup`:
+
+```cpp
+fluss::ConsumerGroupOptions group{"orders"};
+group.auto_commit_interval_ms = 1000;
+```
+
+When the interval is due, the next `Poll()` queues the current positions without waiting for its
+acknowledgment. If processing takes eight seconds, no periodic commit fires while the application
+is inside `Process`. Finish the batch before polling again. If you hand records to background
+workers, use manual commits so you can acknowledge what the workers have actually finished.
+
+### Manual commits
+
+Use the same bucket assignment and set the interval to zero. Commit only after processing succeeds:
+
+```cpp
+fluss::ConsumerGroupOptions group{"orders"};
+group.auto_commit_interval_ms = 0;
+fluss::LogScanner scanner;
+Check(table.NewScan().WithConsumerGroup(group).CreateLogScanner(scanner));
+Check(scanner.SubscribeFromCommitted(buckets));
+
+while (running) {
+    fluss::ScanRecords records;
+    Check(scanner.Poll(1000, records));
+    Process(records);
+    Check(scanner.CommitSync());
+}
+Check(scanner.Close());
+```
+
+If you process only part of a poll result, pass explicit offsets instead of calling the
+no-argument `CommitSync()`. For example, after processing through offset 41 in bucket 0,
+commit 42 for that bucket and leave the other buckets unchanged:
+
+```cpp
+Check(scanner.CommitSync({{buckets[0], {42, std::nullopt}}}));
+```
+
+`OffsetCommitResult::Ok()` checks both the request and its bucket results. On failure, inspect
+the result before retrying; see [Consumer offset management](../api-reference.md#consumer-offset-management).
+
 ## Filter Pushdown
 
 Configure statistics for columns used by filters:
