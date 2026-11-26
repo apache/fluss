@@ -17,10 +17,19 @@
 
 package org.apache.fluss.flink.metrics;
 
-import org.apache.flink.metrics.Meter;
+import org.apache.fluss.metrics.MetricView;
 
-/** An implementation of Flink's {@link Meter} which wraps Fluss's Meter. */
-public class FlinkMeter implements Meter {
+import org.apache.flink.metrics.Meter;
+import org.apache.flink.metrics.View;
+
+/**
+ * An implementation of Flink's {@link Meter} which wraps Fluss's Meter.
+ *
+ * <p>It is a Flink {@link View}, so Flink's metric registry updates it on the interval a Fluss
+ * {@link MetricView} expects. Fluss's own registry does not see the wrapped meter, and without this
+ * a {@code MeterView} never computes a rate.
+ */
+public class FlinkMeter implements Meter, View {
 
     private final org.apache.fluss.metrics.Meter wrapped;
 
@@ -46,5 +55,12 @@ public class FlinkMeter implements Meter {
     @Override
     public long getCount() {
         return wrapped.getCount();
+    }
+
+    @Override
+    public void update() {
+        if (wrapped instanceof MetricView) {
+            ((MetricView) wrapped).update();
+        }
     }
 }
