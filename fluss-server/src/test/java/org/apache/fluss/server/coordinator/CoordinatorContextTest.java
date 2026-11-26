@@ -97,6 +97,23 @@ class CoordinatorContextTest {
     }
 
     @Test
+    void testRemovingOldObjectsPreservesReplacementPaths() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TablePath table = TablePath.of("db1", "table1");
+        PhysicalTablePath partition = PhysicalTablePath.of(table, "2026");
+        context.putTablePath(1L, table);
+        context.putPartition(100L, partition, createPartitionInfo(100L, "2026"));
+        context.putTablePath(2L, table);
+        context.putPartition(101L, partition, createPartitionInfo(101L, "2026"));
+
+        context.removePartition(new TablePartition(1L, 100L));
+        context.removeTable(1L);
+
+        assertThat(context.getTableIdByPath(table)).isEqualTo(2L);
+        assertThat(context.getPartitionId(partition)).contains(101L);
+    }
+
+    @Test
     void testResetContextClearsPartitionInfo() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         PartitionInfo partitionInfo = createPartitionInfo(100L, "2026");

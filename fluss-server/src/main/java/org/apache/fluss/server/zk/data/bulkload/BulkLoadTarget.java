@@ -43,4 +43,9 @@ public final class BulkLoadTarget {
         this.remoteDataDir = remoteDataDir;
         this.withdrawn = withdrawn;
     }
+
+    /** Returns the representation of this target after its partition is dropped. */
+    public BulkLoadTarget withdraw() {
+        return new BulkLoadTarget(partitionId, partitionName, bucketCount, remoteDataDir, true);
+    }
 }

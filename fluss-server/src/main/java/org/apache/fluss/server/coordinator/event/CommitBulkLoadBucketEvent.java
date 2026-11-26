@@ -28,7 +28,7 @@ import javax.annotation.Nullable;
 import java.util.concurrent.CompletableFuture;
 
 /** Publishes the validated snapshot and the bucket's next role in the same transaction. */
-public final class CommitBulkLoadBucketEvent implements CoordinatorEvent {
+public final class CommitBulkLoadBucketEvent implements CoordinatorEventWithResult<Void> {
     public final CompletedSnapshot snapshot;
     public final VersionedData<BulkLoadTransaction> transaction;
     public final VersionedData<BulkLoadTarget> target;
@@ -36,7 +36,7 @@ public final class CommitBulkLoadBucketEvent implements CoordinatorEvent {
     public final @Nullable Integer partitionVersion;
     public final int coordinatorEpochVersion;
     public final CompletedSnapshotStore snapshotStore;
-    public final CompletableFuture<Void> result = new CompletableFuture<>();
+    private final CompletableFuture<Void> resultFuture = new CompletableFuture<>();
 
     public CommitBulkLoadBucketEvent(
             CompletedSnapshot snapshot,
@@ -53,5 +53,10 @@ public final class CommitBulkLoadBucketEvent implements CoordinatorEvent {
         this.tableVersion = tableVersion;
         this.partitionVersion = partitionVersion;
         this.coordinatorEpochVersion = coordinatorEpochVersion;
+    }
+
+    @Override
+    public CompletableFuture<Void> getResultFuture() {
+        return resultFuture;
     }
 }

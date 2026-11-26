@@ -60,4 +60,19 @@ public final class BulkLoadTransaction {
         this.finishedTime = finishedTime;
         this.abortMessage = abortMessage;
     }
+
+    /** Returns the terminal representation of this transaction. */
+    public BulkLoadTransaction withTerminalState(
+            int state, long now, @Nullable String abortMessage) {
+        return new BulkLoadTransaction(
+                tableId,
+                bulkLoadId,
+                tablePath,
+                schemaId,
+                remoteDataDir,
+                state,
+                createdTime,
+                now,
+                abortMessage);
+    }
 }

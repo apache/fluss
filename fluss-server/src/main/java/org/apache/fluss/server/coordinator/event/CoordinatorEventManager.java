@@ -226,9 +226,7 @@ public final class CoordinatorEventManager implements EventManager {
         inLock(
                 putLock,
                 () -> {
-                    if (thread.isShutdownInitiated()
-                            && event instanceof CommitBulkLoadBucketEvent) {
-                        rejectPendingPublication(event);
+                    if (thread.isShutdownInitiated() && rejectPendingEvent(event)) {
                         return;
                     }
                     try {
@@ -244,7 +242,7 @@ public final class CoordinatorEventManager implements EventManager {
                                 event,
                                 event.getClass());
                     } catch (InterruptedException e) {
-                        rejectPendingPublication(event);
+                        rejectPendingEvent(event);
                         LOG.error("Fail to put coordinator event {}.", event, e);
                     }
                 });
@@ -256,20 +254,22 @@ public final class CoordinatorEventManager implements EventManager {
                 () -> {
                     QueuedEvent pending;
                     while ((pending = queue.poll()) != null) {
-                        rejectPendingPublication(pending.event);
+                        rejectPendingEvent(pending.event);
                     }
                     put(event);
                 });
     }
 
-    private static void rejectPendingPublication(CoordinatorEvent event) {
-        if (event instanceof CommitBulkLoadBucketEvent) {
-            CommitBulkLoadBucketEvent commit = (CommitBulkLoadBucketEvent) event;
-            commit.result.completeExceptionally(
-                    new NotCoordinatorLeaderException(
-                            "Coordinator stopped before publishing "
-                                    + commit.snapshot.getTableBucket()));
+    private static boolean rejectPendingEvent(CoordinatorEvent event) {
+        if (event instanceof CoordinatorEventWithResult<?>) {
+            ((CoordinatorEventWithResult<?>) event)
+                    .getResultFuture()
+                    .completeExceptionally(
+                            new NotCoordinatorLeaderException(
+                                    "Coordinator could not process the pending event."));
+            return true;
         }
+        return false;
     }
 
     private class CoordinatorEventThread extends ShutdownableThread {
