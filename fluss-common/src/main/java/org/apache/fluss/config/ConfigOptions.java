@@ -1363,7 +1363,7 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_PENDING_REQUESTS_PER_CONNECTION =
             key("netty.server.max-pending-requests-per-connection")
                     .intType()
-                    .defaultValue(3)
+                    .defaultValue(5)
                     .withDescription(
                             "The maximum number of requests waiting to be claimed by a worker "
                                     + "on each TCP connection, including a reserved read.");
