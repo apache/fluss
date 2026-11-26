@@ -23,16 +23,16 @@ use crate::metadata::TableBucket;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// In-flight lookup survives short poll deadlines. A seek or unsubscribe invalidates
-/// its snapshot before it can change the scanner position.
+/// A committed-offset lookup can span several polls. Seeking or unsubscribing a
+/// bucket invalidates the lookup so its reply cannot overwrite the new position.
 #[derive(Default)]
-pub(super) struct PendingStarts {
+pub(super) struct PendingOffsetRestore {
     pub(super) buckets: HashSet<TableBucket>,
     lookup: Option<tokio::task::JoinHandle<Result<HashMap<TableBucket, i64>>>>,
 }
 
-impl PendingStarts {
-    pub(super) fn forget(&mut self, bucket: &TableBucket) {
+impl PendingOffsetRestore {
+    pub(super) fn remove_bucket(&mut self, bucket: &TableBucket) {
         if self.buckets.remove(bucket)
             && let Some(task) = self.lookup.take()
         {
@@ -42,38 +42,42 @@ impl PendingStarts {
 }
 
 impl LogScannerInner {
-    pub(super) fn defer_committed(&self, buckets: &[TableBucket]) -> Result<()> {
+    pub(super) fn subscribe_from_committed(&self, buckets: &[TableBucket]) -> Result<()> {
         self.check_no_active_reader()?;
         self.validate_group_buckets(buckets)?;
         self.group()?;
         for bucket in buckets {
             self.unassign_bucket(bucket);
-            self.pending_starts.lock().buckets.insert(bucket.clone());
+            self.pending_offset_restore
+                .lock()
+                .buckets
+                .insert(bucket.clone());
         }
         // Previously pending buckets may share a lookup that did not include the additions.
-        if let Some(task) = self.pending_starts.lock().lookup.take() {
+        if let Some(task) = self.pending_offset_restore.lock().lookup.take() {
             task.abort();
         }
         Ok(())
     }
 
-    pub(super) async fn prepare_positions(
+    /// Returns false if the poll timed out while the lookup was still running.
+    pub(super) async fn restore_committed_offsets(
         self: &Arc<Self>,
         budget: std::time::Duration,
     ) -> Result<bool> {
-        if self.consumer_group.is_none() || self.pending_starts.lock().buckets.is_empty() {
+        if self.consumer_group.is_none() || self.pending_offset_restore.lock().buckets.is_empty() {
             return Ok(true);
         }
         let wait = std::future::poll_fn(|cx| {
             use std::task::{Poll, ready};
-            let mut pending = self.pending_starts.lock();
+            let mut pending = self.pending_offset_restore.lock();
             if pending.lookup.is_none() {
                 let ids: Vec<_> = pending.buckets.iter().cloned().collect();
                 let group = self.consumer_group.as_ref().unwrap().clone();
                 let scanner = Arc::downgrade(self);
                 pending.lookup = Some(tokio::spawn(async move {
                     let offsets = group
-                        .fetch_positions(&ids)
+                        .fetch_committed_offsets(&ids)
                         .await?
                         .into_iter()
                         .map(|(bucket, saved)| {
@@ -96,7 +100,7 @@ impl LogScannerInner {
             return Ok(false);
         };
         let offsets = result.map_err(|e| invalid(&e.to_string()))??;
-        self.assign_buckets(offsets);
+        self.assign_buckets_at_offsets(offsets);
         Ok(true)
     }
 
@@ -133,10 +137,10 @@ impl LogScannerInner {
 macro_rules! group_methods {
     ($scanner:ty) => {
         impl $scanner {
-            /// Restores this scanner's group on the next poll. Buckets without a saved
-            /// offset start at the earliest available record. Lookup errors propagate from poll.
+            /// Registers buckets now; poll looks up this group's committed offsets before reading.
+            /// A missing commit starts at earliest. A lookup error is returned by poll.
             pub fn subscribe_from_committed(&self, buckets: &[TableBucket]) -> Result<()> {
-                self.inner.defer_committed(buckets)
+                self.inner.subscribe_from_committed(buckets)
             }
 
             /// Commits progress from completed polls, including ranges skipped by the filter.

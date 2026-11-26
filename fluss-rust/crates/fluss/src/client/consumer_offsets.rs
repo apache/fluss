@@ -192,7 +192,7 @@ impl ConsumerGroup {
         }
     }
 
-    pub(crate) async fn fetch_positions(
+    pub(crate) async fn fetch_committed_offsets(
         &self,
         buckets: &[TableBucket],
     ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
