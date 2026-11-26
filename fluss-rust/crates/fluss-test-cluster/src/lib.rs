@@ -27,9 +27,9 @@ use testcontainers::bollard::query_parameters::{
     ListContainersOptionsBuilder, RemoveContainerOptionsBuilder,
 };
 use testcontainers::core::client::docker_client_instance;
-use testcontainers::core::{CmdWaitFor, ContainerPort, ExecCommand};
+use testcontainers::core::{CmdWaitFor, ContainerPort, ExecCommand, Mount};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use testcontainers::{ContainerAsync, ContainerRequest, GenericImage, ImageExt};
 
 /// testcontainers' own shared `bollard::Docker` — the same client (and daemon
 /// resolution) it uses for `image.start()`, so teardown and existence checks act on
@@ -369,6 +369,17 @@ impl FlussTestingClusterBuilder {
             .unwrap()
     }
 
+    fn server_image(&self) -> ContainerRequest<GenericImage> {
+        let image = GenericImage::new(&self.image, &self.image_tag).with_network(self.network);
+        // The coordinator writes snapshot manifests that tablet servers must be able to read.
+        if let Some(dir) = &self.remote_data_dir {
+            let path = dir.to_string_lossy();
+            image.with_mount(Mount::bind_mount(path.as_ref(), path.as_ref()))
+        } else {
+            image
+        }
+    }
+
     async fn start_coordinator_server(&mut self) -> ContainerAsync<GenericImage> {
         let port = self.coordinator_host_port;
         let container_name = self.coordinator_server_container_name();
@@ -409,10 +420,10 @@ impl FlussTestingClusterBuilder {
 
         coordinator_confs.insert("internal.listener.name", "INTERNAL".to_string());
 
-        let mut image = GenericImage::new(&self.image, &self.image_tag)
+        let mut image = self
+            .server_image()
             .with_container_name(self.coordinator_server_container_name())
             .with_mapped_port(port, ContainerPort::Tcp(port))
-            .with_network(self.network)
             .with_cmd(vec!["coordinatorServer"])
             .with_env_var(
                 "FLUSS_PROPERTIES",
@@ -462,10 +473,10 @@ impl FlussTestingClusterBuilder {
         tablet_server_confs.insert("internal.listener.name", "INTERNAL".to_string());
         tablet_server_confs.insert("tablet-server.id", tablet_server_id);
 
-        let mut image = GenericImage::new(&self.image, &self.image_tag)
+        let mut image = self
+            .server_image()
             .with_cmd(vec!["tabletServer"])
             .with_mapped_port(expose_host_port, ContainerPort::Tcp(port))
-            .with_network(self.network)
             .with_container_name(self.tablet_server_container_name(server_id))
             .with_env_var(
                 "FLUSS_PROPERTIES",
@@ -475,15 +486,6 @@ impl FlussTestingClusterBuilder {
         if let Some(plain_port) = self.plain_client_port {
             let plain_expose_host_port = plain_port + 1 + server_id;
             image = image.with_mapped_port(plain_expose_host_port, ContainerPort::Tcp(plain_port));
-        }
-
-        if let Some(ref remote_data_dir) = self.remote_data_dir {
-            use testcontainers::core::Mount;
-            std::fs::create_dir_all(remote_data_dir)
-                .expect("Failed to create remote data directory for mount");
-            let host_path = remote_data_dir.to_string_lossy().to_string();
-            let container_path = remote_data_dir.to_string_lossy().to_string();
-            image = image.with_mount(Mount::bind_mount(host_path, container_path));
         }
 
         image.start().await.unwrap()
