@@ -37,6 +37,9 @@ import org.apache.fluss.security.auth.sasl.plain.PlainSaslServerConfigManager;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
@@ -47,6 +50,10 @@ import java.util.function.Supplier;
 
 /** Build-in protocol plugin for Fluss. */
 public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FlussProtocolPlugin.class);
+
+    private static final String SASL_AUTH_PROTOCOL = "sasl";
 
     private final ApiManager apiManager;
     private final List<String> listeners;
@@ -85,6 +92,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         checkInternalListenerMatchesClientTls();
         this.sslContext =
                 sslConfig == null ? null : SslContextFactory.createServerSslContext(sslConfig);
+        warnSaslListenersWithoutTls(conf);
     }
 
     @Override
@@ -162,6 +170,29 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
                     ConfigOptions.CLIENT_SSL_ENABLED.key(),
                     clientTls);
+        }
+    }
+
+    /**
+     * SASL mechanisms such as PLAIN send credentials in clear text unless the transport encrypts
+     * them. This only warns rather than failing startup, since existing clusters run SASL without
+     * TLS (e.g. behind a trusted network).
+     */
+    private void warnSaslListenersWithoutTls(Configuration conf) {
+        Map<String, String> protocols = conf.get(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
+        for (String listener : listeners) {
+            if (SASL_AUTH_PROTOCOL.equalsIgnoreCase(protocols.get(listener))
+                    && !isTlsListener(listener)) {
+                LOG.warn(
+                        "Listener '{}' uses SASL authentication ('{}') without TLS because it is "
+                                + "not listed in '{}'. SASL credentials, such as SASL/PLAIN "
+                                + "passwords, are sent in clear text on this listener. Add it to "
+                                + "'{}' to encrypt its connections.",
+                        listener,
+                        ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                        ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
+                        ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+            }
         }
     }
 
