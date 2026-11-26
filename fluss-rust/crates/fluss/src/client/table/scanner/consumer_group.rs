@@ -147,7 +147,7 @@ macro_rules! group_methods {
             }
 
             /// Enqueues explicit next offsets from a Tokio runtime, in call order.
-            /// Dropping or aborting the handle does not cancel the commit. No ordering or fencing is
+            /// Dropping the handle does not cancel the commit. No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
             /// At most 64 commits may be pending per scanner. A full queue returns
             /// `Error::BufferExhausted` before enqueueing; retry after a pending commit finishes.
@@ -168,7 +168,9 @@ macro_rules! group_methods {
             pub async fn commit_sync(
                 &self,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                await_commit(self.commit_async().map_err(OffsetCommitError::Rejected)?).await
+                self.commit_async()
+                    .map_err(OffsetCommitError::Rejected)?
+                    .await
             }
 
             /// Awaits persistence of explicit next offsets and optional metadata.
@@ -177,20 +179,12 @@ macro_rules! group_methods {
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
             ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-                await_commit(
-                    self.commit_offsets_async(offsets)
-                        .map_err(OffsetCommitError::Rejected)?,
-                )
-                .await
+                self.commit_offsets_async(offsets)
+                    .map_err(OffsetCommitError::Rejected)?
+                    .await
             }
         }
     };
 }
 group_methods!(LogScanner);
 group_methods!(RecordBatchLogScanner);
-
-async fn await_commit(
-    handle: OffsetCommitHandle,
-) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-    handle.await?
-}

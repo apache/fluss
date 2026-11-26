@@ -23,7 +23,9 @@ use crate::proto;
 use crate::rpc::{ApiError, RequestFailure, RpcClient, message};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 /// Consumer group configuration for a manually assigned scanner.
@@ -88,10 +90,24 @@ pub enum OffsetCommitOutcome {
 /// Per-bucket commit outcomes; contains exactly the requested buckets.
 pub type OffsetCommitResult = HashMap<TableBucket, OffsetCommitOutcome>;
 
-/// Awaitable commit completion. Dropping or aborting this handle stops waiting;
-/// the queued operation continues and preserves commit ordering.
-pub type OffsetCommitHandle =
-    tokio::task::JoinHandle<std::result::Result<OffsetCommitResult, OffsetCommitError>>;
+/// Completion of an already queued commit. Dropping the handle leaves the commit running.
+#[derive(Debug)]
+pub struct OffsetCommitHandle(
+    tokio::task::JoinHandle<std::result::Result<OffsetCommitResult, OffsetCommitError>>,
+);
+
+impl Future for OffsetCommitHandle {
+    type Output = std::result::Result<OffsetCommitResult, OffsetCommitError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(ready!(Pin::new(&mut self.0).poll(cx)).map_err(|error| {
+            OffsetCommitError::Unknown(Error::UnexpectedError {
+                message: "Offset commit task failed".into(),
+                source: Some(Box::new(error)),
+            })
+        })?)
+    }
+}
 
 /// Request-level commit failure, distinct from per-bucket results.
 #[derive(Debug, thiserror::Error)]
@@ -109,15 +125,6 @@ pub enum OffsetCommitError {
         "A late offset commit could overwrite this position or its metadata; settle it before rewinding"
     )]
     NeedsRecovery,
-}
-
-impl From<tokio::task::JoinError> for OffsetCommitError {
-    fn from(error: tokio::task::JoinError) -> Self {
-        Self::Unknown(Error::UnexpectedError {
-            message: "Offset commit task failed".into(),
-            source: Some(Box::new(error)),
-        })
-    }
 }
 
 pub(crate) fn invalid(message: &str) -> Error {
@@ -213,8 +220,7 @@ impl ConsumerGroup {
             let _ = done.send(());
             result
         });
-        // Keep the queue link alive when a caller cancels its waiting handle.
-        Ok(runtime.spawn(async move { operation.await? }))
+        Ok(OffsetCommitHandle(operation))
     }
 
     async fn commit(

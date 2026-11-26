@@ -226,7 +226,7 @@ impl CommitPeer {
         &self,
         offset: i64,
     ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-        self.enqueue(offset).unwrap().await.unwrap()
+        self.enqueue(offset).unwrap().await
     }
 }
 
@@ -268,8 +268,7 @@ async fn retry_after_lost_ack_cannot_fence_the_first_write() {
         peer.group
             .enqueue(HashMap::from([(TableBucket::new(1, 0), changed)]))
             .unwrap()
-            .await
-            .unwrap(),
+            .await,
         Err(OffsetCommitError::NeedsRecovery)
     ));
     let other = TableBucket::new(1, 1);
@@ -277,7 +276,6 @@ async fn retry_after_lost_ack_cannot_fence_the_first_write() {
         .enqueue(HashMap::from([(other, OffsetAndMetadata::new(1))]))
         .unwrap()
         .await
-        .unwrap()
         .unwrap();
 }
 
@@ -318,13 +316,13 @@ async fn timeout_after_sending_guards_a_rewind() {
 }
 
 #[tokio::test]
-async fn aborting_waiter_preserves_queue_order_and_capacity() {
+async fn dropping_handle_preserves_queue_order_and_capacity() {
     let peer = CommitPeer::start([]).await;
     let connection = peer.connection().await;
     let mut last = None;
     connection
         .with_write_lock_for_test(async {
-            peer.enqueue(0).unwrap().abort();
+            drop(peer.enqueue(0).unwrap());
             for offset in 1..MAX_PENDING_COMMITS {
                 last = Some(peer.enqueue(offset as i64).unwrap());
             }
@@ -334,7 +332,7 @@ async fn aborting_waiter_preserves_queue_order_and_capacity() {
             ));
         })
         .await;
-    last.unwrap().await.unwrap().unwrap();
+    last.unwrap().await.unwrap();
     assert_eq!(
         *peer.received.lock(),
         (0..MAX_PENDING_COMMITS as i64).collect::<Vec<_>>()
