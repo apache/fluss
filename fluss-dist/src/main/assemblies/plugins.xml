@@ -87,6 +87,13 @@
             <fileMode>0644</fileMode>
         </file>
 
+        <file>
+            <source>../fluss-metrics/fluss-metrics-datadog/target/fluss-metrics-datadog-${project.version}.jar</source>
+            <outputDirectory>plugins/datadog/</outputDirectory>
+            <destName>fluss-metrics-datadog-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
         <!-- lake formats -->
         <file>
             <source>../fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-${project.version}.jar</source>
