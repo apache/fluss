@@ -35,6 +35,6 @@ pub use write::*;
 
 mod consumer_offsets;
 pub use consumer_offsets::{
-    ConsumerGroupOptions, OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle,
-    OffsetCommitOutcome, OffsetCommitResult,
+    ConsumerGroupOptions, OffsetAndMetadata, OffsetCommitError, OffsetCommitOutcome,
+    OffsetCommitResult,
 };

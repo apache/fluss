@@ -20,9 +20,10 @@ use crate::cluster::{ServerNode, ServerType};
 use crate::error::{Error, Result};
 use crate::metadata::TableBucket;
 use crate::proto;
-use crate::rpc::{ApiError, RequestFailure, RpcClient, message};
+use crate::rpc::{ApiError, FlussError, RequestFailure, RpcClient, message};
+use futures::FutureExt;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -90,13 +91,13 @@ pub enum OffsetCommitOutcome {
 /// Per-bucket commit outcomes; contains exactly the requested buckets.
 pub type OffsetCommitResult = HashMap<TableBucket, OffsetCommitOutcome>;
 
-/// Completion of an already queued commit. Dropping the handle leaves the commit running.
-#[derive(Debug)]
-pub struct OffsetCommitHandle(
-    tokio::task::JoinHandle<std::result::Result<OffsetCommitResult, OffsetCommitError>>,
-);
+type CommitResult = std::result::Result<OffsetCommitResult, OffsetCommitError>;
+type CommitCallback = Box<dyn FnOnce(CommitResult) + Send>;
 
-impl Future for OffsetCommitHandle {
+#[derive(Debug)]
+struct PendingCommit(tokio::sync::oneshot::Receiver<CommitResult>);
+
+impl Future for PendingCommit {
     type Output = std::result::Result<OffsetCommitResult, OffsetCommitError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -141,26 +142,51 @@ fn timeout_error() -> Error {
 }
 
 fn routing_error(error: &Error) -> bool {
-    matches!(error, Error::FlussAPIError { api_error } if matches!(api_error.code, 76..=78))
+    matches!(
+        error.api_error(),
+        Some(
+            FlussError::ConsumerGroupOwnerLoading
+                | FlussError::ConsumerGroupOwnerNotAvailable
+                | FlussError::NotConsumerGroupOwner
+        )
+    )
 }
 
 fn api_error(code: i32, message: Option<String>) -> ApiError {
     ApiError {
         code,
-        message: message.unwrap_or_else(|| crate::rpc::FlussError::for_code(code).message().into()),
+        message: message.unwrap_or_else(|| FlussError::for_code(code).message().into()),
     }
 }
 
 fn definite_rejection(error: &Error) -> bool {
     // Only known validation/authentication failures establish that no write occurred.
     // A future, unrecognized error code must not silently clear uncertainty.
-    matches!(error, Error::FlussAPIError { api_error } if matches!(api_error.code, 2 | 4 | 7 | 15 | 16 | 36 | 37 | 43 | 46 | 47 | 48 | 75 | 79 | 80 | 81))
-        || matches!(
-            error,
-            Error::UnsupportedOperation { .. }
-                | Error::UnsupportedVersion { .. }
-                | Error::IllegalArgument { .. }
+    matches!(
+        error.api_error(),
+        Some(
+            FlussError::UnsupportedVersion
+                | FlussError::DatabaseNotExist
+                | FlussError::TableNotExist
+                | FlussError::InvalidTableException
+                | FlussError::InvalidDatabaseException
+                | FlussError::PartitionNotExists
+                | FlussError::TableNotPartitionedException
+                | FlussError::PartitionSpecInvalidException
+                | FlussError::AuthenticateException
+                | FlussError::SecurityDisabledException
+                | FlussError::AuthorizationException
+                | FlussError::InvalidConsumerGroupId
+                | FlussError::ConsumerGroupIdNotFound
+                | FlussError::ConsumerOffsetMetadataTooLarge
+                | FlussError::InvalidRequest
         )
+    ) || matches!(
+        error,
+        Error::UnsupportedOperation { .. }
+            | Error::UnsupportedVersion { .. }
+            | Error::IllegalArgument { .. }
+    )
 }
 
 const MAX_PENDING_COMMITS: usize = 64;
@@ -171,6 +197,7 @@ pub(crate) struct ConsumerGroup {
     client: ConsumerGroupClient,
     // Held through the response, not just dispatch: the server may reorder concurrent commits.
     late_writes: tokio::sync::Mutex<HashMap<TableBucket, OffsetAndMetadata>>,
+    callbacks: Mutex<VecDeque<(PendingCommit, CommitCallback)>>,
     tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     pub(crate) delivered: Mutex<HashMap<TableBucket, OffsetAndMetadata>>,
 }
@@ -187,9 +214,66 @@ impl ConsumerGroup {
             table_id,
             client: ConsumerGroupClient::new(options, connections, metadata),
             late_writes: tokio::sync::Mutex::new(HashMap::new()),
+            callbacks: Mutex::default(),
             tail: Mutex::new(None),
             delivered: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn enqueue_callback(
+        self: &Arc<Self>,
+        offsets: HashMap<TableBucket, OffsetAndMetadata>,
+        callback: impl FnOnce(CommitResult) + Send + 'static,
+    ) -> Result<()> {
+        let mut callbacks = self.callbacks.lock();
+        callbacks.push_back((self.enqueue(offsets)?, Box::new(callback)));
+        Ok(())
+    }
+
+    pub(crate) fn invoke_callbacks(&self, closing: bool) {
+        loop {
+            let (callback, result) = {
+                let mut callbacks = self.callbacks.lock();
+                let Some((pending, _)) = callbacks.front_mut() else {
+                    return;
+                };
+                let result = match pending.now_or_never() {
+                    Some(result) => result,
+                    None if closing => Err(OffsetCommitError::Unknown(timeout_error())),
+                    None => return,
+                };
+                (callbacks.pop_front().unwrap().1, result)
+            };
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(result))).is_err()
+            {
+                log::error!("Consumer offset commit callback panicked");
+            }
+        }
+    }
+
+    pub(crate) async fn commit_sync(
+        self: &Arc<Self>,
+        offsets: HashMap<TableBucket, OffsetAndMetadata>,
+    ) -> CommitResult {
+        self.invoke_callbacks(false);
+        let result = self
+            .enqueue(offsets)
+            .map_err(OffsetCommitError::Rejected)?
+            .await;
+        self.invoke_callbacks(false);
+        result
+    }
+
+    pub(crate) async fn await_pending_commits(&self) {
+        // Each queued operation releases its permit only after its outcome is known locally.
+        let drain = self.slots.acquire_many(MAX_PENDING_COMMITS as u32);
+        if tokio::time::timeout(self.client.options.timeout, drain)
+            .await
+            .is_err()
+        {
+            log::warn!("Timed out waiting for pending consumer offset commits during close");
+        }
+        self.invoke_callbacks(true);
     }
 
     pub(crate) async fn fetch_committed_offsets(
@@ -199,10 +283,10 @@ impl ConsumerGroup {
         self.client.fetch(buckets).await
     }
 
-    pub(crate) fn enqueue(
+    fn enqueue(
         self: &Arc<Self>,
         offsets: HashMap<TableBucket, OffsetAndMetadata>,
-    ) -> Result<OffsetCommitHandle> {
+    ) -> Result<PendingCommit> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|_| invalid("Consumer offset commits require a Tokio runtime"))?;
         let slot = self.slots.clone().try_acquire_owned().map_err(|_| Error::BufferExhausted {
@@ -211,16 +295,16 @@ impl ConsumerGroup {
         let (done, next) = tokio::sync::oneshot::channel();
         let previous = self.tail.lock().replace(next);
         let group = self.clone();
-        let operation = runtime.spawn(async move {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        runtime.spawn(async move {
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
-            let result = group.commit(offsets).await;
+            let _ = reply.send(group.commit(offsets).await);
             drop(slot);
             let _ = done.send(());
-            result
         });
-        Ok(OffsetCommitHandle(operation))
+        Ok(PendingCommit(response))
     }
 
     async fn commit(
@@ -476,7 +560,10 @@ impl ConsumerGroupClient {
             }
         })
         .await
-        .map_err(|_| timeout_error())?
+        .map_err(|_| {
+            self.invalidate_owner();
+            timeout_error()
+        })?
     }
 }
 
