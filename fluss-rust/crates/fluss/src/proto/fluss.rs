@@ -1280,6 +1280,7 @@ pub struct PbBulkLoadHandle {
 pub struct PbBulkLoadStatus {
     #[prost(message, required, tag = "1")]
     pub handle: PbBulkLoadHandle,
+    /// 0 = RUNNING, 1 = COMMITTED, 2 = ABORTED.
     #[prost(int32, required, tag = "2")]
     pub state: i32,
     #[prost(int64, required, tag = "3")]
