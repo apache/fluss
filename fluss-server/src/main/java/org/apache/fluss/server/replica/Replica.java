@@ -489,6 +489,13 @@ public final class Replica {
         return remoteDataDir;
     }
 
+    boolean requiresLeaderActivation(int requestLeaderEpoch) {
+        return requestLeaderEpoch > leaderEpoch
+                || (requestLeaderEpoch == leaderEpoch
+                        && isKvTable()
+                        && leaderReplicaIdOpt.get() == null);
+    }
+
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
@@ -497,11 +504,11 @@ public final class Replica {
                             int requestBucketEpoch = data.getBucketEpoch();
                             validateBucketEpoch(requestBucketEpoch);
 
+                            int requestLeaderEpoch = data.getLeaderEpoch();
+                            boolean activate = requiresLeaderActivation(requestLeaderEpoch);
                             // Resolve recovery metadata before changing role state or dropping KV.
                             KvRecovery recovery =
-                                    data.getLeaderEpoch() > leaderEpoch && isKvTable()
-                                            ? prepareKvRecovery()
-                                            : null;
+                                    activate && isKvTable() ? prepareKvRecovery() : null;
 
                             coordinatorEpoch = data.getCoordinatorEpoch();
                             updateRoutingState(data);
@@ -515,9 +522,13 @@ public final class Replica {
                                     data.getIsr(),
                                     data.getStandbyReplicas());
 
-                            int requestLeaderEpoch = data.getLeaderEpoch();
-                            if (requestLeaderEpoch > leaderEpoch) {
+                            if (activate) {
                                 boolean isNewLeader = !isLeader();
+                                if (recovery != null) {
+                                    // Leave a failed KV activation retryable at the published
+                                    // epoch.
+                                    leaderReplicaIdOpt.set(null);
+                                }
                                 leaderEpoch = requestLeaderEpoch;
                                 onBecomeNewLeader(recovery);
                                 leaderReplicaIdOpt.set(localTabletServerId);

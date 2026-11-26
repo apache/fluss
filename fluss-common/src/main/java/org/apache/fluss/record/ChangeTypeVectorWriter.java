@@ -17,32 +17,35 @@
 
 package org.apache.fluss.record;
 
-import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.memory.AbstractPagedOutputView;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
+import java.io.IOException;
+import java.util.Arrays;
 
-/** A writer for {@link ChangeTypeVector}. */
+/**
+ * A writer for {@link ChangeTypeVector}.
+ *
+ * <p>The change types are buffered on heap, one byte per record, and copied into the batch when it
+ * is built. The vector therefore is not bounded by the size of a memory segment and may span
+ * several segments of the output view.
+ */
 public class ChangeTypeVectorWriter {
 
-    private final MemorySegment segment;
-    private final int capacity;
-    private final int startPosition;
+    private static final int INITIAL_CAPACITY = 256;
+
+    private byte[] buffer = new byte[INITIAL_CAPACITY];
     private int recordsCount = 0;
 
-    public ChangeTypeVectorWriter(MemorySegment segment, int startPosition) {
-        checkArgument(segment.size() >= startPosition, "The start position is out of bound.");
-        this.segment = segment;
-        this.capacity = segment.size() - startPosition;
-        this.startPosition = startPosition;
+    public void writeChangeType(ChangeType changeType) {
+        if (recordsCount == buffer.length) {
+            buffer = Arrays.copyOf(buffer, Math.multiplyExact(buffer.length, 2));
+        }
+        buffer[recordsCount++] = changeType.toByteValue();
     }
 
-    public void writeChangeType(ChangeType changeType) {
-        if (recordsCount > capacity) {
-            // TODO: support AbstractPagedOutputView to have extendable capacity
-            throw new IllegalStateException("The change type vector is full.");
-        }
-        segment.put(startPosition + recordsCount, changeType.toByteValue());
-        recordsCount++;
+    /** Writes the vector at the current position of the given output view. */
+    public void writeTo(AbstractPagedOutputView outputView) throws IOException {
+        outputView.write(buffer, 0, recordsCount);
     }
 
     public int sizeInBytes() {

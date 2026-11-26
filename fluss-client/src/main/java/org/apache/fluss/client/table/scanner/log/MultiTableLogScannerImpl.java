@@ -90,49 +90,6 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
      */
     private final Map<TablePath, Set<TableBucket>> subscribedBucketsByPath = new HashMap<>();
 
-    public MultiTableLogScannerImpl(
-            String scannerName,
-            MetadataUpdater metadataUpdater,
-            Configuration conf,
-            ClientMetricGroup clientMetricGroup,
-            RemoteFileDownloader remoteFileDownloader,
-            Admin admin) {
-        this(
-                scannerName,
-                metadataUpdater,
-                conf,
-                remoteFileDownloader,
-                admin,
-                new LogScannerStatus(),
-                // Use a synthetic TablePath for scanner-level metrics scoping.
-                new ScannerMetricGroup(
-                        clientMetricGroup, TablePath.of("multi-table", scannerName)));
-    }
-
-    private MultiTableLogScannerImpl(
-            String scannerName,
-            MetadataUpdater metadataUpdater,
-            Configuration conf,
-            RemoteFileDownloader remoteFileDownloader,
-            Admin admin,
-            LogScannerStatus logScannerStatus,
-            ScannerMetricGroup scannerMetricGroup) {
-        this(
-                scannerName,
-                metadataUpdater,
-                admin,
-                logScannerStatus,
-                new LogFetcher(
-                        scannerName,
-                        logScannerStatus,
-                        conf,
-                        metadataUpdater,
-                        scannerMetricGroup,
-                        remoteFileDownloader,
-                        LogRecordReadContext.SchemaResolution.DYNAMIC),
-                scannerMetricGroup);
-    }
-
     @VisibleForTesting
     MultiTableLogScannerImpl(
             String scannerName,
@@ -140,10 +97,42 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             Admin admin,
             LogScannerStatus logScannerStatus,
             LogFetcher logFetcher,
-            ScannerMetricGroup scannerMetricGroup) {
-        super(scannerName, logScannerStatus, logFetcher, scannerMetricGroup);
+            ScannerMetricGroup scannerMetricGroup,
+            Configuration conf) {
+        super(scannerName, logScannerStatus, logFetcher, scannerMetricGroup, conf, metadataUpdater);
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
+    }
+
+    /** Creates a multi-table scanner with a shared fetcher for all subscribed tables. */
+    public static MultiTableLogScanner create(
+            String scannerName,
+            MetadataUpdater metadataUpdater,
+            Configuration conf,
+            ClientMetricGroup clientMetricGroup,
+            RemoteFileDownloader remoteFileDownloader,
+            Admin admin) {
+        LogScannerStatus logScannerStatus = new LogScannerStatus();
+        // Use a synthetic TablePath for scanner-level metrics scoping.
+        ScannerMetricGroup scannerMetricGroup =
+                new ScannerMetricGroup(clientMetricGroup, TablePath.of("multi-table", scannerName));
+        LogFetcher logFetcher =
+                new LogFetcher(
+                        scannerName,
+                        logScannerStatus,
+                        conf,
+                        metadataUpdater,
+                        scannerMetricGroup,
+                        remoteFileDownloader,
+                        LogRecordReadContext.SchemaResolution.DYNAMIC);
+        return new MultiTableLogScannerImpl(
+                scannerName,
+                metadataUpdater,
+                admin,
+                logScannerStatus,
+                logFetcher,
+                scannerMetricGroup,
+                conf);
     }
 
     @Override
@@ -180,6 +169,25 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             registerIfAbsent(tablePath, tableInfo);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucket);
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            trackSubscription(tablePath, tableBucket);
+        } finally {
+            release();
+        }
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(TablePath tablePath, int bucket) {
+        acquireAndEnsureOpen();
+        try {
+            TableInfo tableInfo = getTableInfo(tablePath);
+            if (tableInfo.isPartitioned()) {
+                throw new IllegalStateException(
+                        "Table " + tablePath + " is partitioned; provide a partition id.");
+            }
+            metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            registerIfAbsent(tablePath, tableInfo);
+            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucket);
+            subscribeFromCommittedOffset(tableBucket);
             trackSubscription(tablePath, tableBucket);
         } finally {
             release();
@@ -229,6 +237,26 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             registerIfAbsent(tablePath, tableInfo);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucket);
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            trackSubscription(tablePath, tableBucket);
+        } finally {
+            release();
+        }
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(TablePath tablePath, long partitionId, int bucket) {
+        acquireAndEnsureOpen();
+        try {
+            TableInfo tableInfo = getTableInfo(tablePath);
+            if (!tableInfo.isPartitioned()) {
+                throw new IllegalStateException("Table " + tablePath + " is not partitioned.");
+            }
+            metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            metadataUpdater.checkAndUpdatePartitionMetadata(
+                    tablePath, Collections.singleton(partitionId));
+            registerIfAbsent(tablePath, tableInfo);
+            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucket);
+            subscribeFromCommittedOffset(tableBucket);
             trackSubscription(tablePath, tableBucket);
         } finally {
             release();

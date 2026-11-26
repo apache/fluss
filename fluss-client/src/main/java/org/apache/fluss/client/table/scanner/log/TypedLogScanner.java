@@ -18,11 +18,20 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.admin.OffsetMetadata;
+import org.apache.fluss.metadata.TableBucket;
 
 import java.time.Duration;
+import java.util.Map;
 
 /**
  * A typed scanner is used to scan log data as POJOs of specify table from Fluss.
+ *
+ * <p>With automatic commits enabled, both {@link #poll(Duration)} and {@link #close()} submit the
+ * current consumed offsets asynchronously when the configured interval has elapsed. Closing waits
+ * for outstanding commits using {@code client.request-timeout}. To confirm the final positions have
+ * been committed, call {@link #commitSync()} before closing. See {@link OffsetCommitCallback} for
+ * callback delivery.
  *
  * @param <T> the type of the POJO
  * @since 0.6
@@ -54,6 +63,102 @@ public interface TypedLogScanner<T> extends AutoCloseable {
      * @param bucket the table bucket to subscribe.
      */
     void subscribeFromBeginning(long partitionId, int bucket);
+
+    /**
+     * Subscribe to the given non-partitioned table bucket starting from the consumer group's
+     * committed offset. If no offset has been committed for the bucket, the configured {@code
+     * client.consumer.auto-offset-reset} policy (default {@code earliest}) is applied.
+     *
+     * @param bucket the table bucket to subscribe.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void subscribeFromCommittedOffset(int bucket);
+
+    /**
+     * Subscribe to the given partitioned table bucket starting from the consumer group's committed
+     * offset. If no offset has been committed for the bucket, the configured {@code
+     * client.consumer.auto-offset-reset} policy (default {@code earliest}) is applied.
+     *
+     * @param partitionId the partition id of the table partition to subscribe.
+     * @param bucket the table bucket to subscribe.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void subscribeFromCommittedOffset(long partitionId, int bucket);
+
+    /**
+     * Synchronously commits all offsets consumed so far by this scanner to its consumer group,
+     * using the default API timeout.
+     *
+     * @throws org.apache.fluss.exception.TimeoutException if the commit does not finish in time.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitSync();
+
+    /**
+     * Synchronously commits all offsets consumed so far by this scanner to its consumer group.
+     *
+     * @param timeout the maximum time to wait for the commit to finish.
+     * @throws org.apache.fluss.exception.TimeoutException if the commit does not finish in time.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitSync(Duration timeout);
+
+    /**
+     * Synchronously commits the given offsets to this scanner's consumer group, using the default
+     * API timeout.
+     *
+     * @param offsets the offsets to commit, keyed by table bucket.
+     * @throws org.apache.fluss.exception.TimeoutException if the commit does not finish in time.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitSync(Map<TableBucket, OffsetMetadata> offsets);
+
+    /**
+     * Synchronously commits the given offsets to this scanner's consumer group.
+     *
+     * @param offsets the offsets to commit, keyed by table bucket.
+     * @param timeout the maximum time to wait for the commit to finish.
+     * @throws org.apache.fluss.exception.TimeoutException if the commit does not finish in time.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitSync(Map<TableBucket, OffsetMetadata> offsets, Duration timeout);
+
+    /**
+     * Asynchronously commits all offsets consumed so far by this scanner to its consumer group. The
+     * scanner logs failures at error level when it processes the commit result.
+     *
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitAsync();
+
+    /**
+     * Asynchronously commits all offsets consumed so far by this scanner to its consumer group.
+     *
+     * @param callback the callback to invoke on a later scanner call, or {@code null} to log
+     *     failures at error level when the scanner processes the result.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitAsync(OffsetCommitCallback callback);
+
+    /**
+     * Asynchronously commits the given offsets to this scanner's consumer group.
+     *
+     * @param offsets the offsets to commit, keyed by table bucket. The request and callback use
+     *     this map directly. Pass a copy if you plan to modify the original.
+     * @param callback the callback to invoke on a later scanner call, or {@code null} to log
+     *     failures at error level when the scanner processes the result.
+     * @throws org.apache.fluss.exception.InvalidConsumerGroupIdException if no consumer group id is
+     *     configured.
+     */
+    void commitAsync(Map<TableBucket, OffsetMetadata> offsets, OffsetCommitCallback callback);
 
     /**
      * Subscribe to the given table bucket in given offset dynamically. If the table bucket is

@@ -68,6 +68,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
@@ -511,6 +512,25 @@ public class ReplicaTestBase {
             List<Integer> isr,
             int leaderEpoch,
             boolean partitionTable) {
+        LeaderAndIsr role =
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        leaderEpoch,
+                        isr,
+                        Collections.emptyList(),
+                        INITIAL_COORDINATOR_EPOCH,
+                        leaderEpoch);
+        try {
+            int coordinatorVersion = ZkVersion.MATCH_ANY_VERSION.getVersion();
+            Optional<LeaderAndIsr> current = zkClient.getLeaderAndIsr(tb);
+            if (current.isPresent()) {
+                zkClient.updateLeaderAndIsr(tb, role, coordinatorVersion);
+            } else {
+                zkClient.registerLeaderAndIsr(tb, role, coordinatorVersion);
+            }
+        } catch (Exception e) {
+            throw new AssertionError("Could not publish the test role for " + tb, e);
+        }
         makeLeaderAndFollower(
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(
@@ -519,14 +539,7 @@ public class ReplicaTestBase {
                                         : PhysicalTablePath.of(tablePath),
                                 tb,
                                 replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        leaderEpoch,
-                                        isr,
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        // use leader epoch as bucket epoch
-                                        leaderEpoch),
+                                role,
                                 // all test tables are created distributedBy(3)
                                 TEST_ROUTING_BUCKET_COUNT,
                                 0L)));

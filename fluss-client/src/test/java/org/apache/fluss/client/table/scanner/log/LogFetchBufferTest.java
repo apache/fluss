@@ -206,6 +206,16 @@ public class LogFetchBufferTest {
     }
 
     @Test
+    void testResetCompletingBeforeWaitWakesPollOnce() throws Exception {
+        try (LogFetchBuffer buffer = new LogFetchBuffer()) {
+            buffer.signalOffsetReset();
+            assertThat(buffer.isEmpty()).isTrue();
+            assertThat(buffer.awaitNotEmpty(System.nanoTime())).isTrue();
+            assertThat(buffer.awaitNotEmpty(System.nanoTime())).isFalse();
+        }
+    }
+
+    @Test
     void testWakeup() throws Exception {
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
             AtomicReference<Exception> exception = new AtomicReference<>();

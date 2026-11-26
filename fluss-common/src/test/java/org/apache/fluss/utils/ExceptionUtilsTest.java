@@ -143,6 +143,19 @@ public class ExceptionUtilsTest {
     }
 
     @Test
+    public void testStripFutureException() {
+        Throwable cause = new IllegalStateException("failed");
+        Throwable wrapped =
+                new ExecutionException(new CompletionException(new ExecutionException(cause)));
+
+        assertThat(ExceptionUtils.stripFutureException(wrapped)).isSameAs(cause);
+        assertThat(ExceptionUtils.stripFutureException(cause)).isSameAs(cause);
+        assertThat(ExceptionUtils.stripFutureException(new CompletionException((Throwable) null)))
+                .isInstanceOf(CompletionException.class);
+        assertThat(ExceptionUtils.stripFutureException(null)).isNull();
+    }
+
+    @Test
     public void testInvalidExceptionStripping() {
         final Exception expectedException =
                 new Exception(new RuntimeException(new Exception("inner exception")));

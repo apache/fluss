@@ -282,6 +282,22 @@ while (true) {
 }
 ```
 
+#### Consumer Group Configuration
+
+For group IDs, automatic commits, and the starting position when a bucket has no committed
+offset, see [Client consumer groups](../../maintenance/configuration.md#client-consumer-groups).
+
+For example, configure a group and disable automatic commits if the application commits offsets
+explicitly with `scanner.commitSync()` or `scanner.commitAsync()`:
+
+```java
+Configuration conf = new Configuration();
+conf.setString("bootstrap.servers", "localhost:9123");
+conf.setString("client.consumer.group.id", "orders-reader");
+conf.setBoolean("client.consumer.auto-commit.enabled", false);
+Connection connection = ConnectionFactory.createConnection(conf);
+```
+
 #### Filter Pushdown
 
 Filter pushdown can reduce the data read by a `LogScanner`. Fluss evaluates the predicate against

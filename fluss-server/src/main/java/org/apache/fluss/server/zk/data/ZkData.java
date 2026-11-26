@@ -23,6 +23,12 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucketJsonSerde;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTargetJsonSerde;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransactionJsonSerde;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
@@ -297,6 +303,61 @@ public final class ZkData {
     public static final class WriterIdZNode {
         public static String path() {
             return "/metadata/writer_id";
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes under "/bulk_load/"
+    // ------------------------------------------------------------------------------------------
+
+    /** The transaction record written by BeginBulkLoad. */
+    public static final class BulkLoadTransactionZNode {
+        public static String path(long tableId, String bulkLoadId) {
+            return "/bulk_load/tables/" + tableId + "/transactions/" + bulkLoadId;
+        }
+
+        public static byte[] encode(BulkLoadTransaction transaction) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    transaction, BulkLoadTransactionJsonSerde.INSTANCE);
+        }
+
+        public static BulkLoadTransaction decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, BulkLoadTransactionJsonSerde.INSTANCE);
+        }
+    }
+
+    /** The table or physical partition targeted by a transaction. */
+    public static final class BulkLoadTargetZNode {
+        public static String path(long tableId, String bulkLoadId, @Nullable Long partitionId) {
+            return BulkLoadTransactionZNode.path(tableId, bulkLoadId)
+                    + "/targets"
+                    + (partitionId == null ? "/table" : "/partitions/" + partitionId);
+        }
+
+        public static byte[] encode(BulkLoadTarget target) {
+            return JsonSerdeUtils.writeValueAsBytes(target, BulkLoadTargetJsonSerde.INSTANCE);
+        }
+
+        public static BulkLoadTarget decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, BulkLoadTargetJsonSerde.INSTANCE);
+        }
+    }
+
+    /** The allocation and commit state of a target bucket. */
+    public static final class BulkLoadBucketZNode {
+        public static String path(BulkLoadTransaction transaction, TableBucket bucket) {
+            return BulkLoadTargetZNode.path(
+                            transaction.tableId, transaction.bulkLoadId, bucket.getPartitionId())
+                    + "/buckets/"
+                    + bucket.getBucket();
+        }
+
+        public static byte[] encode(BulkLoadBucket bucket) {
+            return JsonSerdeUtils.writeValueAsBytes(bucket, BulkLoadBucketJsonSerde.INSTANCE);
+        }
+
+        public static BulkLoadBucket decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, BulkLoadBucketJsonSerde.INSTANCE);
         }
     }
 

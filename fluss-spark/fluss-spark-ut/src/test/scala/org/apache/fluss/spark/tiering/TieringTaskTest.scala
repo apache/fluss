@@ -17,11 +17,12 @@
 
 package org.apache.fluss.spark.tiering
 
+import org.apache.fluss.client.admin.OffsetMetadata
 import org.apache.fluss.client.lookup.Lookup
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.{Scan, ScanRecord}
 import org.apache.fluss.client.table.scanner.batch.BatchScanner
-import org.apache.fluss.client.table.scanner.log.{LogScanner, ScanRecords, TypedLogScanner}
+import org.apache.fluss.client.table.scanner.log.{LogScanner, OffsetCommitCallback, ScanRecords, TypedLogScanner}
 import org.apache.fluss.client.table.writer.{Append, Upsert}
 import org.apache.fluss.client.tiering.{TieringLogSplit, TieringSnapshotSplit}
 import org.apache.fluss.lake.writer.LakeWriter
@@ -234,6 +235,23 @@ class TieringTaskTest extends AnyFunSuite {
 
     override def subscribe(partitionId: Long, bucket: Int, offset: Long): Unit =
       throw new UnsupportedOperationException
+    override def subscribeFromCommittedOffset(bucket: Int): Unit =
+      throw new UnsupportedOperationException
+    override def subscribeFromCommittedOffset(partitionId: Long, bucket: Int): Unit =
+      throw new UnsupportedOperationException
+    override def commitSync(): Unit = throw new UnsupportedOperationException
+    override def commitSync(timeout: Duration): Unit = throw new UnsupportedOperationException
+    override def commitSync(offsets: java.util.Map[TableBucket, OffsetMetadata]): Unit =
+      throw new UnsupportedOperationException
+    override def commitSync(
+        offsets: java.util.Map[TableBucket, OffsetMetadata],
+        timeout: Duration): Unit = throw new UnsupportedOperationException
+    override def commitAsync(): Unit = throw new UnsupportedOperationException
+    override def commitAsync(callback: OffsetCommitCallback): Unit =
+      throw new UnsupportedOperationException
+    override def commitAsync(
+        offsets: java.util.Map[TableBucket, OffsetMetadata],
+        callback: OffsetCommitCallback): Unit = throw new UnsupportedOperationException
     override def unsubscribe(partitionId: Long, bucket: Int): Unit =
       throw new UnsupportedOperationException
     override def unsubscribe(bucket: Int): Unit = throw new UnsupportedOperationException

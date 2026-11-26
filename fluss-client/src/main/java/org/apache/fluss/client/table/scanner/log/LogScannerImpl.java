@@ -111,7 +111,9 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                         scannerMetricGroup,
                         remoteFileDownloader,
                         LogRecordReadContext.SchemaResolution.TARGET),
-                scannerMetricGroup);
+                scannerMetricGroup,
+                conf,
+                metadataUpdater);
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
@@ -208,14 +210,21 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
 
         acquireAndEnsureOpen();
         try {
+            long startNanos = System.nanoTime();
+            long timeoutNanos = timeout.toNanos();
             if (!logScannerStatus.prepareToPoll()) {
                 throw new IllegalStateException("LogScanner is not subscribed any buckets.");
             }
 
+            if (!initializeCommittedOffsets(startNanos, timeoutNanos)) {
+                return ArrowScanRecords.EMPTY;
+            }
+            maybeAutoCommit();
+            invokeCompletedOffsetCommitCallbacks();
+
             scannerMetricGroup.recordPollStart(System.currentTimeMillis());
-            long timeoutNanos = timeout.toNanos();
-            long startNanos = System.nanoTime();
             do {
+                logFetcher.resetPositionsIfNeeded();
                 ArrowScanRecords scanRecords = pollForRecordBatches();
                 if (scanRecords.isEmpty()) {
                     try {
@@ -270,6 +279,23 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
     }
 
     @Override
+    public void subscribeFromCommittedOffset(int bucket) {
+        if (isPartitionedTable) {
+            throw new IllegalStateException("The table is partitioned; provide a partition id.");
+        }
+        acquireAndEnsureOpen();
+        try {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            logFetcher.registerTable(
+                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
+            metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            subscribeFromCommittedOffset(tableBucket);
+        } finally {
+            release();
+        }
+    }
+
+    @Override
     public void subscribe(long partitionId, int bucket, long offset) {
         if (!isPartitionedTable) {
             throw new IllegalStateException(
@@ -288,6 +314,24 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             metadataUpdater.checkAndUpdatePartitionMetadata(
                     tablePath, Collections.singleton(partitionId));
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+        } finally {
+            release();
+        }
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(long partitionId, int bucket) {
+        if (!isPartitionedTable) {
+            throw new IllegalStateException("The table is not partitioned; omit the partition id.");
+        }
+        acquireAndEnsureOpen();
+        try {
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+            logFetcher.registerTable(
+                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
+            metadataUpdater.checkAndUpdatePartitionMetadata(
+                    tablePath, Collections.singleton(partitionId));
+            subscribeFromCommittedOffset(tableBucket);
         } finally {
             release();
         }
