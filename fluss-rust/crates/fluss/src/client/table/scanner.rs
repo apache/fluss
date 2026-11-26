@@ -67,7 +67,7 @@ use crate::client::consumer_offsets::ConsumerGroup;
 use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
 
 mod consumer_group;
-pub use consumer_group::{AutoCommitError, OffsetsInitializer};
+pub use consumer_group::AutoCommitError;
 mod latest_resets;
 mod multi_table;
 pub use multi_table::{MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan};
@@ -118,7 +118,7 @@ impl<'a> TableScan<'a> {
 
     /// Enables persisted offsets for a manually assigned consumer group.
     /// Existing subscriptions still use their explicit starting offsets; use
-    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. Group scanners commit every five seconds by default.
+    /// `subscribe_from_committed` to restore them. Group scanners commit every five seconds by default.
     pub fn with_consumer_group(mut self, options: ConsumerGroupOptions) -> Result<Self> {
         options.validate()?;
         self.auto_commit_interval
@@ -4894,33 +4894,6 @@ mod tests {
             .now_or_never()
             .expect("poll waited for a commit")?;
         assert!(rows.count() > 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn an_explicit_offset_cannot_alias_earliest() -> Result<()> {
-        let (inner, _, _) = scanner_fixture(true)?;
-        let scanner = LogScanner { inner };
-        let bucket = TableBucket::new(1, 0);
-        scanner.subscribe(0, 7).await?;
-        let result = scanner
-            .subscribe_with_initializer(
-                from_ref(&bucket),
-                &OffsetsInitializer::offset(crate::client::EARLIEST_OFFSET),
-            )
-            .await;
-        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
-        assert_eq!(
-            scanner.inner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(7)
-        );
-        scanner
-            .subscribe_with_initializer(from_ref(&bucket), &OffsetsInitializer::earliest())
-            .await?;
-        assert_eq!(
-            scanner.inner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(crate::client::EARLIEST_OFFSET)
-        );
         Ok(())
     }
 
