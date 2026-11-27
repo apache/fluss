@@ -80,7 +80,8 @@ class FlussAppendBatch(
         pushedPredicate,
         limit,
         options,
-        flussConfig)
+        flussConfig,
+        allowExpiredOffsets = true)
     }
   }
 }
