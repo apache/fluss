@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.BulkLoadBuildContext;
 import org.apache.fluss.client.metadata.BulkLoadBuildContext.Target;
 import org.apache.fluss.client.metadata.BulkLoadHandle;
 import org.apache.fluss.client.metadata.BulkLoadInfo;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ReadableConfig;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.AdminGateway;
@@ -57,10 +58,13 @@ public final class TableBulkLoad implements BulkLoad {
 
     /** Creates BulkLoad operations with the table identity and connection resources. */
     public TableBulkLoad(
-            TablePath tablePath, long tableId, AdminGateway gateway, ReadableConfig conf) {
+            TablePath tablePath,
+            long tableId,
+            MetadataUpdater metadataUpdater,
+            ReadableConfig conf) {
         this.tablePath = tablePath;
         this.tableId = tableId;
-        this.gateway = gateway;
+        this.gateway = metadataUpdater.newCoordinatorServerClient();
         this.conf = conf;
     }
 
