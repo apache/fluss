@@ -23,7 +23,9 @@ import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -90,11 +92,18 @@ public class BucketOffsetsRetrieverImpl implements OffsetsInitializer.BucketOffs
     private Map<Integer, Long> listConsumerOffsets(
             String groupId, @Nullable String partitionName, Collection<Integer> buckets) {
         try {
-            long tableId = flussAdmin.getTableInfo(tablePath).get().getTableId();
+            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+            long tableId = tableInfo.getTableId();
             Long partitionId = null;
             if (partitionName != null) {
+                ResolvedPartitionSpec partitionSpec =
+                        ResolvedPartitionSpec.fromPartitionName(
+                                tableInfo.getPartitionKeys(), partitionName);
                 partitionId =
-                        flussAdmin.listPartitionInfos(tablePath).get().stream()
+                        flussAdmin
+                                .listPartitionInfos(tablePath, partitionSpec.toPartitionSpec())
+                                .get()
+                                .stream()
                                 .filter(p -> p.getPartitionName().equals(partitionName))
                                 .map(PartitionInfo::getPartitionId)
                                 .findFirst()

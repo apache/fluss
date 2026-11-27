@@ -25,8 +25,10 @@ import java.util.Collection;
 import java.util.Objects;
 
 /**
- * An event send from reader to enumerator to indicate the splits of the partition buckets have been
- * removed by the reader. It contains the table buckets that have been removed from the reader.
+ * An event sent from reader to enumerator to acknowledge that the reader has retired the splits of
+ * the partition buckets and unsubscribed their log scanners. This event acknowledges
+ * unsubscription, not a successful consumer offset commit. Final offsets remain pending until a
+ * completed checkpoint commits them.
  */
 public class PartitionBucketsUnsubscribedEvent implements SourceEvent {
 

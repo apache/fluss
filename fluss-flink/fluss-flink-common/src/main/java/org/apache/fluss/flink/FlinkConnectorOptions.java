@@ -180,17 +180,19 @@ public class FlinkConnectorOptions {
                                     + "The format is 'timestamp' or 'yyyy-MM-dd HH:mm:ss'. "
                                     + "Like '1678883047356' or '2023-12-09 23:09:12'.");
 
-    public static final ConfigOption<Boolean> CLIENT_COMMIT_OFFSET_ON_CHECKPOINT =
-            ConfigOptions.key("client.commit-offset-on-checkpoint")
+    public static final ConfigOption<Boolean> SCAN_COMMIT_OFFSET_ON_CHECKPOINT =
+            ConfigOptions.key("scan.commit-offset-on-checkpoint")
                     .booleanType()
-                    .defaultValue(false)
+                    .noDefaultValue()
                     .withDescription(
                             "Whether to commit consumed offsets to the Fluss consumer group"
-                                    + " on checkpoint completion. When enabled, the client's"
-                                    + " periodic auto-commit is disabled automatically and"
-                                    + " offsets are committed only when a checkpoint completes."
-                                    + " If checkpointing is disabled, no offsets are committed."
-                                    + " Requires a valid consumer group id"
+                                    + " on checkpoint completion. Defaults to true when"
+                                    + " 'client.consumer.group.id' is configured, and false"
+                                    + " otherwise. When enabled, the client's periodic auto-commit"
+                                    + " is disabled automatically unless it is configured"
+                                    + " explicitly, and offsets are committed when a checkpoint"
+                                    + " completes. If checkpointing is disabled, no offsets are"
+                                    + " committed. Requires a valid consumer group id"
                                     + " ('client.consumer.group.id') to be configured.");
 
     public static final ConfigOption<ScanBoundedMode> SCAN_BOUNDED_MODE =

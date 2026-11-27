@@ -166,7 +166,8 @@ public class BinlogFlinkTableSource
                 break;
             case GROUP_OFFSETS:
                 offsetsInitializer =
-                        FlinkConnectorOptionsUtils.groupOffsetsInitializer(flussConfig);
+                        OffsetsInitializer.committed(
+                                startupOptions.groupId, startupOptions.consumerOffsetReset);
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -200,7 +201,8 @@ public class BinlogFlinkTableSource
                         // top-level partition filter is pushable; always scan without one.
                         null,
                         null,
-                        LeaseContext.DEFAULT);
+                        LeaseContext.DEFAULT,
+                        FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(tableOptions));
 
         return SourceProvider.of(source);
     }

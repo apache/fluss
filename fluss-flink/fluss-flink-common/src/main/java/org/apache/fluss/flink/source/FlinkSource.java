@@ -35,6 +35,7 @@ import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -86,6 +87,7 @@ public class FlinkSource<OUT>
     @Nullable private final Predicate partitionFilters;
     @Nullable private final LakeSource<LakeSplit> lakeSource;
     private final LeaseContext leaseContext;
+    private final boolean commitOffsetOnCheckpoint;
 
     @Nullable private final Predicate logRecordBatchFilter;
 
@@ -324,6 +326,48 @@ public class FlinkSource<OUT>
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                scanRowType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                stoppingOffsetsInitializer,
+                boundedness,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                deserializationSchema,
+                producedRowType,
+                streaming,
+                partitionFilters,
+                lakeSource,
+                leaseContext,
+                FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(flussConf));
+    }
+
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType scanRowType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            OffsetsInitializer stoppingOffsetsInitializer,
+            Boundedness boundedness,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            @Nullable RowType producedRowType,
+            boolean streaming,
+            @Nullable Predicate partitionFilters,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            LeaseContext leaseContext,
+            boolean commitOffsetOnCheckpoint) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -343,6 +387,46 @@ public class FlinkSource<OUT>
         this.partitionFilters = partitionFilters;
         this.lakeSource = lakeSource;
         this.leaseContext = leaseContext;
+        this.commitOffsetOnCheckpoint = commitOffsetOnCheckpoint;
+    }
+
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType scanRowType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            OffsetsInitializer stoppingOffsetsInitializer,
+            Boundedness boundedness,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            boolean commitOffsetOnCheckpoint) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                scanRowType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                stoppingOffsetsInitializer,
+                boundedness,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                deserializationSchema,
+                null,
+                streaming,
+                null,
+                lakeSource,
+                LeaseContext.DEFAULT,
+                commitOffsetOnCheckpoint);
     }
 
     @Override
@@ -358,6 +442,11 @@ public class FlinkSource<OUT>
     @VisibleForTesting
     OffsetsInitializer getStoppingOffsetsInitializer() {
         return stoppingOffsetsInitializer;
+    }
+
+    @VisibleForTesting
+    boolean isCommitOffsetOnCheckpoint() {
+        return commitOffsetOnCheckpoint;
     }
 
     @Override
@@ -451,6 +540,8 @@ public class FlinkSource<OUT>
         return new FlinkSourceReader<>(
                 elementsQueue,
                 readerConf,
+                commitOffsetOnCheckpoint,
+                !streaming,
                 tablePath,
                 scanRowType,
                 context,

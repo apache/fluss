@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.LeaseContext;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
@@ -143,6 +144,42 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
             @Nullable LakeSource<LakeSplit> lakeSource) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                sourceOutputType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                stoppingOffsetsInitializer,
+                boundedness,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                deserializationSchema,
+                streaming,
+                lakeSource,
+                FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(flussConf));
+    }
+
+    FlussSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            OffsetsInitializer stoppingOffsetsInitializer,
+            Boundedness boundedness,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            boolean commitOffsetOnCheckpoint) {
         // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
@@ -162,7 +199,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 streaming,
                 null,
                 lakeSource,
-                LeaseContext.DEFAULT);
+                LeaseContext.DEFAULT,
+                commitOffsetOnCheckpoint);
     }
 
     /**

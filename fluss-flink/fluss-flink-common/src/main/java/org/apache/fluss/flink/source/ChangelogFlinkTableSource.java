@@ -221,7 +221,8 @@ public class ChangelogFlinkTableSource
                 break;
             case GROUP_OFFSETS:
                 offsetsInitializer =
-                        FlinkConnectorOptionsUtils.groupOffsetsInitializer(flussConfig);
+                        OffsetsInitializer.committed(
+                                startupOptions.groupId, startupOptions.consumerOffsetReset);
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -257,7 +258,8 @@ public class ChangelogFlinkTableSource
                         streaming,
                         partitionFilters,
                         null,
-                        LeaseContext.DEFAULT); // Lake source not supported
+                        LeaseContext.DEFAULT, // Lake source not supported
+                        FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(tableOptions));
 
         return SourceProvider.of(source);
     }

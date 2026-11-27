@@ -212,17 +212,28 @@ abstract class FlinkTableFactoryTest {
 
     @Test
     void testCommitOffsetOnCheckpointOption() {
-        assertThat(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key())
-                .isEqualTo("client.commit-offset-on-checkpoint");
+        assertThat(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key())
+                .isEqualTo("scan.commit-offset-on-checkpoint");
         assertThat(createFlinkTableFactory().optionalOptions())
-                .contains(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT);
+                .contains(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT);
 
         Map<String, String> properties = getBasicOptions();
-        properties.put(FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key(), "true");
+        assertThat(createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(FlinkTableSource.class);
+
+        properties.put(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "test-group");
+        assertThat(createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(FlinkTableSource.class);
+
+        properties.put(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key(), "false");
+        assertThat(createTableSource(createBasicSchema(), properties))
+                .isInstanceOf(FlinkTableSource.class);
+
+        properties.remove(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
+        properties.put(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key(), "true");
         assertThatThrownBy(() -> createTableSource(createBasicSchema(), properties))
                 .isInstanceOf(ValidationException.class)
-                .hasMessageContaining(
-                        FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key())
+                .hasMessageContaining(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key())
                 .hasMessageContaining(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key());
 
         properties.put(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "  ");

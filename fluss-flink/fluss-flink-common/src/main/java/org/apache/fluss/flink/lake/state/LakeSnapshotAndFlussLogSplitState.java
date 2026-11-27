@@ -60,6 +60,16 @@ public class LakeSnapshotAndFlussLogSplitState extends SourceSplitState {
         this.nextLogOffset = nextOffset;
     }
 
+    /** Returns whether the lake snapshot phase has been consumed completely. */
+    public boolean isLakeSplitFinished() {
+        return isLakeSplitFinished;
+    }
+
+    /** Returns the next Fluss log offset to consume. */
+    public long getNextLogOffset() {
+        return nextLogOffset;
+    }
+
     @Override
     public SourceSplitBase toSourceSplit() {
         return split.copyWithPosition(

@@ -67,4 +67,9 @@ public class HybridSnapshotLogSplitState extends SourceSplitState {
     public long getNextOffset() {
         return this.nextOffset;
     }
+
+    /** Returns whether the snapshot phase has been consumed completely. */
+    public boolean isSnapshotFinished() {
+        return snapshotFinished;
+    }
 }

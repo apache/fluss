@@ -548,7 +548,8 @@ public class FlinkTableSource
                 break;
             case GROUP_OFFSETS:
                 offsetsInitializer =
-                        FlinkConnectorOptionsUtils.groupOffsetsInitializer(flussConfig);
+                        OffsetsInitializer.committed(
+                                startupOptions.groupId, startupOptions.consumerOffsetReset);
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -577,7 +578,8 @@ public class FlinkTableSource
                         streaming,
                         partitionFilters,
                         enableLakeSource ? lakeSource : null,
-                        leaseContext);
+                        leaseContext,
+                        FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(tableOptions));
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -1077,6 +1079,8 @@ public class FlinkTableSource
                 new FlinkConnectorOptionsUtils.StartupOptions();
         copy.startupMode = startupOptions.startupMode;
         copy.startupTimestampMs = startupOptions.startupTimestampMs;
+        copy.groupId = startupOptions.groupId;
+        copy.consumerOffsetReset = startupOptions.consumerOffsetReset;
         return copy;
     }
 

@@ -20,7 +20,9 @@ package org.apache.fluss.flink.utils;
 import org.apache.fluss.client.initializer.LatestOffsetsInitializer;
 import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConsumerOffsetReset;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanBoundedMode;
 
 import org.apache.flink.api.connector.source.Boundedness;
@@ -37,8 +39,11 @@ import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIRS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
+import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.GROUP_OFFSETS;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.parseTimestamp;
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -86,6 +91,24 @@ class FlinkConnectorOptionsUtilTest {
                         () -> FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions))
                 .isInstanceOf(ValidationException.class)
                 .hasMessage("'scan.split.assignment.batch-size' must be positive, but was 0.");
+    }
+
+    @Test
+    void testGetStartupOptionsForGroupOffsets() {
+        org.apache.flink.configuration.Configuration tableOptions =
+                new org.apache.flink.configuration.Configuration();
+        tableOptions.set(SCAN_STARTUP_MODE, GROUP_OFFSETS);
+        tableOptions.set(toFlinkOption(ConfigOptions.CLIENT_CONSUMER_GROUP_ID), "test-group");
+        tableOptions.set(
+                toFlinkOption(ConfigOptions.CLIENT_CONSUMER_AUTO_OFFSET_RESET),
+                ConsumerOffsetReset.LATEST);
+
+        FlinkConnectorOptionsUtils.StartupOptions startupOptions =
+                FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, ZoneId.systemDefault());
+
+        assertThat(startupOptions.startupMode).isEqualTo(GROUP_OFFSETS);
+        assertThat(startupOptions.groupId).isEqualTo("test-group");
+        assertThat(startupOptions.consumerOffsetReset).isEqualTo(ConsumerOffsetReset.LATEST);
     }
 
     @Test

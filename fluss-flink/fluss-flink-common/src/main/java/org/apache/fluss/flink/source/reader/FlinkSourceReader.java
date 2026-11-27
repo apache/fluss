@@ -17,12 +17,15 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.admin.OffsetMetadata;
+import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.lake.LakeSplitStateInitializer;
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
 import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
@@ -71,29 +74,23 @@ public class FlinkSourceReader<OUT>
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceReader.class);
 
-    /**
-     * Fluss-side view of {@link FlinkConnectorOptions#CLIENT_COMMIT_OFFSET_ON_CHECKPOINT}. The
-     * option is declared with Flink's option API for SQL/table options, while this reader reads it
-     * from the Fluss {@link Configuration}.
-     */
-    private static final org.apache.fluss.config.ConfigOption<Boolean> COMMIT_OFFSET_ON_CHECKPOINT =
-            org.apache.fluss.config.ConfigBuilder.key(
-                            FlinkConnectorOptions.CLIENT_COMMIT_OFFSET_ON_CHECKPOINT.key())
-                    .booleanType()
-                    .defaultValue(false);
-
     /** the tableBuckets ignore to send FinishedKvSnapshotConsumeEvent as it already sending. */
     private final Set<TableBucket> finishedKvSnapshotConsumeBuckets;
 
     /**
      * Pending offsets to commit, keyed by checkpoint id. The outer map is a synchronized sorted
-     * map; the inner map is concurrent so that writes during snapshotState and reads/removals
-     * during the commit callback don't trip over each other. Compound operations (firstKey/remove
-     * loops, computeIfAbsent + put bursts) are guarded by synchronizing on offsetsToCommit
-     * explicitly.
+     * map; the inner maps are ordinary HashMaps because the task thread is their only writer and
+     * they are handed to the commit callback only after snapshotState completes.
      */
     private final SortedMap<Long, Map<TableBucket, OffsetMetadata>> offsetsToCommit;
 
+    /**
+     * Final offsets of eligible streaming splits that have finished but have not yet been included
+     * in a successful checkpoint commit. This includes splits retired because their partition was
+     * deleted. The map is reader-local and best-effort across failover: if the reader fails before
+     * a successful commit, the final report can be lost. Server-side consumer offsets are not
+     * deleted here; their expiry is left to the consumer-offset TTL.
+     */
     private final ConcurrentMap<TableBucket, OffsetMetadata> offsetsOfFinishedSplits;
 
     private final boolean commitOffsetsOnCheckpoint;
@@ -101,6 +98,8 @@ public class FlinkSourceReader<OUT>
     public FlinkSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
             Configuration flussConfig,
+            boolean commitOffsetOnCheckpoint,
+            boolean batchExecution,
             TablePath tablePath,
             RowType sourceOutputType,
             SourceReaderContext context,
@@ -115,7 +114,10 @@ public class FlinkSourceReader<OUT>
                         elementsQueue,
                         () ->
                                 new FlinkSourceSplitReader(
-                                        maybeDisableAutoCommit(flussConfig),
+                                        maybeDisableAutoCommit(
+                                                flussConfig,
+                                                commitOffsetOnCheckpoint,
+                                                batchExecution),
                                         tablePath,
                                         sourceOutputType,
                                         projectedFields,
@@ -129,19 +131,40 @@ public class FlinkSourceReader<OUT>
         this.finishedKvSnapshotConsumeBuckets = new HashSet<>();
         this.offsetsToCommit = Collections.synchronizedSortedMap(new TreeMap<>());
         this.offsetsOfFinishedSplits = new ConcurrentHashMap<>();
-        this.commitOffsetsOnCheckpoint = flussConfig.getBoolean(COMMIT_OFFSET_ON_CHECKPOINT);
-        if (commitOffsetsOnCheckpoint) {
+        this.commitOffsetsOnCheckpoint = commitOffsetOnCheckpoint && !batchExecution;
+        if (commitOffsetOnCheckpoint) {
             GroupId.of(flussConfig.get(ConfigOptions.CLIENT_CONSUMER_GROUP_ID));
+        } else if (!batchExecution
+                && flussConfig.get(ConfigOptions.CLIENT_CONSUMER_GROUP_ID) != null) {
+            LOG.warn(
+                    "Offset commit on checkpoint is disabled. The reader will not report "
+                            + "checkpointed offsets to the Fluss cluster; the scanner can still "
+                            + "commit offsets periodically if auto-commit is enabled.");
         }
     }
 
     /**
      * When checkpoint commits are requested, disable the Fluss client's periodic auto-commit so
-     * that {@link #notifyCheckpointComplete(long)} is the only path that submits offsets. The
-     * reader context does not necessarily contain the job's checkpointing interval.
+     * that {@link #notifyCheckpointComplete(long)} is the only path that submits offsets. In batch
+     * execution, both checkpoint commits and client auto-commit are disabled because batch reads
+     * should not advance consumer group offsets.
      */
-    private static Configuration maybeDisableAutoCommit(Configuration flussConfig) {
-        if (!flussConfig.getBoolean(COMMIT_OFFSET_ON_CHECKPOINT)) {
+    private static Configuration maybeDisableAutoCommit(
+            Configuration flussConfig, boolean commitOffsetOnCheckpoint, boolean batchExecution) {
+        if (batchExecution) {
+            Configuration adjusted = new Configuration(flussConfig);
+            adjusted.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, false);
+            LOG.info(
+                    "Batch execution; disabling client-side auto-commit and checkpoint-based"
+                            + " consumer offset commits.");
+            return adjusted;
+        }
+        if (!commitOffsetOnCheckpoint) {
+            return flussConfig;
+        }
+        // Preserve an explicit user setting. This lets users keep periodic offset commits
+        // between checkpoints even when checkpoint commits are enabled.
+        if (flussConfig.contains(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED)) {
             return flussConfig;
         }
         Configuration adjusted = new Configuration(flussConfig);
@@ -158,7 +181,9 @@ public class FlinkSourceReader<OUT>
             return;
         }
 
-        // record the offsets of finished splits so they can be committed on checkpoint completion
+        // Record the final emitted position of finished splits, including splits retired because
+        // their partition was deleted. The position remains pending until a completed checkpoint
+        // successfully commits it; the partition unsubscription ack is not an offset commit.
         map.forEach(
                 (ignored, splitState) -> {
                     if (splitState.isLogSplitState()
@@ -167,6 +192,7 @@ public class FlinkSourceReader<OUT>
                                 splitState.toSourceSplit().getTableBucket(),
                                 new OffsetMetadata(splitState.asLogSplitState().getNextOffset()));
                     } else if (splitState.isHybridSnapshotLogSplitState()
+                            && splitState.asHybridSnapshotLogSplitState().isSnapshotFinished()
                             && splitState.asHybridSnapshotLogSplitState().getNextOffset() >= 0) {
                         offsetsOfFinishedSplits.put(
                                 splitState.toSourceSplit().getTableBucket(),
@@ -174,6 +200,18 @@ public class FlinkSourceReader<OUT>
                                         splitState
                                                 .asHybridSnapshotLogSplitState()
                                                 .getNextOffset()));
+                    } else if (splitState instanceof LakeSnapshotAndFlussLogSplitState) {
+                        LakeSnapshotAndFlussLogSplitState lakeState =
+                                (LakeSnapshotAndFlussLogSplitState) splitState;
+                        SourceSplitBase sourceSplit = lakeState.toSourceSplit();
+                        if (sourceSplit instanceof LakeSnapshotAndFlussLogSplit
+                                && ((LakeSnapshotAndFlussLogSplit) sourceSplit).isStreaming()
+                                && lakeState.isLakeSplitFinished()
+                                && lakeState.getNextLogOffset() >= 0) {
+                            offsetsOfFinishedSplits.put(
+                                    sourceSplit.getTableBucket(),
+                                    new OffsetMetadata(lakeState.getNextLogOffset()));
+                        }
                     }
                 });
     }
@@ -221,34 +259,41 @@ public class FlinkSourceReader<OUT>
             return sourceSplitBases;
         }
 
-        synchronized (offsetsToCommit) {
-            if (sourceSplitBases.isEmpty() && offsetsOfFinishedSplits.isEmpty()) {
-                offsetsToCommit.put(checkpointId, Collections.emptyMap());
-            } else {
-                Map<TableBucket, OffsetMetadata> offsetsMap =
-                        offsetsToCommit.computeIfAbsent(
-                                checkpointId, id -> new ConcurrentHashMap<>());
+        if (sourceSplitBases.isEmpty() && offsetsOfFinishedSplits.isEmpty()) {
+            offsetsToCommit.put(checkpointId, Collections.emptyMap());
+        } else {
+            Map<TableBucket, OffsetMetadata> offsetsMap =
+                    offsetsToCommit.computeIfAbsent(checkpointId, id -> new HashMap<>());
 
-                // Put the offsets of the active splits.
-                for (SourceSplitBase split : sourceSplitBases) {
-                    // If the checkpoint is triggered before the tableBucket starting offsets
-                    // is retrieved, do not commit the offsets for those tableBuckets.
-                    if (split.isLogSplit() && split.asLogSplit().getStartingOffset() >= 0) {
+            // Put the offsets of the active splits.
+            for (SourceSplitBase split : sourceSplitBases) {
+                // If the checkpoint is triggered before the tableBucket starting offsets
+                // is retrieved, do not commit the offsets for those tableBuckets.
+                if (split.isLogSplit() && split.asLogSplit().getStartingOffset() >= 0) {
+                    offsetsMap.put(
+                            split.getTableBucket(),
+                            new OffsetMetadata(split.asLogSplit().getStartingOffset()));
+                } else if (split.isHybridSnapshotLogSplit()
+                        && split.asHybridSnapshotLogSplit().isSnapshotFinished()
+                        && split.asHybridSnapshotLogSplit().getLogStartingOffset() >= 0) {
+                    offsetsMap.put(
+                            split.getTableBucket(),
+                            new OffsetMetadata(
+                                    split.asHybridSnapshotLogSplit().getLogStartingOffset()));
+                } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
+                    LakeSnapshotAndFlussLogSplit lakeSplit = (LakeSnapshotAndFlussLogSplit) split;
+                    if (lakeSplit.isStreaming()
+                            && lakeSplit.isLakeSplitFinished()
+                            && lakeSplit.getStartingOffset() >= 0) {
                         offsetsMap.put(
                                 split.getTableBucket(),
-                                new OffsetMetadata(split.asLogSplit().getStartingOffset()));
-                    } else if (split.isHybridSnapshotLogSplit()
-                            && split.asHybridSnapshotLogSplit().getLogStartingOffset() >= 0) {
-                        offsetsMap.put(
-                                split.getTableBucket(),
-                                new OffsetMetadata(
-                                        split.asHybridSnapshotLogSplit().getLogStartingOffset()));
+                                new OffsetMetadata(lakeSplit.getStartingOffset()));
                     }
                 }
-
-                // Put offsets of all the finished splits.
-                offsetsMap.putAll(offsetsOfFinishedSplits);
             }
+
+            // Put offsets of all the finished splits.
+            offsetsMap.putAll(offsetsOfFinishedSplits);
         }
 
         return sourceSplitBases;
@@ -261,18 +306,10 @@ public class FlinkSourceReader<OUT>
         }
         LOG.debug("Committing offsets for checkpoint {}", checkpointId);
 
-        // Take a stable snapshot of the inner map under the outer monitor — by the time we hand
-        // the map to the fetcher manager (and especially to its async callback), no concurrent
-        // mutator can corrupt our view.
-        Map<TableBucket, OffsetMetadata> committedTableBuckets;
-        synchronized (offsetsToCommit) {
-            Map<TableBucket, OffsetMetadata> raw = offsetsToCommit.get(checkpointId);
-            if (raw == null) {
-                LOG.debug("Offsets for checkpoint {} have already been committed.", checkpointId);
-                return;
-            }
-            // Defensive copy so the async callback below operates on its own map.
-            committedTableBuckets = new HashMap<>(raw);
+        Map<TableBucket, OffsetMetadata> committedTableBuckets = offsetsToCommit.get(checkpointId);
+        if (committedTableBuckets == null) {
+            LOG.debug("Offsets for checkpoint {} have already been committed.", checkpointId);
+            return;
         }
 
         if (committedTableBuckets.isEmpty()) {
@@ -281,38 +318,47 @@ public class FlinkSourceReader<OUT>
             return;
         }
 
-        ((FlinkSourceFetcherManager) splitFetcherManager)
-                .commitOffsets(
-                        committedTableBuckets,
-                        (offsets, e) -> {
-                            // The offset commit here is needed by external monitoring. It won't
-                            // break Flink job's correctness if we fail to commit the offset here.
-                            if (e != null) {
-                                LOG.warn(
-                                        "Failed to commit consumer offsets for checkpoint {}",
-                                        checkpointId,
-                                        e);
-                                removeAllOffsetsToCommitUpToCheckpoint(checkpointId);
-                            } else {
-                                LOG.debug(
-                                        "Successfully committed offsets for checkpoint {}",
-                                        checkpointId);
-                                // If the finished bucket has been committed, we remove it from
-                                // the offsets of the finished splits map.
-                                offsetsOfFinishedSplits
-                                        .entrySet()
-                                        .removeIf(entry -> offsets.containsKey(entry.getKey()));
-                                removeAllOffsetsToCommitUpToCheckpoint(checkpointId);
-                            }
-                        });
+        commitOffsetsAsync(
+                committedTableBuckets,
+                (offsets, e) -> {
+                    // The offset commit here is needed by external monitoring. It won't break
+                    // Flink job's correctness if we fail to commit the offset here.
+                    if (e != null) {
+                        LOG.warn(
+                                "Failed to commit consumer offsets for checkpoint {}",
+                                checkpointId,
+                                e);
+                        // Retaining the failed checkpoint keeps it in the pending map. A later
+                        // successful commit for a newer checkpoint supersedes it and clears all
+                        // entries up to that checkpoint. The failed request is not retried
+                        // by itself.
+                    } else {
+                        LOG.debug("Successfully committed offsets for checkpoint {}", checkpointId);
+                        // Remove a finished offset only when it is still the offset that was
+                        // committed. A newer final offset may have been recorded after this
+                        // checkpoint snapshot was taken and must remain pending.
+                        offsets.forEach(
+                                (bucket, committedOffset) ->
+                                        offsetsOfFinishedSplits.remove(bucket, committedOffset));
+                        removeAllOffsetsToCommitUpToCheckpoint(checkpointId);
+                    }
+                });
     }
 
     private void removeAllOffsetsToCommitUpToCheckpoint(long checkpointId) {
-        synchronized (offsetsToCommit) {
-            while (!offsetsToCommit.isEmpty() && offsetsToCommit.firstKey() <= checkpointId) {
-                offsetsToCommit.remove(offsetsToCommit.firstKey());
-            }
+        while (!offsetsToCommit.isEmpty() && offsetsToCommit.firstKey() <= checkpointId) {
+            offsetsToCommit.remove(offsetsToCommit.firstKey());
         }
+    }
+
+    protected void commitOffsetsAsync(
+            Map<TableBucket, OffsetMetadata> offsetsToCommit, OffsetCommitCallback callback) {
+        ((FlinkSourceFetcherManager) splitFetcherManager).commitOffsets(offsetsToCommit, callback);
+    }
+
+    @VisibleForTesting
+    SortedMap<Long, Map<TableBucket, OffsetMetadata>> getOffsetsToCommitForTest() {
+        return offsetsToCommit;
     }
 
     @Override
@@ -322,6 +368,8 @@ public class FlinkSourceReader<OUT>
             Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback =
                     (unsubscribedTableBuckets) -> {
                         // send remove partitions ack event to coordinator
+                        // This ack reports unsubscription only; the final offset remains pending
+                        // until a completed checkpoint commits it.
                         context.sendSourceEventToCoordinator(
                                 new PartitionBucketsUnsubscribedEvent(unsubscribedTableBuckets));
                     };

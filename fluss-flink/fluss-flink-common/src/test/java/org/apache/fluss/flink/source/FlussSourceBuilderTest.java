@@ -22,6 +22,7 @@ import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
@@ -69,6 +70,34 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
         assertThat(source.isStreaming()).isTrue();
         assertThat(source.getStoppingOffsetsInitializer())
                 .isInstanceOf(NoStoppingOffsetsInitializer.class);
+    }
+
+    @Test
+    public void testCommitOffsetOnCheckpointIsOrderIndependent() {
+        Configuration groupConf =
+                new Configuration().set(ConfigOptions.CLIENT_CONSUMER_GROUP_ID, "test-group");
+
+        FlussSource<TestRecord> commitThenConf =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(defaultTablePath.getTableName())
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .setCommitOffsetOnCheckpoint(true)
+                        .setFlussConfig(groupConf)
+                        .build();
+        FlussSource<TestRecord> confThenCommit =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(defaultTablePath.getTableName())
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .setFlussConfig(groupConf)
+                        .setCommitOffsetOnCheckpoint(true)
+                        .build();
+
+        assertThat(commitThenConf.isCommitOffsetOnCheckpoint()).isTrue();
+        assertThat(confThenCommit.isCommitOffsetOnCheckpoint()).isTrue();
     }
 
     @Test
