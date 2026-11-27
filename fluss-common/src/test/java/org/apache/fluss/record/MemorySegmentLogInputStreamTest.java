@@ -17,58 +17,42 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.testutils.DataTestUtils;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
-import java.util.Iterator;
-
-import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
-import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link MemorySegmentLogInputStream}. */
 public class MemorySegmentLogInputStreamTest {
 
     @Test
     void testNextBatch() throws Exception {
-        // gen normal batch.
-        MemoryLogRecords memoryLogRecords = DataTestUtils.genMemoryLogRecordsByObject(DATA1);
-        Iterator<LogRecordBatch> iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isTrue();
+        MemoryLogRecords records = DataTestUtils.genMemoryLogRecordsByObject(DATA1);
+        assertThat(records.batches().iterator().hasNext()).isTrue();
+        assertThat(MemoryLogRecords.EMPTY.batches().iterator().hasNext()).isFalse();
 
-        // gen empty batch.
-        memoryLogRecords = MemoryLogRecords.EMPTY;
-        iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isFalse();
-
-        // gen batch with invalid header size.
-        memoryLogRecords = MemoryLogRecords.pointToBytes(new byte[LOG_OVERHEAD - 1]);
-        iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isFalse();
-
-        // gen batch with invalid header size.
-        memoryLogRecords = MemoryLogRecords.pointToBytes(new byte[11]);
-        iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isFalse();
-
-        // gen batch with not enough size.
-        memoryLogRecords = MemoryLogRecords.pointToBytes(new byte[LOG_OVERHEAD]);
-        iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isFalse();
-
-        // gen batch with enough size.
-        MemorySegment memory = MemorySegment.allocateHeapMemory(100);
-        memory.put(MAGIC_OFFSET, CURRENT_LOG_MAGIC_VALUE);
-        memoryLogRecords = MemoryLogRecords.pointToBytes(memory.getHeapMemory());
-        iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isTrue();
+        for (int size : new int[] {LOG_OVERHEAD - 1, LOG_OVERHEAD, records.sizeInBytes() - 1}) {
+            MemoryLogRecords partial = MemoryLogRecords.readableRecords(records, size);
+            assertThat(partial.batches().iterator().hasNext()).isFalse();
+        }
     }
 
-    private Iterator<LogRecordBatch> getIterator(MemoryLogRecords memoryLogRecords) {
-        return memoryLogRecords.batches().iterator();
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void testInvalidBatchLength(int length) {
+        byte[] prefix = new byte[LOG_OVERHEAD];
+        MemorySegment.wrap(prefix).putInt(LENGTH_OFFSET, length);
+        MemoryLogRecords records = MemoryLogRecords.pointToBytes(prefix);
+        assertThatThrownBy(() -> records.batches().iterator().hasNext())
+                .isInstanceOf(CorruptMessageException.class);
     }
 }

@@ -19,8 +19,10 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.exception.CorruptRecordException;
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LogDecodeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ArrowBatchData;
@@ -33,6 +35,7 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.OutOfMemoryException;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.slf4j.Logger;
@@ -41,12 +44,16 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.Closeable;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.function.Predicate;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -67,18 +74,19 @@ public abstract class CompletedFetch {
     private final long fetchOffset;
     private final long filteredEndOffset;
 
-    private final boolean isCheckCrcs;
+    private final boolean checkBatchCrc;
     private final Iterator<LogRecordBatch> batches;
     private final LogScannerStatus logScannerStatus;
     protected final LogRecordReadContext readContext;
 
     private LogRecordBatch currentBatch;
+    private long previousBatchEndOffset = -1L;
     private int currentBatchSchemaId = -1;
     private LogRecord lastRecord;
     private CloseableIterator<LogRecord> records;
     private int recordsRead = 0;
-    private Exception cachedRecordException = null;
-    private boolean corruptLastRecord = false;
+    private FetchException cachedRecordException;
+    private boolean recordReadFailed;
     private long nextFetchOffset;
     private boolean isConsumed = false;
     private boolean initialized = false;
@@ -93,7 +101,7 @@ public abstract class CompletedFetch {
             Iterator<LogRecordBatch> batches,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
-            boolean isCheckCrcs,
+            boolean checkCrcs,
             long fetchOffset,
             long filteredEndOffset) {
         this.tableBucket = tableBucket;
@@ -103,12 +111,13 @@ public abstract class CompletedFetch {
         this.highWatermark = highWatermark;
         this.batches = batches;
         this.readContext = readContext;
-        this.isCheckCrcs = isCheckCrcs;
+        this.checkBatchCrc = checkCrcs && !readContext.isProjectionPushDowned();
         this.logScannerStatus = logScannerStatus;
         this.fetchOffset = fetchOffset;
         checkArgument(
                 filteredEndOffset == NO_FILTERED_END_OFFSET || filteredEndOffset >= fetchOffset,
-                "filteredEndOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
+                "filteredEndOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s)"
+                        + " for bucket %s.",
                 filteredEndOffset,
                 NO_FILTERED_END_OFFSET,
                 fetchOffset,
@@ -126,20 +135,24 @@ public abstract class CompletedFetch {
         InternalRow.FieldGetter[] selectedFieldGetters =
                 readContext.getSelectedFieldGetters(schemaId);
 
-        GenericRow newRow = new GenericRow(selectedFieldGetters.length);
-        InternalRow internalRow = record.getRow();
-        for (int i = 0; i < selectedFieldGetters.length; i++) {
-            newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
-        }
+        try {
+            GenericRow newRow = new GenericRow(selectedFieldGetters.length);
+            InternalRow internalRow = record.getRow();
+            for (int i = 0; i < selectedFieldGetters.length; i++) {
+                newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
+            }
 
-        return new ScanRecord(
-                tableId,
-                schemaId,
-                record.logOffset(),
-                record.timestamp(),
-                record.getChangeType(),
-                newRow,
-                getRecordSizeInBytes(record));
+            return new ScanRecord(
+                    tableId,
+                    schemaId,
+                    record.logOffset(),
+                    record.timestamp(),
+                    record.getChangeType(),
+                    newRow,
+                    getRecordSizeInBytes(record));
+        } catch (RuntimeException e) {
+            throw batchDecodeException(e, currentBatch);
+        }
     }
 
     /**
@@ -195,6 +208,7 @@ public abstract class CompletedFetch {
         if (!isConsumed) {
             maybeCloseRecordStream();
             cachedRecordException = null;
+            recordReadFailed = false;
             isConsumed = true;
 
             // we move the bucket to the end if we received some bytes.
@@ -222,12 +236,8 @@ public abstract class CompletedFetch {
 
     List<ScanRecord> fetchRecords(int maxRecords, @Nullable Predicate<LogRecord> recordFilter) {
         lastFetchRecordCount = 0;
-        if (corruptLastRecord) {
-            throw new FetchException(
-                    "Received exception when fetching the next record from "
-                            + tableBucket
-                            + ". If needed, please back to past the record to continue scanning.",
-                    cachedRecordException);
+        if (recordReadFailed || cachedRecordException instanceof LogDecodeException) {
+            throw cachedRecordException;
         }
 
         if (isConsumed) {
@@ -253,13 +263,9 @@ public abstract class CompletedFetch {
                 fetchRecord(scanRecords, recordFilter);
             }
         } catch (Exception e) {
-            cachedRecordException = e;
+            cachedRecordException = fetchException(e);
             if (scanRecords.isEmpty()) {
-                throw new FetchException(
-                        "Received exception when fetching the next record from "
-                                + tableBucket
-                                + ". If needed, please back to past the record to continue scanning.",
-                        e);
+                throw cachedRecordException;
             }
         }
 
@@ -267,13 +273,12 @@ public abstract class CompletedFetch {
     }
 
     private void fetchRecord(
-            List<ScanRecord> scanRecords, @Nullable Predicate<LogRecord> recordFilter)
-            throws Exception {
+            List<ScanRecord> scanRecords, @Nullable Predicate<LogRecord> recordFilter) {
         // Only move to next record if there was no exception in the last fetch.
         if (cachedRecordException == null) {
-            corruptLastRecord = true;
+            recordReadFailed = true;
             lastRecord = nextFetchedRecord();
-            corruptLastRecord = false;
+            recordReadFailed = false;
         }
 
         if (lastRecord == null) {
@@ -303,11 +308,7 @@ public abstract class CompletedFetch {
      */
     List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
         if (cachedRecordException != null) {
-            throw new FetchException(
-                    "Received exception when fetching the next Arrow batch from "
-                            + tableBucket
-                            + ". If needed, please back past the batch to continue scanning.",
-                    cachedRecordException);
+            throw cachedRecordException;
         }
 
         if (isConsumed) {
@@ -323,7 +324,17 @@ public abstract class CompletedFetch {
                     break;
                 }
 
-                ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext);
+                readContext.resolveBatchSchema(batch.schemaId());
+                ArrowBatchData arrowBatchData;
+                try {
+                    arrowBatchData = batch.loadArrowBatch(readContext);
+                } catch (RuntimeException e) {
+                    if (findThrowable(e, org.apache.arrow.memory.OutOfMemoryException.class)
+                            .isPresent()) {
+                        throw fetchException(e);
+                    }
+                    throw batchDecodeException(e, batch);
+                }
                 if (arrowBatchData.getRecordCount() == 0) {
                     arrowBatchData.close();
                     continue;
@@ -353,60 +364,144 @@ public abstract class CompletedFetch {
             // pointing at batches the iterator has already passed, causing a different
             // kind of inconsistency. Delivering partial results keeps offsets, recordsRead,
             // and the iterator position all in sync.
-            cachedRecordException = e;
+            cachedRecordException = fetchException(e);
             if (arrowBatches.isEmpty()) {
-                throw new FetchException(
-                        "Received exception when fetching the next Arrow batch from "
-                                + tableBucket
-                                + ". If needed, please back past the batch to continue scanning.",
-                        e);
+                throw cachedRecordException;
             }
         }
 
         return arrowBatches;
     }
 
-    private LogRecord nextFetchedRecord() throws Exception {
+    private LogRecord nextFetchedRecord() {
         while (true) {
-            if (records == null || !records.hasNext()) {
-                LogRecordBatch batch = nextFetchedBatch();
-                if (batch == null) {
-                    return null;
+            if (records != null) {
+                try {
+                    if (records.hasNext()) {
+                        LogRecord record = records.next();
+                        if (record.logOffset() >= nextFetchOffset) {
+                            return record;
+                        }
+                        continue;
+                    }
+                } catch (RuntimeException e) {
+                    throw batchDecodeException(e, currentBatch);
                 }
+            }
 
-                currentBatchSchemaId = batch.schemaId();
+            LogRecordBatch batch = nextFetchedBatch();
+            if (batch == null) {
+                return null;
+            }
+            currentBatchSchemaId = batch.schemaId();
+            if (batch.getRecordCount() != 0) {
+                readContext.resolveBatchSchema(currentBatchSchemaId);
+            }
+            try {
                 records = batch.records(readContext);
-            } else {
-                LogRecord record = records.next();
-                // skip any records out of range.
-                if (record.logOffset() >= nextFetchOffset) {
-                    return record;
-                }
+            } catch (RuntimeException e) {
+                throw batchDecodeException(e, batch);
             }
         }
     }
 
     private LogRecordBatch nextFetchedBatch() {
         maybeCloseRecordStream();
-        if (!batches.hasNext()) {
+        LogRecordBatch batch;
+        try {
+            batch = batches.hasNext() ? batches.next() : null;
+        } catch (CorruptMessageException e) {
+            throw decodeException(e, nextFetchOffset, OptionalLong.empty());
+        }
+        if (batch == null) {
             finishFetchedBatches();
             return null;
         }
 
-        currentBatch = batches.next();
-        // TODO get last epoch.
-        maybeEnsureValid(currentBatch);
-        return currentBatch;
+        try {
+            ensureHeaderComplete(batch);
+            if (checkBatchCrc) {
+                batch.ensureValid();
+            }
+            ensureValidOffsetRange(batch);
+        } catch (CorruptMessageException | IllegalArgumentException e) {
+            throw decodeException(e, batch.baseLogOffset(), OptionalLong.empty());
+        }
+        if (currentBatch != null) {
+            previousBatchEndOffset = currentBatch.nextLogOffset();
+        }
+        currentBatch = batch;
+        return batch;
+    }
+
+    private FetchException fetchException(Exception cause) {
+        return cause instanceof FetchException
+                ? (FetchException) cause
+                : new FetchException(
+                        "Failed to fetch log data for bucket " + tableBucket + ".", cause);
+    }
+
+    private FetchException batchDecodeException(RuntimeException cause, LogRecordBatch batch) {
+        // File-backed reads wrap I/O failures in FlussRuntimeException.
+        if ((cause instanceof FlussRuntimeException && cause.getCause() instanceof IOException)
+                || findThrowable(cause, OutOfMemoryException.class).isPresent()) {
+            return fetchException(cause);
+        }
+        long offset = batch.baseLogOffset();
+        return decodeException(cause, offset, trustedNextOffset(batch, offset));
+    }
+
+    private OptionalLong trustedNextOffset(LogRecordBatch batch, long offset) {
+        try {
+            long nextOffset = batch.nextLogOffset();
+            if (offset < 0 || nextOffset <= Math.max(offset, nextFetchOffset)) {
+                return OptionalLong.empty();
+            }
+            // This failed fetch will be discarded, so advancing the iterator is safe.
+            boolean hasFollowingBatch = batches.hasNext();
+            if (hasFollowingBatch) {
+                LogRecordBatch followingBatch = batches.next();
+                ensureHeaderComplete(followingBatch);
+                if (followingBatch.baseLogOffset() != nextOffset) {
+                    return OptionalLong.empty();
+                }
+            } else if (previousBatchEndOffset != offset) {
+                // The CRC starts at the schema ID, so the last batch needs a separate base check.
+                return OptionalLong.empty();
+            }
+            boolean trusted =
+                    (readContext.isProjectionPushDowned() && hasFollowingBatch)
+                            || checkBatchCrc
+                            || batch.isValid();
+            return trusted ? OptionalLong.of(nextOffset) : OptionalLong.empty();
+        } catch (RuntimeException e) {
+            LOG.debug(
+                    "Cannot verify the offset after the failed batch of bucket {} at offset {}.",
+                    tableBucket,
+                    offset,
+                    e);
+            return OptionalLong.empty();
+        }
+    }
+
+    private LogDecodeException decodeException(
+            Exception cause, long offset, OptionalLong nextOffset) {
+        String message =
+                String.format(
+                        "Failed to decode the log batch of bucket %s at offset %s. %s",
+                        tableBucket,
+                        offset,
+                        nextOffset.isPresent()
+                                ? "Subscribe the bucket at offset "
+                                        + nextOffset.getAsLong()
+                                        + " to skip the batch."
+                                : "Resume offset unavailable.");
+        return new LogDecodeException(message, cause, tableBucket, offset, nextOffset);
     }
 
     private void finishFetchedBatches() {
-        // In batch, we preserve the last offset in a batch. By using the next offset
-        // computed from the last offset in the batch, we ensure that the offset of the
-        // next fetch will point to the next batch, which avoids unnecessary re-fetching
-        // of the same batch (in the worst case, the scanner could get stuck fetching
-        // the same batch repeatedly).
-        // When filteredEndOffset is set, use the max of the batch-derived offset and
-        // filteredEndOffset to skip already-scanned-and-filtered trailing batches.
+        // Batch boundaries include batches with no visible rows. The server can also advance
+        // the cursor past trailing batches pruned by a filter.
         if (currentBatch != null) {
             nextFetchOffset = Math.max(currentBatch.nextLogOffset(), filteredEndOffset);
         } else if (filteredEndOffset != NO_FILTERED_END_OFFSET) {
@@ -415,23 +510,29 @@ public abstract class CompletedFetch {
         drain();
     }
 
-    private void maybeEnsureValid(LogRecordBatch batch) {
-        if (isCheckCrcs) {
-            if (readContext.isProjectionPushDowned()) {
-                LOG.debug("Skipping CRC check for column projected log record batch.");
-                return;
-            }
-            try {
-                batch.ensureValid();
-            } catch (CorruptRecordException e) {
-                throw new FetchException(
-                        "Record batch for bucket "
-                                + tableBucket
-                                + " at offset "
-                                + batch.baseLogOffset()
-                                + " is invalid, cause: "
-                                + e.getMessage());
-            }
+    // An undersized batch can otherwise read header fields from the following batch.
+    private static void ensureHeaderComplete(LogRecordBatch batch) {
+        int headerSize = recordBatchHeaderSize(batch.magic());
+        int sizeInBytes = batch.sizeInBytes();
+        if (sizeInBytes < headerSize) {
+            throw new CorruptMessageException(
+                    String.format(
+                            "Record batch is corrupt (the size %s is smaller than its header size"
+                                    + " %s)",
+                            sizeInBytes, headerSize));
+        }
+    }
+
+    private static void ensureValidOffsetRange(LogRecordBatch batch) {
+        long baseOffset = batch.baseLogOffset();
+        long nextOffset = batch.nextLogOffset();
+        int recordCount = batch.getRecordCount();
+        // Empty CDC batches can occupy an offset without emitting a record.
+        if (baseOffset < 0
+                || nextOffset <= baseOffset
+                || recordCount < 0
+                || recordCount > nextOffset - baseOffset) {
+            throw new CorruptMessageException("Invalid log batch offset range at " + baseOffset);
         }
     }
 

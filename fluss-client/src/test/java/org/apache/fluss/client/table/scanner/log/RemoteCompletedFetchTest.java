@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.LogDecodeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -50,6 +51,7 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -58,6 +60,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
@@ -175,7 +178,13 @@ class RemoteCompletedFetchTest {
             try {
                 if (checkCrc) {
                     assertThatThrownBy(() -> fetch.fetchRecords(10))
-                            .isInstanceOf(FetchException.class)
+                            .isInstanceOfSatisfying(
+                                    LogDecodeException.class,
+                                    e -> {
+                                        assertThat(e.getTableBucket()).isEqualTo(tableBucket);
+                                        assertThat(e.getOffset()).isZero();
+                                        assertThat(e.getNextOffset()).isEmpty();
+                                    })
                             .hasRootCauseInstanceOf(CorruptMessageException.class);
                 } else {
                     List<ScanRecord> records = fetch.fetchRecords(10);
@@ -224,6 +233,40 @@ class RemoteCompletedFetchTest {
         // no more records can be read
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnreadableFileDoesNotSuggestSkippingABatch(boolean truncated) throws Exception {
+        TableBucket bucket = new TableBucket(DATA2_TABLE_ID, 0);
+        FileLogRecords file =
+                createFileLogRecords(bucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        long scanOffset = 3L;
+        RemoteCompletedFetch fetch = makeCompletedFetch(bucket, file, scanOffset, null);
+        try (LogRecordReadContext context = fetch.readContext) {
+            try {
+                if (truncated) {
+                    try (RandomAccessFile writable = new RandomAccessFile(file.file(), "rw")) {
+                        writable.setLength(LOG_OVERHEAD - 1);
+                    }
+                    assertThatThrownBy(() -> fetch.fetchRecords(10))
+                            .isInstanceOfSatisfying(
+                                    LogDecodeException.class,
+                                    e -> {
+                                        assertThat(e.getOffset()).isEqualTo(scanOffset);
+                                        assertThat(e.getNextOffset()).isEmpty();
+                                    });
+                } else {
+                    file.closeHandlers();
+                    assertThatThrownBy(() -> fetch.fetchRecords(10))
+                            .isExactlyInstanceOf(FetchException.class)
+                            .hasRootCauseInstanceOf(ClosedChannelException.class);
+                }
+                assertThat(fetch.nextFetchOffset()).isEqualTo(scanOffset);
+            } finally {
+                fetch.drain();
+            }
+        }
     }
 
     @Test

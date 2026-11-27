@@ -17,6 +17,7 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
@@ -39,6 +40,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.HEADER_SIZE_UP_TO_MAGIC;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -67,19 +69,22 @@ public class FileLogInputStream
 
     @Override
     public FileChannelLogRecordBatch nextBatch() throws IOException {
-        FileChannel channel = fileRecords.channel();
-        if (position >= end - HEADER_SIZE_UP_TO_MAGIC) {
+        int remaining = end - position;
+        if (remaining < LOG_OVERHEAD) {
             return null;
         }
 
-        logHeaderBuffer.rewind();
-        FileUtils.readFullyOrFail(channel, logHeaderBuffer, position, "log header");
+        logHeaderBuffer.clear();
+        logHeaderBuffer.limit(Math.min(remaining, HEADER_SIZE_UP_TO_MAGIC));
+        FileUtils.readFullyOrFail(fileRecords.channel(), logHeaderBuffer, position, "log header");
 
-        logHeaderBuffer.rewind();
         long offset = logHeaderBuffer.getLong(BASE_OFFSET_OFFSET);
         int length = logHeaderBuffer.getInt(LENGTH_OFFSET);
 
-        if (position > end - LOG_OVERHEAD - length) {
+        if (length < MAGIC_LENGTH) {
+            throw new CorruptMessageException("Invalid log batch length " + length);
+        }
+        if (length > remaining - LOG_OVERHEAD) {
             return null;
         }
 
@@ -223,11 +228,6 @@ public class FileLogInputStream
                             fileRecords.channel(),
                             (long) position + recordsOffset,
                             sizeInBytes() - recordsOffset);
-            if (reader.getRowCount() != recordCount) {
-                plan.clear();
-                throw new IllegalArgumentException(
-                        "Arrow row count does not match log batch record count.");
-            }
             return header.columnRecordIterator(plan, reader, changeTypes);
         }
 

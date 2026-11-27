@@ -337,6 +337,19 @@ public class LogRecordReadContext
         return schemaGetter;
     }
 
+    /** Looks up the batch schemas before decoding so the scanner can report lookup failures. */
+    public void resolveBatchSchema(int schemaId) {
+        if (target == null || target.schemaId != schemaId) {
+            checkNotNull(schemaGetter.getSchema(schemaId), "Missing schema %s.", schemaId);
+            if (target != null && !projectionPushDowned) {
+                checkNotNull(
+                        schemaGetter.getSchema(target.schemaId),
+                        "Missing schema %s.",
+                        target.schemaId);
+            }
+        }
+    }
+
     /**
      * Returns the column index mapping for schema evolution, or {@code null} if the batch schema
      * matches the current schema and no remapping is needed.

@@ -17,11 +17,12 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
-import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_LENGTH;
 
 /**
  * A byte buffer backed log input stream. This class avoids the need to copy records by returning
@@ -39,28 +40,26 @@ class MemorySegmentLogInputStream implements LogInputStream<LogRecordBatch> {
         this.remaining = sizeInBytes;
     }
 
+    @Override
     public LogRecordBatch nextBatch() {
-        Integer batchSize = nextBatchSize();
-        // should at-least larger than V0 header size, because V1 header is larger than V0.
-        if (batchSize == null || remaining < batchSize || remaining < V0_RECORD_BATCH_HEADER_SIZE) {
+        if (remaining < LOG_OVERHEAD) {
             return null;
         }
 
+        int length = memorySegment.getInt(currentPosition + LENGTH_OFFSET);
+        if (length < MAGIC_LENGTH) {
+            throw new CorruptMessageException("Invalid log batch length " + length);
+        }
+        if (length > remaining - LOG_OVERHEAD) {
+            return null;
+        }
+
+        int batchSize = LOG_OVERHEAD + length;
         DefaultLogRecordBatch logRecords = new DefaultLogRecordBatch();
         logRecords.pointTo(memorySegment, currentPosition);
 
         currentPosition += batchSize;
         remaining -= batchSize;
         return logRecords;
-    }
-
-    /** Validates the header of the next batch and returns batch size. */
-    private Integer nextBatchSize() {
-        if (remaining < LOG_OVERHEAD) {
-            return null;
-        }
-
-        int recordSize = memorySegment.getInt(currentPosition + LENGTH_OFFSET);
-        return recordSize + LOG_OVERHEAD;
     }
 }

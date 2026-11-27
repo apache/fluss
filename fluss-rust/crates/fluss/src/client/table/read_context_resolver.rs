@@ -102,7 +102,11 @@ impl ReadContextResolver {
     /// Whether a fetched batch is checked against its CRC. The server rewrites a local
     /// batch fetched with a projection without updating its CRC, so that one is skipped.
     pub fn checks_crc(&self, is_remote: bool) -> bool {
-        self.check_crc && (is_remote || self.projected_fields.is_none())
+        self.check_crc && !self.is_server_projected(is_remote)
+    }
+
+    pub(crate) fn is_server_projected(&self, is_remote: bool) -> bool {
+        !is_remote && self.projected_fields.is_some()
     }
 
     pub fn with_schema_getter(mut self, schema_getter: Arc<ClientSchemaGetter>) -> Self {
@@ -129,7 +133,7 @@ impl ReadContextResolver {
     /// Returns None if the schema_id is not yet cached.
     pub fn resolve(&self, schema_id: i16, is_remote: bool) -> Option<Arc<ReadContext>> {
         // Server-projected batches already have the requested columns.
-        let effective_id = if self.projected_fields.is_some() && !is_remote {
+        let effective_id = if self.is_server_projected(is_remote) {
             self.initial_schema_id
         } else {
             schema_id

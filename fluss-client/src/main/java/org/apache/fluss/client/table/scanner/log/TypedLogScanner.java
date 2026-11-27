@@ -44,6 +44,10 @@ public interface TypedLogScanner<T> extends AutoCloseable {
      *
      * @param timeout the timeout to poll.
      * @return the result of poll.
+     * @throws org.apache.fluss.exception.LogDecodeException if a subscribed bucket has an
+     *     undecodable batch. See {@link
+     *     org.apache.fluss.exception.LogDecodeException#getNextOffset()} for the offset after the
+     *     failed batch.
      */
     TypedScanRecords<T> poll(Duration timeout);
 
