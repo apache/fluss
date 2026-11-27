@@ -225,6 +225,19 @@ class AggregateRowMergerTest {
                 .isEqualTo(100.0); // total unchanged (not in targetColumns)
         // Verify non-target column is truly unchanged (not aggregated)
         assertThat(merged.row.getDouble(2)).isEqualTo(row1.getDouble(2));
+
+        // Separate requests may switch target columns and later reuse an earlier column set.
+        BinaryValue current = new BinaryValue(merged.schemaId, merged.row.copy());
+        RowMerger totalMerger = merger.configureTargetColumns(new int[] {0, 2}, SCHEMA_ID, schema);
+        merged = totalMerger.merge(current, toBinaryValue(row2));
+        assertThat(merged.row.getLong(1)).isEqualTo(15L);
+        assertThat(merged.row.getDouble(2)).isEqualTo(150.0);
+
+        current = new BinaryValue(merged.schemaId, merged.row.copy());
+        partialMerger = merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, schema);
+        merged = partialMerger.merge(current, toBinaryValue(row2));
+        assertThat(merged.row.getLong(1)).isEqualTo(20L);
+        assertThat(merged.row.getDouble(2)).isEqualTo(150.0);
     }
 
     @Test

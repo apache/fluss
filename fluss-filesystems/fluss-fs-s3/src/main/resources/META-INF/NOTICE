@@ -104,7 +104,7 @@ See bundled license files for details.
 This project bundles the following dependencies under the MIT (https://opensource.org/licenses/MIT)
 See bundled license files for details.
 
-- org.checkerframework:checker-qual:3.33.0
+- org.checkerframework:checker-qual:3.19.0
 
 This project bundles the following dependencies under BSD-2 License (https://opensource.org/licenses/BSD-2-Clause).
 See bundled license files for details.
