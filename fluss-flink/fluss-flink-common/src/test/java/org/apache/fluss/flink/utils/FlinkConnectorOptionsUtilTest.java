@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.TimeZone;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIRS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
@@ -128,6 +129,9 @@ class FlinkConnectorOptionsUtilTest {
                 .isEqualTo("/fluss_tmp_dir");
         assertThat(FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(flussConfig, flinkConfig))
                 .isEqualTo("/fluss_tmp_dir");
+        flussConfig.set(CLIENT_IO_TMP_DIR, "/client_tmp_dir");
+        assertThat(FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(flussConfig, flinkConfig))
+                .isEqualTo("/client_tmp_dir");
         String property = System.getProperty("java.io.tmpdir");
         assertThat(
                         FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
@@ -135,8 +139,6 @@ class FlinkConnectorOptionsUtilTest {
                                 new org.apache.flink.configuration.Configuration()))
                 .isEqualTo(new File(property, "fluss").getAbsolutePath());
 
-        // only replace when flussConfig not contains CLIENT_SCANNER_IO_TMP_DIR while flinkConfig
-        // contains TMP_DIRS.
         assertThat(
                         FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
                                 new Configuration(), flinkConfig))

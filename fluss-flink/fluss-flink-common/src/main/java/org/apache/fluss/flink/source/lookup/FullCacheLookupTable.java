@@ -394,7 +394,7 @@ final class FullCacheLookupTable implements AutoCloseable {
     }
 
     private File createCacheDirectory(int subtaskIndex) throws IOException {
-        File root = new File(flussConfig.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR));
+        File root = new File(flussConfig.get(ConfigOptions.CLIENT_IO_TMP_DIR));
         if (!root.mkdirs() && !root.isDirectory()) {
             throw new IOException("Unable to create scanner temporary directory " + root);
         }

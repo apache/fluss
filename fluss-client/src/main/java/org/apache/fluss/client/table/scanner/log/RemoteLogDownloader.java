@@ -126,7 +126,7 @@ public class RemoteLogDownloader implements Closeable {
         // add UUID to avoid conflict between tasks.
         this.localLogDir =
                 Paths.get(
-                        conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
+                        conf.get(ConfigOptions.CLIENT_IO_TMP_DIR),
                         "remote-logs-" + UUID.randomUUID());
         this.downloadThread = new DownloadRemoteLogThread(scannerName);
     }

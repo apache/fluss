@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.lookup.LookupClient;
@@ -41,6 +42,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 
@@ -66,6 +68,7 @@ public final class FlussConnection implements Connection {
     private volatile RemoteFileDownloader remoteFileDownloader;
     private volatile SecurityTokenManager securityTokenManager;
     private volatile Admin admin;
+    private volatile AdminGateway bulkLoadGateway;
 
     FlussConnection(Configuration conf) {
         this(conf, MetricRegistry.create(conf, null));
@@ -230,6 +233,23 @@ public final class FlussConnection implements Connection {
         clientMetricGroup.close();
         rpcClient.close();
         metricRegistry.closeAsync().get();
+    }
+
+    /** Returns the shared coordinator gateway for BulkLoad operations. */
+    @Internal
+    public AdminGateway getOrCreateBulkLoadGateway() {
+        if (bulkLoadGateway == null) {
+            synchronized (this) {
+                if (bulkLoadGateway == null) {
+                    bulkLoadGateway =
+                            GatewayClientProxy.createGatewayProxy(
+                                    metadataUpdater::getCoordinatorServer,
+                                    rpcClient,
+                                    AdminGateway.class);
+                }
+            }
+        }
+        return bulkLoadGateway;
     }
 
     private void setupClientMetricsConfiguration() {

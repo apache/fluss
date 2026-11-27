@@ -19,6 +19,7 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.docs.ConfigOverrideDefault;
 import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -1967,13 +1968,27 @@ public class ConfigOptions {
                     .withDescription(
                             "The read preference for LogScanner. Supported values are local-first and remote-first.");
 
-    public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
-            key("client.scanner.io.tmpdir")
+    @ConfigOverrideDefault("System.getProperty(\"java.io.tmpdir\") + \"/fluss\"")
+    public static final ConfigOption<String> CLIENT_IO_TMP_DIR =
+            key("client.io.tmpdir")
                     .stringType()
                     .defaultValue(System.getProperty("java.io.tmpdir") + "/fluss")
                     .withDescription(
-                            "Local directory that is used by client for"
-                                    + " storing the data files (like kv snapshot, log segment files) to read temporarily");
+                            "Local directory for temporary client data, including downloaded KV "
+                                    + "snapshots and log segments, full-cache lookups, and BulkLoad "
+                                    + "bucket writers.")
+                    .withDeprecatedKeys("client.scanner.io.tmpdir");
+
+    /**
+     * @deprecated Use {@link #CLIENT_IO_TMP_DIR} instead.
+     */
+    @Deprecated
+    @ConfigOverrideDefault("System.getProperty(\"java.io.tmpdir\") + \"/fluss\"")
+    public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
+            key("client.scanner.io.tmpdir")
+                    .stringType()
+                    .defaultValue(CLIENT_IO_TMP_DIR.defaultValue())
+                    .withDescription("Deprecated. Use client.io.tmpdir instead.");
 
     public static final ConfigOption<String> CLIENT_CONSUMER_GROUP_ID =
             key("client.consumer.group.id")

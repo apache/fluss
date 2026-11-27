@@ -75,7 +75,6 @@ import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
-import org.apache.fluss.rpc.messages.CreateTableFromLakeResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
@@ -118,7 +117,6 @@ import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbListedGroup;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
-import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
@@ -386,7 +384,10 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return gateway.createTableFromLake(request)
-                .thenApply(response -> toTableInfo(tablePath, response));
+                .thenApply(
+                        response ->
+                                ClientRpcMessageUtils.toTableInfo(
+                                        tablePath, response.getTableInfo()));
     }
 
     @Override
@@ -1406,20 +1407,6 @@ public class FlussAdmin implements Admin {
                 bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
             }
         }
-    }
-
-    private static TableInfo toTableInfo(
-            TablePath tablePath, CreateTableFromLakeResponse response) {
-        PbTableInfo pbTableInfo = response.getTableInfo();
-        return toTableInfo(
-                tablePath,
-                pbTableInfo.getTableId(),
-                pbTableInfo.getSchemaId(),
-                pbTableInfo.getTableJson(),
-                pbTableInfo.hasRemoteDataDir() ? pbTableInfo.getRemoteDataDir() : null,
-                pbTableInfo.getCreatedTime(),
-                pbTableInfo.getModifiedTime(),
-                pbTableInfo.hasBucketCountEpoch() ? pbTableInfo.getBucketCountEpoch() : 0L);
     }
 
     private static TableInfo toTableInfo(
