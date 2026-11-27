@@ -165,6 +165,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitio
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.setBulkLoadHandle;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toTableInfo;
 import static org.apache.fluss.client.utils.ClientUtils.withSafeCoordinatorRetries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -378,10 +379,7 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return gateway.createTableFromLake(request)
-                .thenApply(
-                        response ->
-                                ClientRpcMessageUtils.toTableInfo(
-                                        tablePath, response.getTableInfo()));
+                .thenApply(response -> toTableInfo(tablePath, response.getTableInfo()));
     }
 
     @Override
@@ -470,19 +468,7 @@ public class FlussAdmin implements Admin {
                 .setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getTableInfo(request)
-                .thenApply(
-                        r ->
-                                toTableInfo(
-                                        tablePath,
-                                        r.getTableId(),
-                                        r.getSchemaId(),
-                                        r.getTableJson(),
-                                        // For backward compatibility, results returned by old
-                                        // clusters do not include the remote data dir
-                                        r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
-                                        r.getCreatedTime(),
-                                        r.getModifiedTime(),
-                                        r.hasBucketCountEpoch() ? r.getBucketCountEpoch() : 0L));
+                .thenApply(response -> toTableInfo(tablePath, response));
     }
 
     @Override
@@ -1461,26 +1447,6 @@ public class FlussAdmin implements Admin {
                 bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
             }
         }
-    }
-
-    private static TableInfo toTableInfo(
-            TablePath tablePath,
-            long tableId,
-            int schemaId,
-            byte[] tableJson,
-            @Nullable String remoteDataDir,
-            long createdTime,
-            long modifiedTime,
-            long bucketCountEpoch) {
-        return TableInfo.of(
-                tablePath,
-                tableId,
-                schemaId,
-                TableDescriptor.fromJsonBytes(tableJson),
-                remoteDataDir,
-                createdTime,
-                modifiedTime,
-                bucketCountEpoch);
     }
 
     @Override
