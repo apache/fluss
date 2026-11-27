@@ -67,6 +67,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED;
+
 /** The source reader for Fluss. */
 public class FlinkSourceReader<OUT>
         extends SingleThreadMultiplexSourceReaderBaseAdapter<
@@ -144,35 +146,20 @@ public class FlinkSourceReader<OUT>
     }
 
     /**
-     * When checkpoint commits are requested, disable the Fluss client's periodic auto-commit so
-     * that {@link #notifyCheckpointComplete(long)} is the only path that submits offsets. In batch
-     * execution, both checkpoint commits and client auto-commit are disabled because batch reads
-     * should not advance consumer group offsets.
+     * Batch reads must not advance consumer group offsets. Streaming reads that commit on
+     * checkpoints disable periodic auto-commit by default and honor an explicit client setting.
      */
     private static Configuration maybeDisableAutoCommit(
             Configuration flussConfig, boolean commitOffsetOnCheckpoint, boolean batchExecution) {
-        if (batchExecution) {
-            Configuration adjusted = new Configuration(flussConfig);
-            adjusted.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, false);
+        if (batchExecution
+                || (commitOffsetOnCheckpoint
+                        && !flussConfig.contains(CLIENT_CONSUMER_AUTO_COMMIT_ENABLED))) {
             LOG.info(
-                    "Batch execution; disabling client-side auto-commit and checkpoint-based"
-                            + " consumer offset commits.");
-            return adjusted;
+                    "Disabling client-side auto-commit for {}.",
+                    batchExecution ? "batch execution" : "checkpoint-based offset commits");
+            return new Configuration(flussConfig).set(CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, false);
         }
-        if (!commitOffsetOnCheckpoint) {
-            return flussConfig;
-        }
-        // Preserve an explicit user setting. This lets users keep periodic offset commits
-        // between checkpoints even when checkpoint commits are enabled.
-        if (flussConfig.contains(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED)) {
-            return flussConfig;
-        }
-        Configuration adjusted = new Configuration(flussConfig);
-        adjusted.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_ENABLED, false);
-        LOG.info(
-                "Offset commits on checkpoint enabled; disabling client-side auto-commit."
-                        + " Consumer offsets will be committed only after checkpoint completion.");
-        return adjusted;
+        return flussConfig;
     }
 
     @Override
