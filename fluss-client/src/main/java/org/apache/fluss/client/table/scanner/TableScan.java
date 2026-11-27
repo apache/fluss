@@ -207,8 +207,7 @@ public class TableScan implements Scan {
                             "Currently, SnapshotBatchScanner doesn't support limit pushdown. Table: %s, bucket: %s, snapshot ID: %d, requested limit: %d",
                             tableInfo.getTablePath(), tableBucket, snapshotId, limit));
         }
-        String scannerTmpDir =
-                conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
+        String scannerTmpDir = conn.getConfiguration().getString(ConfigOptions.CLIENT_IO_TMP_DIR);
         KvValueLayout kvValueLayout = KvValueLayout.fromTableConfig(tableInfo.getTableConfig());
         Admin admin = conn.getAdmin();
         final KvSnapshotMetadata snapshotMeta;

@@ -322,11 +322,11 @@ static void loadRows(
 ```
 
 Opening a bucket writer, writing rows, and committing the bucket are blocking
-operations. Build workers need local space for RocksDB in the JVM temporary directory
+operations. Build workers need local space for RocksDB under
+[`client.io.tmpdir`](../../maintenance/configuration.md#client-temporary-directory)
 and read and write access to the remote snapshot directories. Bucket writers use
-`kv.rocksdb.compression.per.level` from the connection's
-[configuration](../../maintenance/configuration.md). Closing a bucket writer releases
-its local resources.
+`kv.rocksdb.compression.per.level` from the connection's configuration. Closing a
+bucket writer releases its local resources.
 
 Each bucket commit durably publishes that bucket independently. Transaction
 `commit(handle)` verifies that every bucket of the active targets has been committed

@@ -62,7 +62,8 @@ public interface BulkLoad {
      *
      * <p>The caller owns and must close any returned writer. Invoke this blocking operation from a
      * build worker thread. Build workers need read and write access to the remote snapshot
-     * directories and local space for a RocksDB database in the JVM temporary directory.
+     * directories and local space for a RocksDB database under the connection's {@code
+     * client.io.tmpdir}.
      *
      * <p>Bucket writers support primary-key tables using the plain KV value layout without
      * row-level TTL.

@@ -53,6 +53,7 @@ import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -90,7 +91,7 @@ class BulkLoadBucketWriterITCase {
                     .build();
 
     @Test
-    void testPartitionBucketCountsAndSnapshotRecovery() throws Exception {
+    void testPartitionBucketCountsAndSnapshotRecovery(@TempDir Path tempDir) throws Exception {
         TablePath path = TablePath.of(BUILTIN_DATABASE, "bulkload_partitioned");
         Schema schema =
                 Schema.newBuilder()
@@ -154,9 +155,15 @@ class BulkLoadBucketWriterITCase {
                 assertThat(current.getBucketCount()).isEqualTo(4);
                 assertThat(old.bucketOf(oldRow)).isEqualTo(oldBucket);
                 assertThat(current.bucketOf(newRow)).isEqualTo(newBucket);
+                Path workDir = Files.createDirectory(tempDir.resolve("work"));
+                Path linkedWorkDir =
+                        Files.createSymbolicLink(tempDir.resolve("linked-work"), workDir);
                 try (Connection worker =
                                 ConnectionFactory.createConnection(
                                         new Configuration(CLUSTER.getClientConfig())
+                                                .set(
+                                                        ConfigOptions.CLIENT_IO_TMP_DIR,
+                                                        linkedWorkDir.toString())
                                                 .set(
                                                         ConfigOptions.KV_COMPRESSION_PER_LEVEL,
                                                         Collections.singletonList(
@@ -219,11 +226,18 @@ class BulkLoadBucketWriterITCase {
     }
 
     @Test
-    void testAbortPreservesPublishedBucket() throws Exception {
+    void testAbortPreservesPublishedBucket(@TempDir Path tempDir) throws Exception {
         TablePath path = TablePath.of(BUILTIN_DATABASE, "bulkload_partial");
         TablePath otherPath = TablePath.of(BUILTIN_DATABASE, "bulkload_other");
         InternalRow imported = row(7, "published before abort");
-        try (Connection conn = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+        Path workDir = tempDir.resolve("client");
+        Path deprecatedWorkDir = tempDir.resolve("scanner");
+        Path siblingDir = workDir.resolve("another-operation");
+        Configuration conf =
+                new Configuration(CLUSTER.getClientConfig())
+                        .set(ConfigOptions.CLIENT_IO_TMP_DIR, workDir.toString())
+                        .set(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR, deprecatedWorkDir.toString());
+        try (Connection conn = ConnectionFactory.createConnection(conf);
                 Admin admin = conn.getAdmin()) {
             await(admin.createTable(path, descriptor(2), false));
             await(admin.createTable(otherPath, descriptor(1), false));
@@ -241,10 +255,20 @@ class BulkLoadBucketWriterITCase {
                 int bucket = target.bucketOf(imported);
                 try (BulkLoadBucketWriter writer =
                         bulkLoad.tryOpenBucketWriter(target, bucket).get()) {
+                    try (Stream<Path> entries = Files.list(workDir)) {
+                        assertThat(entries)
+                                .singleElement()
+                                .satisfies(dir -> assertThat(dir).isDirectory());
+                    }
+                    Files.createDirectory(siblingDir);
                     writer.write(row(7, "superseded payload"));
                     writer.write(imported);
                     writer.commit();
                 }
+                try (Stream<Path> entries = Files.list(workDir)) {
+                    assertThat(entries).containsExactly(siblingDir);
+                }
+                assertThat(deprecatedWorkDir).doesNotExist();
                 BulkLoad otherLoad = otherTable.newBulkLoad();
                 assertThatThrownBy(() -> otherLoad.tryOpenBucketWriter(target, bucket))
                         .isInstanceOf(IllegalArgumentException.class);

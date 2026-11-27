@@ -394,7 +394,7 @@ native allocations consume additional memory. These settings are per instance, n
 or a hard process-memory limit. The `rocksdbEstimatedMemoryBytes` gauge estimates memtable,
 table-reader and block-cache memory; it excludes other native overhead and the OS page cache.
 
-Provide sufficient TaskManager disk space under `client.scanner.io.tmpdir` for the cached buckets.
+Provide sufficient TaskManager disk space under `client.io.tmpdir` for the cached buckets.
 When lookup parallelism exceeds the bucket count, a bucket may be cached by more than one subtask;
 increasing parallelism beyond the bucket count does not keep reducing each instance's data size.
 The cache is rebuilt on task restart and removed when the task closes. INFO logs report the absolute

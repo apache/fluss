@@ -45,7 +45,7 @@ import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getLakeTieringIoTmpDirs;
@@ -129,7 +129,7 @@ public class TieringSource<WriteResult>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
         Configuration readerConf = new Configuration(flussConf);
         readerConf.set(
-                CLIENT_SCANNER_IO_TMP_DIR,
+                CLIENT_IO_TMP_DIR,
                 getClientScannerIoTmpDir(readerConf, sourceReaderContext.getConfiguration()));
         Connection connection = ConnectionFactory.createConnection(readerConf);
         return new TieringSourceReader<>(

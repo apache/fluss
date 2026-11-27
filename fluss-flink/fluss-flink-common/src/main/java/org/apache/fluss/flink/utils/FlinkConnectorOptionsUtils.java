@@ -45,7 +45,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIRS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAMP;
@@ -318,7 +318,7 @@ public class FlinkConnectorOptionsUtils {
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
         return flussConf
-                .getOptional(CLIENT_SCANNER_IO_TMP_DIR)
+                .getOptional(CLIENT_IO_TMP_DIR)
                 .orElseGet(
                         () ->
                                 new File(

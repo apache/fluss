@@ -62,6 +62,7 @@ import java.io.InputStream;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -142,7 +143,11 @@ final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
                 new RowSerializer(rowType.getChildren().toArray(new DataType[0]), rowFormat);
 
         RocksDB.loadLibrary();
-        this.localWorkDir = Files.createTempDirectory("fluss-bulkload-");
+        Path workRoot = Paths.get(configuration.get(ConfigOptions.CLIENT_IO_TMP_DIR));
+        if (!Files.isDirectory(workRoot)) {
+            Files.createDirectories(workRoot);
+        }
+        this.localWorkDir = Files.createTempDirectory(workRoot, "fluss-bulkload-");
         Options options = null;
         try {
             options = new Options();

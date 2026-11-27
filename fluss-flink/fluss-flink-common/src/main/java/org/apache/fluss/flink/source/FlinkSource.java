@@ -60,7 +60,7 @@ import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.List;
 
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
 
 /** Flink source for Fluss. */
@@ -438,7 +438,7 @@ public class FlinkSource<OUT>
 
         Configuration readerConf = new Configuration(flussConf);
         readerConf.set(
-                CLIENT_SCANNER_IO_TMP_DIR,
+                CLIENT_IO_TMP_DIR,
                 getClientScannerIoTmpDir(readerConf, context.getConfiguration()));
         deserializationSchema.open(
                 new DeserializerInitContextImpl(
