@@ -24,6 +24,8 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.BulkLoadBuildContext;
 import org.apache.fluss.client.metadata.BulkLoadHandle;
 import org.apache.fluss.client.metadata.BulkLoadInfo;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.BulkLoad;
 import org.apache.fluss.client.table.writer.BulkLoadBucketWriter;
 import org.apache.fluss.client.tiering.FlussTableLakeSnapshotCommitter;
 import org.apache.fluss.config.ConfigOptions;
@@ -49,6 +51,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.TypeUtils;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -103,6 +106,7 @@ final class LoadLakeToFluss {
             StreamExecutionEnvironment executionEnvironment,
             Configuration config,
             Admin admin,
+            BulkLoad bulkLoad,
             TableInfo table,
             LakeSource<Split> source,
             long snapshotId,
@@ -114,7 +118,7 @@ final class LoadLakeToFluss {
         List<LoadTask> tasks = new ArrayList<>();
         if (!table.getTableConfig().isDataLakeEnabled()) {
             BulkLoadInfo previous =
-                    findLoad(admin, new BulkLoadHandle(table.getTableId(), bulkLoadId), config);
+                    findLoad(bulkLoad, new BulkLoadHandle(table.getTableId(), bulkLoadId), config);
             Set<String> selectedPartitions = null;
             if (previous != null) {
                 // The caller must preserve the original source snapshot. The SDK does not
@@ -129,11 +133,7 @@ final class LoadLakeToFluss {
                     originalNames = new ArrayList<>(selectedPartitions);
                 }
                 // An existing ID replays its frozen context without creating another load.
-                context =
-                        await(
-                                admin.beginBulkLoad(
-                                        table.getTablePath(), originalNames, bulkLoadId),
-                                config);
+                context = await(bulkLoad.begin(bulkLoadId, originalNames), config);
             }
             if (previous != null && previous.getState() == BulkLoadInfo.State.COMMITTED) {
                 LOG.info(
@@ -144,7 +144,7 @@ final class LoadLakeToFluss {
                 Map<String, Map<Integer, List<Split>>> grouped =
                         planBucketSplits(table, source, snapshotId, selectedPartitions);
                 if (context == null) {
-                    context = beginLoad(admin, table, plan, grouped.keySet(), config);
+                    context = beginLoad(bulkLoad, admin, table, plan, grouped.keySet(), config);
                 }
                 if (context != null) {
                     tasks = createLoadTasks(table, context, grouped, serializer);
@@ -213,6 +213,7 @@ final class LoadLakeToFluss {
 
     @Nullable
     private static BulkLoadBuildContext beginLoad(
+            BulkLoad bulkLoad,
             Admin admin,
             TableInfo table,
             LoadPlan plan,
@@ -245,9 +246,7 @@ final class LoadLakeToFluss {
                 System.nanoTime() + config.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toNanos();
         while (true) {
             try {
-                return await(
-                        admin.beginBulkLoad(plan.tablePath, partitionNames, plan.bulkLoadId),
-                        config);
+                return await(bulkLoad.begin(plan.bulkLoadId, partitionNames), config);
             } catch (ExecutionException e) {
                 Throwable cause = ExceptionUtils.stripExecutionException(e);
                 // Creation can complete before the coordinator's event thread sees the metadata.
@@ -351,10 +350,10 @@ final class LoadLakeToFluss {
     }
 
     @Nullable
-    private static BulkLoadInfo findLoad(Admin admin, BulkLoadHandle handle, Configuration config)
-            throws Exception {
+    private static BulkLoadInfo findLoad(
+            BulkLoad bulkLoad, BulkLoadHandle handle, Configuration config) throws Exception {
         try {
-            return await(admin.getBulkLoadInfo(handle), config);
+            return await(bulkLoad.getInfo(handle), config);
         } catch (ExecutionException e) {
             if (ExceptionUtils.findThrowable(e, BulkLoadNotFoundException.class).isPresent()) {
                 return null;
@@ -572,9 +571,14 @@ final class LoadLakeToFluss {
             extends RichMapFunction<LoadTask, TableBucket> {
         private static final long serialVersionUID = 1L;
         private final Configuration config;
-        private final BulkLoadBuildContext context;
+        private final BulkLoadHandle handle;
+        private final List<String> partitionNames;
+        private final long totalBucketsToLoad;
         private final LakeSource<Split> source;
+        private transient BulkLoadBuildContext context;
         private transient Connection connection;
+        private transient Table table;
+        private transient BulkLoad bulkLoad;
         private transient boolean loadCommitted;
         private transient Counter rowsProcessed;
         private transient Counter completedBuckets;
@@ -582,7 +586,17 @@ final class LoadLakeToFluss {
         private BuildBucket(
                 Configuration config, BulkLoadBuildContext context, LakeSource<Split> source) {
             this.config = config;
-            this.context = context;
+            this.handle = context.getHandle();
+            this.partitionNames = new ArrayList<>();
+            for (BulkLoadBuildContext.Target target : context.getTargets()) {
+                if (target.getPath().getPartitionName() != null) {
+                    partitionNames.add(target.getPath().getPartitionName());
+                }
+            }
+            this.totalBucketsToLoad =
+                    context.getTargets().stream()
+                            .mapToLong(BulkLoadBuildContext.Target::getBucketCount)
+                            .sum();
             this.source = source;
         }
 
@@ -591,41 +605,42 @@ final class LoadLakeToFluss {
             if (connection == null) {
                 // The connection initializes Fluss filesystems with the client.fs.* options.
                 connection = ConnectionFactory.createConnection(config);
+                table = connection.getTable(task.path.getTablePath());
+                bulkLoad = table.newBulkLoad();
                 // Check once per operator attempt. Finalization can fail after commit, and a
                 // withdrawn target may then have no individual bucket commit to replay.
                 loadCommitted =
-                        await(connection.getAdmin().getBulkLoadInfo(context.getHandle()), config)
-                                        .getState()
+                        await(bulkLoad.getInfo(handle), config).getState()
                                 == BulkLoadInfo.State.COMMITTED;
+                if (!loadCommitted) {
+                    // The JobGraph carries the original selection. Idempotent Begin retrieves
+                    // the frozen context without serializing SDK implementation objects.
+                    context = await(bulkLoad.begin(handle.getBulkLoadId(), partitionNames), config);
+                }
                 MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
                 rowsProcessed = metricGroup.counter("rowsProcessed");
                 completedBuckets = metricGroup.counter("completedBuckets");
-                long totalBucketsToLoad =
-                        context.getTargets().stream()
-                                .mapToLong(BulkLoadBuildContext.Target::getBucketCount)
-                                .sum();
                 // Each subtask reports the same frozen total; aggregate this gauge with MAX.
                 metricGroup.gauge("totalBucketsToLoad", () -> totalBucketsToLoad);
             }
-            BulkLoadBuildContext.Target target = context.getTarget(task.path);
-            checkState(
-                    Objects.equals(target.getPartitionId(), task.partitionId),
-                    "Load task no longer belongs to the original physical partition.");
             TableBucket result =
-                    new TableBucket(
-                            context.getHandle().getTableId(), target.getPartitionId(), task.bucket);
+                    new TableBucket(handle.getTableId(), task.partitionId, task.bucket);
             if (loadCommitted) {
                 LOG.info(
                         "Skipping Bulk Load {} bucket {} of {} because the transaction is already committed.",
-                        context.getHandle().getBulkLoadId(),
+                        handle.getBulkLoadId(),
                         task.bucket,
                         task.path);
                 completedBuckets.inc();
                 return result;
             }
+            BulkLoadBuildContext.Target target = context.getTarget(task.path);
+            checkState(
+                    Objects.equals(target.getPartitionId(), task.partitionId),
+                    "Load task no longer belongs to the original physical partition.");
             try {
                 Optional<BulkLoadBucketWriter> opened =
-                        connection.tryOpenBulkLoadBucketWriter(target, task.bucket);
+                        bulkLoad.tryOpenBucketWriter(target, task.bucket);
                 if (opened.isPresent()) {
                     try (BulkLoadBucketWriter writer = opened.get()) {
                         LOG.info(
@@ -679,9 +694,7 @@ final class LoadLakeToFluss {
 
         @Override
         public void close() throws Exception {
-            if (connection != null) {
-                connection.close();
-            }
+            IOUtils.closeAll(table, connection);
         }
     }
 
@@ -690,13 +703,23 @@ final class LoadLakeToFluss {
         private final Configuration config;
         private final LoadPlan plan;
         // Null when the table is already enabled or no physical partitions were selected.
-        @Nullable private final BulkLoadBuildContext context;
+        @Nullable private final BulkLoadHandle handle;
+        private final Set<TableBucket> expected;
 
         private CommitSink(
                 Configuration config, LoadPlan plan, @Nullable BulkLoadBuildContext context) {
             this.config = config;
             this.plan = plan;
-            this.context = context;
+            this.handle = context == null ? null : context.getHandle();
+            this.expected = new LinkedHashSet<>();
+            if (context != null) {
+                for (BulkLoadBuildContext.Target target : context.getTargets()) {
+                    for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
+                        expected.add(
+                                new TableBucket(plan.tableId, target.getPartitionId(), bucket));
+                    }
+                }
+            }
         }
 
         @Override
@@ -719,20 +742,12 @@ final class LoadLakeToFluss {
                     }
                     try {
                         Map<TableBucket, Long> offsets = new LinkedHashMap<>();
-                        if (context != null) {
-                            Set<TableBucket> expected = new LinkedHashSet<>();
-                            for (BulkLoadBuildContext.Target target : context.getTargets()) {
-                                for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
-                                    expected.add(
-                                            new TableBucket(
-                                                    plan.tableId, target.getPartitionId(), bucket));
-                                }
-                            }
+                        if (handle != null) {
                             try (Connection connection =
                                             ConnectionFactory.createConnection(config);
-                                    Admin admin = connection.getAdmin()) {
-                                BulkLoadInfo info =
-                                        await(admin.getBulkLoadInfo(context.getHandle()), config);
+                                    Table table = connection.getTable(plan.tablePath)) {
+                                BulkLoad bulkLoad = table.newBulkLoad();
+                                BulkLoadInfo info = await(bulkLoad.getInfo(handle), config);
                                 checkState(
                                         info.getState() != BulkLoadInfo.State.ABORTED,
                                         "Bulk Load %s was aborted.",
@@ -741,7 +756,7 @@ final class LoadLakeToFluss {
                                     checkState(
                                             completed.containsAll(expected),
                                             "Load results do not cover the prepared physical buckets.");
-                                    await(admin.commitBulkLoad(context.getHandle()), config);
+                                    await(bulkLoad.commit(handle), config);
                                 }
                             }
                             // Bulk Load produces no WAL during new-table initialization.

@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.action.Action;
 import org.apache.fluss.flink.utils.DataLakeUtils;
@@ -122,8 +123,9 @@ public class LoadLakeDataToFlussAction implements Action {
     /** Submits the bounded load job; callers may wait for or independently track its JobID. */
     public JobClient submit(StreamExecutionEnvironment environment) throws Exception {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
-                Admin admin = connection.getAdmin()) {
-            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+                Admin admin = connection.getAdmin();
+                Table target = connection.getTable(tablePath)) {
+            TableInfo tableInfo = target.getTableInfo();
             checkState(
                     expectedTableId == null || expectedTableId == tableInfo.getTableId(),
                     "The original Fluss table was replaced.");
@@ -161,6 +163,7 @@ public class LoadLakeDataToFlussAction implements Action {
                     environment,
                     flussConfig,
                     admin,
+                    target.newBulkLoad(),
                     tableInfo,
                     lakeStorage.createLakeSource(tableInfo.getLakeTablePath()),
                     snapshotId,

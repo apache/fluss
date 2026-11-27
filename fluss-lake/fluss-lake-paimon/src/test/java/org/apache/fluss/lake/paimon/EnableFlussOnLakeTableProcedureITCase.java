@@ -24,6 +24,7 @@ import org.apache.fluss.client.metadata.BulkLoadInfo;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.BulkLoad;
 import org.apache.fluss.client.table.writer.BulkLoadBucketWriter;
 import org.apache.fluss.client.tiering.FlussTableLakeSnapshotCommitter;
 import org.apache.fluss.config.ConfigOptions;
@@ -77,6 +78,7 @@ import org.apache.paimon.table.sink.BatchTableWrite;
 import org.apache.paimon.table.sink.BatchWriteBuilder;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.Split;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -121,6 +123,8 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                     .setClusterConf(createClusterConfiguration())
                     .build();
 
+    private final Map<TablePath, Table> bulkLoadTables = new HashMap<>();
+
     private TableEnvironment tableEnvironment;
 
     @BeforeAll
@@ -132,6 +136,15 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
     void setUp() throws Exception {
         paimonCatalog.createDatabase(DATABASE, true);
         tableEnvironment = createTableEnvironment(EnvironmentSettings.inStreamingMode());
+    }
+
+    @AfterEach
+    void closeBulkLoadTables() throws Exception {
+        IOUtils.closeAll(bulkLoadTables.values());
+    }
+
+    private BulkLoad bulkLoad(TablePath path) {
+        return bulkLoadTables.computeIfAbsent(path, conn::getTable).newBulkLoad();
     }
 
     @Override
@@ -823,7 +836,8 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                 .hasMessageContaining("target bucket count " + newBuckets);
         assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled()).isFalse();
         assertThat(
-                        admin.getBulkLoadInfo(new BulkLoadHandle(table.getTableId(), loadId))
+                        bulkLoad(path)
+                                .getInfo(new BulkLoadHandle(table.getTableId(), loadId))
                                 .get()
                                 .getTargets())
                 .allSatisfy(target -> assertThat(target.getCommittedBucketCount()).isZero());
@@ -1109,10 +1123,10 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         TableInfo table = admin.createTableFromLake(path, Collections.emptyMap()).get();
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(path);
         String loadId = UUID.randomUUID().toString();
-        BulkLoadBuildContext context =
-                admin.beginBulkLoad(path, Collections.emptyList(), loadId).get();
+        BulkLoadBuildContext context = bulkLoad(path).begin(loadId, Collections.emptyList()).get();
         try (BulkLoadBucketWriter writer =
-                conn.tryOpenBulkLoadBucketWriter(context.getTarget(PhysicalTablePath.of(path)), 0)
+                bulkLoad(path)
+                        .tryOpenBucketWriter(context.getTarget(PhysicalTablePath.of(path)), 0)
                         .get()) {
             writer.write(row(1L, "paimon"));
             writer.commit();
@@ -1120,7 +1134,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         long importedSnapshot = admin.getLatestKvSnapshots(path).get().getSnapshotId(0).getAsLong();
         // Leave this transaction RUNNING in the failure case, so the job commits it before failing.
         if (!failRegistration) {
-            admin.commitBulkLoad(context.getHandle()).get();
+            bulkLoad(path).commit(context.getHandle()).get();
         }
         Map<TableBucket, Long> offsets =
                 Collections.singletonMap(new TableBucket(table.getTableId(), 0), 0L);
@@ -1175,7 +1189,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                         () -> job.getJobStatus().get() == JobStatus.RESTARTING,
                         Duration.ofMinutes(1),
                         "The load did not restart after snapshot registration failed.");
-                assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+                assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getState())
                         .isEqualTo(BulkLoadInfo.State.COMMITTED);
                 assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled())
                         .isFalse();
@@ -1187,7 +1201,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                 fs.delete(metadata, false);
             }
         }
-        assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+        assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getState())
                 .isEqualTo(BulkLoadInfo.State.COMMITTED);
         assertThat(admin.getLatestKvSnapshots(path).get().getSnapshotId(0).getAsLong())
                 .isEqualTo(importedSnapshot);
@@ -1267,13 +1281,13 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                     table.getTableId(), partition.getPartitionId());
         }
         String loadId = UUID.randomUUID().toString();
-        BulkLoadBuildContext context = admin.beginBulkLoad(path, partitions, loadId).get();
+        BulkLoadBuildContext context = bulkLoad(path).begin(loadId, partitions).get();
         BulkLoadBuildContext.Target oldTarget = context.getTarget(PhysicalTablePath.of(path, old));
         BulkLoadBuildContext.Target currentTarget =
                 context.getTarget(PhysicalTablePath.of(path, current));
         if (committed) {
             try (BulkLoadBucketWriter writer =
-                    conn.tryOpenBulkLoadBucketWriter(currentTarget, 0).get()) {
+                    bulkLoad(path).tryOpenBucketWriter(currentTarget, 0).get()) {
                 writer.write(row(2L, "current", current));
                 writer.commit();
             }
@@ -1286,7 +1300,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                 .get();
         if (committed) {
             // The deleted target has no bucket commit record, but the transaction may still finish.
-            admin.commitBulkLoad(context.getHandle()).get();
+            bulkLoad(path).commit(context.getHandle()).get();
         }
         if (recreate) {
             admin.createPartition(
@@ -1313,7 +1327,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         LoadLakeDataToFlussAction action =
                 (LoadLakeDataToFlussAction)
                         ActionLoader.createAction(arguments.toArray(new String[0])).get();
-        assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getTargets())
+        assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getTargets())
                 .extracting(BulkLoadInfo.TargetProgress::getPartitionName)
                 .containsExactlyInAnyOrder(old, current);
         FsPath metadata =
@@ -1346,7 +1360,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                         () -> job.getJobStatus().get() == JobStatus.RESTARTING,
                         Duration.ofMinutes(1),
                         "The load did not restart after snapshot registration failed.");
-                assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+                assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getState())
                         .isEqualTo(BulkLoadInfo.State.COMMITTED);
                 fs.delete(metadata, false);
             }
@@ -1357,7 +1371,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
             }
         }
 
-        BulkLoadInfo completed = admin.getBulkLoadInfo(context.getHandle()).get();
+        BulkLoadInfo completed = bulkLoad(path).getInfo(context.getHandle()).get();
         assertThat(completed.getState()).isEqualTo(BulkLoadInfo.State.COMMITTED);
         assertThat(completed.getTargets())
                 .filteredOn(target -> oldTarget.getPartitionId().equals(target.getPartitionId()))
@@ -1421,7 +1435,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         }
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(path);
         String loadId = UUID.randomUUID().toString();
-        BulkLoadBuildContext context = admin.beginBulkLoad(path, partitions, loadId).get();
+        BulkLoadBuildContext context = bulkLoad(path).begin(loadId, partitions).get();
         List<String> arguments = loadActionArguments(path);
         Collections.addAll(
                 arguments,
@@ -1434,7 +1448,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                 (LoadLakeDataToFlussAction)
                         ActionLoader.createAction(arguments.toArray(new String[0])).get();
         action.submit(execEnv).getJobExecutionResult().get(2, TimeUnit.MINUTES);
-        assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+        assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getState())
                 .isEqualTo(BulkLoadInfo.State.COMMITTED);
         Map<TableBucket, Long> offsets = new HashMap<>();
         for (String partition : partitions) {
@@ -1486,12 +1500,12 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(path);
         String loadId = UUID.randomUUID().toString();
         BulkLoadBuildContext context =
-                admin.beginBulkLoad(
-                                path,
+                bulkLoad(path)
+                        .begin(
+                                loadId,
                                 partitioned
                                         ? Collections.singletonList("p1")
-                                        : Collections.emptyList(),
-                                loadId)
+                                        : Collections.emptyList())
                         .get();
         BulkLoadBuildContext.Target target =
                 context.getTarget(
@@ -1522,7 +1536,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                                         BinaryString.fromString("p1"))
                                 : GenericRow.of(secondId, BinaryString.fromString("two")));
         try (BulkLoadBucketWriter writer =
-                conn.tryOpenBulkLoadBucketWriter(target, committedBucket).get()) {
+                bulkLoad(path).tryOpenBucketWriter(target, committedBucket).get()) {
             writer.write(firstRow);
             writer.commit();
         }
@@ -1573,7 +1587,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
             JobClient firstJob = action.submit(execEnv);
             assertThatThrownBy(() -> firstJob.getJobExecutionResult().get(2, TimeUnit.MINUTES))
                     .hasStackTraceContaining("JobExecutionException");
-            assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+            assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getState())
                     .isEqualTo(BulkLoadInfo.State.RUNNING);
             assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled())
                     .isFalse();
@@ -1585,7 +1599,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         } finally {
             restorePaimonFiles(source, removed);
         }
-        assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+        assertThat(bulkLoad(path).getInfo(context.getHandle()).get().getState())
                 .isEqualTo(BulkLoadInfo.State.COMMITTED);
         assertThat(
                         (partitioned
