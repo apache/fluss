@@ -49,7 +49,6 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.InstantiationUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -120,8 +119,7 @@ class BulkLoadBucketWriterITCase {
                             false));
             await(admin.createPartition(path, partitionSpec("new"), false));
             CLUSTER.waitUntilTableReady(path);
-            BulkLoadBuildContext initialContext =
-                    await(admin.beginBulkLoad(path, partitions, loadId));
+            BulkLoadBuildContext context = await(admin.beginBulkLoad(path, partitions, loadId));
             TableInfo tableInfo = await(admin.getTableInfo(path));
             assertThat(tableInfo.getCustomProperties().containsKey(customProperty)).isTrue();
             BucketCalculator calculator = BucketCalculator.forBucketKeyRow(tableInfo);
@@ -144,17 +142,8 @@ class BulkLoadBucketWriterITCase {
             InternalRow oldRow = serializer.toBinaryRow(row(key, "old", "previous layout"));
             InternalRow newRow = row(key, "new", "current layout");
 
-            PhysicalTablePath oldPath = PhysicalTablePath.of(path, "old");
-            BulkLoadBuildContext.Target initialTarget = initialContext.getTarget(oldPath);
-            assertThat(initialTarget.getTableInfo().getCustomProperties().keySet())
-                    .as("custom property keys before serialization")
-                    .isEmpty();
-            BulkLoadBuildContext context =
-                    InstantiationUtils.clone(initialContext, getClass().getClassLoader());
-            BulkLoadBuildContext.Target old = context.getTarget(oldPath);
-            assertThat(old.getTableInfo().getCustomProperties().keySet())
-                    .as("custom property keys after serialization")
-                    .isEmpty();
+            BulkLoadBuildContext.Target old = context.getTarget(PhysicalTablePath.of(path, "old"));
+            assertThat(old.getTableInfo().getCustomProperties().keySet()).isEmpty();
             BulkLoadBuildContext.Target current =
                     context.getTarget(PhysicalTablePath.of(path, "new"));
             assertThat(old.getBucketCount()).isEqualTo(2);

@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
@@ -29,12 +28,11 @@ import org.apache.fluss.row.RowPartitionGetter;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
-import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,37 +42,23 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toTableInfo;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Frozen, serializable input contract for the physical targets of one BulkLoad transaction. */
+/** Frozen input contract for the physical targets of one BulkLoad transaction. */
 @PublicEvolving
-public final class BulkLoadBuildContext implements Serializable {
+public final class BulkLoadBuildContext {
 
-    private static final long serialVersionUID = 1L;
-
-    private final TablePath tablePath;
     private final BulkLoadHandle handle;
-    private final byte[] serializedTable;
-    private final List<byte[]> serializedTargets;
-    private transient List<Target> targets;
+    private final List<Target> targets;
 
     /** Constructs a build context from the coordinator's frozen table and target metadata. */
     @Internal
     public BulkLoadBuildContext(TablePath tablePath, BeginBulkLoadResponse response) {
-        this.tablePath = tablePath;
         this.handle = toBulkLoadHandle(response.getStatus().getHandle());
-        PbTableInfo frozenTable = new PbTableInfo().copyFrom(response.getTableInfo());
-        TableDescriptor descriptor = TableDescriptor.fromJsonBytes(frozenTable.getTableJson());
-        // Custom properties can contain connector credentials and are not needed to build
-        // snapshots.
-        frozenTable.setTableJson(
-                descriptor
-                        .withProperties(descriptor.getProperties(), Collections.emptyMap())
-                        .toJsonBytes());
-        this.serializedTable = frozenTable.toByteArray();
-        this.serializedTargets = new ArrayList<>(response.getTargetsCount());
+        TableInfo tableInfo = toTableInfo(tablePath, response.getTableInfo());
+        List<Target> targets = new ArrayList<>(response.getTargetsCount());
         for (PbBulkLoadTargetInfo target : response.getTargetsList()) {
-            serializedTargets.add(target.toByteArray());
+            targets.add(new Target(handle, tableInfo, target));
         }
-        this.targets = buildTargets(frozenTable, response.getTargetsList());
+        this.targets = Collections.unmodifiableList(targets);
     }
 
     /** Returns the shared transaction handle. */
@@ -83,39 +67,18 @@ public final class BulkLoadBuildContext implements Serializable {
     }
 
     /** Returns the transaction's frozen physical targets. */
-    public synchronized List<Target> getTargets() {
-        if (targets == null) {
-            PbTableInfo table = new PbTableInfo();
-            table.parseFrom(serializedTable);
-            List<PbBulkLoadTargetInfo> targetInfos = new ArrayList<>(serializedTargets.size());
-            for (byte[] target : serializedTargets) {
-                PbBulkLoadTargetInfo targetInfo = new PbBulkLoadTargetInfo();
-                targetInfo.parseFrom(target);
-                targetInfos.add(targetInfo);
-            }
-            targets = buildTargets(table, targetInfos);
-        }
+    public List<Target> getTargets() {
         return targets;
     }
 
     /** Returns the frozen input contract for a table or one partition in this transaction. */
     public Target getTarget(PhysicalTablePath path) {
-        for (Target target : getTargets()) {
+        for (Target target : targets) {
             if (target.getPath().equals(path)) {
                 return target;
             }
         }
         throw new IllegalArgumentException("Target does not belong to this BulkLoad: " + path);
-    }
-
-    private List<Target> buildTargets(
-            PbTableInfo frozenTable, List<PbBulkLoadTargetInfo> frozenTargets) {
-        TableInfo tableInfo = toTableInfo(tablePath, frozenTable);
-        List<Target> targets = new ArrayList<>(frozenTargets.size());
-        for (PbBulkLoadTargetInfo target : frozenTargets) {
-            targets.add(new Target(getHandle(), tableInfo, target));
-        }
-        return Collections.unmodifiableList(targets);
     }
 
     /** Frozen routing and storage information for one table or physical partition. */
@@ -129,6 +92,8 @@ public final class BulkLoadBuildContext implements Serializable {
         private final String remoteDataDir;
         private final TableInfo tableInfo;
         private final @Nullable RowPartitionGetter partitionGetter;
+
+        @GuardedBy("this")
         private final BucketCalculator calculator;
 
         private Target(BulkLoadHandle handle, TableInfo tableInfo, PbBulkLoadTargetInfo target) {
