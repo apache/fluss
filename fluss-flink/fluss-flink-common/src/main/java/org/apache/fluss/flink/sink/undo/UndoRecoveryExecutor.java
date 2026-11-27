@@ -41,7 +41,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 
 /**
  * Executes undo recovery for multiple buckets using streaming execution.
@@ -114,11 +114,12 @@ public class UndoRecoveryExecutor {
      * @return safe bucket baselines after all recovery writes have completed
      * @throws Exception if recovery fails
      */
-    public Map<TableBucket, Long> execute(List<BucketRecoveryContext> contexts) throws Exception {
-        return execute(contexts, Paths.get(CLIENT_SCANNER_IO_TMP_DIR.defaultValue()));
+    Map<TableBucket, Long> execute(List<BucketRecoveryContext> contexts) throws Exception {
+        return execute(contexts, Paths.get(CLIENT_IO_TMP_DIR.defaultValue()));
     }
 
-    Map<TableBucket, Long> execute(List<BucketRecoveryContext> contexts, Path temporaryRoot)
+    /** Executes undo recovery using a temporary key store under the supplied directory. */
+    public Map<TableBucket, Long> execute(List<BucketRecoveryContext> contexts, Path temporaryRoot)
             throws Exception {
         Map<TableBucket, Long> recoveredOffsets = new HashMap<>();
         for (BucketRecoveryContext ctx : contexts) {
@@ -312,7 +313,7 @@ public class UndoRecoveryExecutor {
     private static final class WriteResults {
         private final Map<TableBucket, Long> recoveredOffsets;
         private long pendingCallbacks;
-        private Throwable asyncWriterException;
+        private volatile Throwable asyncWriterException;
 
         private WriteResults(Map<TableBucket, Long> recoveredOffsets) {
             this.recoveredOffsets = recoveredOffsets;
@@ -343,9 +344,10 @@ public class UndoRecoveryExecutor {
             }
         }
 
-        private synchronized void checkAsyncException() throws ExecutionException {
-            if (asyncWriterException != null) {
-                throw new ExecutionException(asyncWriterException);
+        private void checkAsyncException() throws ExecutionException {
+            Throwable failure = asyncWriterException;
+            if (failure != null) {
+                throw new ExecutionException(failure);
             }
         }
     }

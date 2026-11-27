@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.sink.undo;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.writer.Upsert;
@@ -40,7 +41,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 
 /**
  * Manages undo recovery operations during Flink sink writer initialization.
@@ -88,8 +89,9 @@ public class UndoRecoveryManager {
      * @param table the Fluss table to perform recovery on
      * @param targetColumnIndexes optional target columns for partial update (null for full row)
      */
-    public UndoRecoveryManager(Table table, @Nullable int[] targetColumnIndexes) {
-        this(table, targetColumnIndexes, Paths.get(CLIENT_SCANNER_IO_TMP_DIR.defaultValue()));
+    @VisibleForTesting
+    UndoRecoveryManager(Table table, @Nullable int[] targetColumnIndexes) {
+        this(table, targetColumnIndexes, Paths.get(CLIENT_IO_TMP_DIR.defaultValue()));
     }
 
     /**

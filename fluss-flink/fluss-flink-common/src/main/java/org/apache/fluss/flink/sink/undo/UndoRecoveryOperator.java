@@ -53,7 +53,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_IO_TMP_DIR;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -409,9 +409,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
         // so no additional listOffset call is needed
         UndoRecoveryManager recoveryManager =
                 new UndoRecoveryManager(
-                        table,
-                        targetColumnIndexes,
-                        Paths.get(flussConfig.get(CLIENT_SCANNER_IO_TMP_DIR)));
+                        table, targetColumnIndexes, Paths.get(flussConfig.get(CLIENT_IO_TMP_DIR)));
         Map<TableBucket, Long> recoveredOffsets =
                 recoveryManager.performUndoRecovery(undoOffsets, subtaskIndex, parallelism);
 
