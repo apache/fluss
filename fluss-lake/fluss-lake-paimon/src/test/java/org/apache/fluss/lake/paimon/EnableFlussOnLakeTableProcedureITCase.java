@@ -17,13 +17,11 @@
 
 package org.apache.fluss.lake.paimon;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.DataLakeFormat;
-import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
@@ -53,13 +51,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -536,67 +533,38 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        ", false",
-        ", true",
-        "first_row, false",
-        "first_row, true",
-        "versioned, false",
-        "versioned, true",
-        "aggregation, false",
-        "aggregation, true"
-    })
-    void testEnablePrimaryKeyTableWithoutSnapshot(String mergeEngine, boolean metadataExists)
-            throws Exception {
-        TablePath tablePath =
-                TablePath.of(DATABASE, "procedure_empty_" + mergeEngine + "_" + metadataExists);
+    @ValueSource(booleans = {false, true})
+    void testEnablePrimaryKeyTableWithoutSnapshot(boolean metadataExists) throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "procedure_empty_" + metadataExists);
         createPaimonTable(
                 tablePath,
                 Schema.newBuilder()
                         .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
                         .column("payload", org.apache.paimon.types.DataTypes.STRING())
-                        .column("version", org.apache.paimon.types.DataTypes.BIGINT().notNull())
                         .primaryKey("id")
                         .option(CoreOptions.BUCKET.key(), "1")
-                        .option(CoreOptions.BUCKET_KEY.key(), "id")
                         .option("partition.legacy-name", "false")
                         .build());
-        // Paimon stores the materialized Fluss results with deduplicate for every Fluss engine.
-        Map<String, String> options = new HashMap<>();
-        if (mergeEngine != null) {
-            options.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
-        }
-        if ("versioned".equals(mergeEngine)) {
-            options.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
-        }
-        String procedureOptions =
-                options.entrySet().stream()
-                        .map(entry -> entry.getKey() + "=" + entry.getValue())
-                        .collect(Collectors.joining(",", "'", "'"));
         TableInfo created = null;
         if (metadataExists) {
             // Resume after metadata creation stopped before the lake was enabled.
-            created = admin.createTableFromLake(tablePath, options).get();
+            created = admin.createTableFromLake(tablePath, Collections.emptyMap()).get();
             assertThat(created.getTableConfig().isDataLakeEnabled()).isFalse();
         }
 
-        TableInfo enabled = assertEnableFlussProcedureSucceeds(tablePath, procedureOptions);
+        TableInfo enabled = assertEnableFlussProcedureSucceeds(tablePath, null);
         assertThat(enabled.hasPrimaryKey()).isTrue();
-        if (mergeEngine == null) {
-            assertThat(enabled.getTableConfig().getMergeEngineType()).isEmpty();
-        } else {
-            assertThat(enabled.getTableConfig().getMergeEngineType())
-                    .contains(MergeEngineType.fromString(mergeEngine));
-        }
+        assertThat(enabled.getTableConfig().getMergeEngineType()).isEmpty();
         if (metadataExists) {
             assertThat(enabled.getTableId()).isEqualTo(created.getTableId());
         }
-        assertThat(assertEnableFlussProcedureSucceeds(tablePath, procedureOptions).getTableId())
+        assertThat(assertEnableFlussProcedureSucceeds(tablePath, null).getTableId())
                 .isEqualTo(enabled.getTableId());
         FileStoreTable paimonTable =
                 (FileStoreTable)
                         paimonCatalog.getTable(
                                 Identifier.create(DATABASE, tablePath.getTableName()));
+        assertThat(paimonTable.options()).doesNotContainKey(CoreOptions.BUCKET_KEY.key());
         assertThat(paimonTable.latestSnapshot()).isEmpty();
         assertThat(new CoreOptions(paimonTable.options()).mergeEngine())
                 .isEqualTo(CoreOptions.MergeEngine.DEDUPLICATE);
@@ -607,19 +575,15 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
 
     @ParameterizedTest
     @CsvSource({
-        "first-row,true,false,first_row,",
-        "partial-update,true,false,aggregation,",
-        "partial-update,false,true,aggregation,",
-        "aggregation,true,false,aggregation,",
-        "aggregation,false,true,,aggregation.remove-record-on-delete",
-        "aggregation,true,true,,aggregation.remove-record-on-delete"
+        "first-row,true,false,BulkLoad",
+        "partial-update,true,false,BulkLoad",
+        "partial-update,false,true,BulkLoad",
+        "aggregation,true,false,BulkLoad",
+        "aggregation,false,true,aggregation.remove-record-on-delete",
+        "aggregation,true,true,aggregation.remove-record-on-delete"
     })
-    void testEnableNativePrimaryKeyMergeEngine(
-            String engine,
-            boolean ignoreDelete,
-            boolean removeOnDelete,
-            String flussEngine,
-            String expectedError)
+    void testRejectNativePrimaryKeyMergeEngine(
+            String engine, boolean ignoreDelete, boolean removeOnDelete, String expectedError)
             throws Exception {
         TablePath tablePath =
                 TablePath.of(
@@ -652,61 +616,14 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         }
         Map<String, String> nativeOptions = createPaimonTable(tablePath, schema.build()).options();
 
-        if (expectedError != null) {
-            assertThatThrownBy(
-                            () ->
-                                    tableEnvironment
-                                            .executeSql(procedureSql(tablePath, null))
-                                            .await())
-                    .rootCause()
-                    .isInstanceOf(InvalidTableException.class)
-                    .hasMessageContaining(expectedError);
-            assertThat(admin.tableExists(tablePath).get()).isFalse();
-            return;
-        }
-
-        TableInfo enabled = assertEnableFlussProcedureSucceeds(tablePath, null);
-        assertThat(enabled.getTableConfig().getMergeEngineType())
-                .contains(MergeEngineType.fromString(flussEngine));
-        assertThat(enabled.getCustomProperties().toMap())
-                .containsEntry("paimon.merge-engine", engine);
-        if ("partial-update".equals(engine)) {
-            assertThat(enabled.getCustomProperties().toMap())
-                    .containsEntry(
-                            "paimon.partial-update.remove-record-on-delete",
-                            Boolean.toString(removeOnDelete));
-        } else if ("aggregation".equals(engine)) {
-            assertThat(enabled.getCustomProperties().toMap())
-                    .containsEntry(
-                            "paimon.aggregation.remove-record-on-delete",
-                            Boolean.toString(removeOnDelete));
-        }
-
-        // Re-enable and subsequent schema changes must also retain the native merge settings.
-        admin.alterTable(
-                        tablePath,
-                        Collections.singletonList(
-                                TableChange.set(
-                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
-                        false)
-                .get();
-        assertThat(assertEnableFlussProcedureSucceeds(tablePath, null).getTableId())
-                .isEqualTo(enabled.getTableId());
-        admin.alterTable(
-                        tablePath,
-                        Collections.singletonList(
-                                TableChange.addColumn(
-                                        "extra",
-                                        org.apache.fluss.types.DataTypes.INT(),
-                                        null,
-                                        TableChange.ColumnPosition.last())),
-                        false)
-                .get();
+        assertThatThrownBy(() -> tableEnvironment.executeSql(procedureSql(tablePath, null)).await())
+                .rootCause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(expectedError);
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
         Identifier identifier = Identifier.create(DATABASE, tablePath.getTableName());
         paimonCatalog.invalidateTable(identifier);
-        FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(identifier);
-        assertThat(paimonTable.options()).containsAllEntriesOf(nativeOptions);
-        assertThat(paimonTable.rowType().getFieldNames()).containsExactly("id", "amount", "extra");
+        assertThat(paimonCatalog.getTable(identifier).options()).isEqualTo(nativeOptions);
     }
 
     private TableInfo assertEnableFlussProcedureSucceeds(TablePath tablePath, String options)

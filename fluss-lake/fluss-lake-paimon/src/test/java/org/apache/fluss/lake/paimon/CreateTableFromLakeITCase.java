@@ -26,9 +26,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
-import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DataLakeFormat;
-import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -59,7 +57,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.nio.file.Files;
-import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -149,9 +146,70 @@ class CreateTableFromLakeITCase {
     }
 
     @ParameterizedTest
-    @CsvSource({"partial-update,true", "partial-update,false", "aggregation,true"})
-    void testCreatePrimaryKeyTableWithMergeSemantics(String engine, boolean ignoreDelete)
+    @CsvSource({
+        "merge-engine,first-row,table.merge-engine,first_row",
+        "sequence.field,version,table.merge-engine,versioned",
+        "record-level.expire-time,7 d,table.kv.ttl,7 d"
+    })
+    void testRejectUnsupportedBulkLoadOptions(
+            String sourceKey, String sourceValue, String targetKey, String targetValue)
             throws Exception {
+        String database = "unsupported_bulkload_" + sourceKey.replace('.', '_').replace('-', '_');
+        TablePath sourcePath = TablePath.of(database, "native_options");
+        TablePath overridePath = TablePath.of(database, "override_options");
+        Schema base =
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("version", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column(
+                                "event_time",
+                                org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(3))
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "3")
+                        .option(CoreOptions.IGNORE_DELETE.key(), "true")
+                        .build();
+        Map<String, String> sourceOptions = new HashMap<>(base.options());
+        sourceOptions.put(sourceKey, sourceValue);
+        if (CoreOptions.RECORD_LEVEL_EXPIRE_TIME.key().equals(sourceKey)) {
+            sourceOptions.put(CoreOptions.RECORD_LEVEL_TIME_FIELD.key(), "event_time");
+        }
+        createPaimonTable(
+                sourcePath,
+                new Schema(
+                        base.fields(),
+                        base.partitionKeys(),
+                        base.primaryKeys(),
+                        sourceOptions,
+                        base.comment()));
+        createPaimonTable(overridePath, base);
+        assertThat(admin.databaseExists(database).get()).isFalse();
+
+        assertThatThrownBy(
+                        () -> admin.createTableFromLake(sourcePath, Collections.emptyMap()).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("BulkLoad");
+
+        // The same restriction applies after caller options are merged into a plain source.
+        Map<String, String> overrides = new HashMap<>();
+        overrides.put(targetKey, targetValue);
+        if ("versioned".equals(targetValue)) {
+            overrides.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
+        }
+        assertThatThrownBy(() -> admin.createTableFromLake(overridePath, overrides).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("BulkLoad");
+        assertThat(admin.databaseExists(database).get()).isFalse();
+        assertThat(admin.tableExists(sourcePath).get()).isFalse();
+        assertThat(admin.tableExists(overridePath).get()).isFalse();
+        assertThat(paimonCatalog.getTable(toPaimon(sourcePath)).options())
+                .containsEntry(sourceKey, sourceValue);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"partial-update,true", "partial-update,false", "aggregation,true"})
+    void testRejectPrimaryKeyMergeSemantics(String engine, boolean ignoreDelete) throws Exception {
         TablePath tablePath =
                 TablePath.of(DATABASE, "promote_" + engine.replace('-', '_') + "_" + ignoreDelete);
         boolean aggregation = "aggregation".equals(engine);
@@ -176,26 +234,12 @@ class CreateTableFromLakeITCase {
         }
         createPaimonTable(tablePath, schema.build());
 
-        TableInfo created =
-                admin.createTableFromLake(tablePath, Collections.<String, String>emptyMap()).get();
-        assertThat(created.getTableConfig().getMergeEngineType())
-                .contains(MergeEngineType.AGGREGATION);
-        assertThat(created.getTableConfig().getDeleteBehavior())
-                .contains(ignoreDelete ? DeleteBehavior.IGNORE : DeleteBehavior.ALLOW);
-        assertThat(created.getSchema().getAggFunction("amount"))
-                .contains(
-                        aggregation ? AggFunctions.SUM() : AggFunctions.LAST_VALUE_IGNORE_NULLS());
-        assertThat(created.getSchema().getAggFunction("payload"))
-                .contains(AggFunctions.LAST_VALUE_IGNORE_NULLS());
-        assertThat(created.getTableConfig().isDataLakeEnabled()).isFalse();
-        assertThatThrownBy(
-                        () ->
-                                admin.createTableFromLake(
-                                                tablePath, Collections.<String, String>emptyMap())
-                                        .get())
+        assertThatThrownBy(() -> admin.createTableFromLake(tablePath, Collections.emptyMap()).get())
                 .cause()
-                .isInstanceOf(TableAlreadyExistException.class);
-        // Request the opposite DELETE behavior when reusing the existing Fluss table.
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("BulkLoad");
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
+        // Request the opposite DELETE behavior before creating Fluss metadata.
         // IGNORE and ALLOW are both explicitly derived, so neither can be overridden.
         assertCreateTableFromLakeFails(
                 tablePath,
@@ -303,24 +347,15 @@ class CreateTableFromLakeITCase {
         assertCreateTableFromLakeFails(tablePath, "bucket.num", "8", "uses 4 buckets");
         assertThat(admin.tableExists(tablePath).get()).isFalse();
 
-        TableInfo created =
-                admin.createTableFromLake(
-                                tablePath,
-                                Collections.singletonMap(
-                                        ConfigOptions.TABLE_KV_TTL.key(), "604800000 ms"))
-                        .get();
-        assertThat(created.getTableConfig().getMergeEngineType())
-                .contains(MergeEngineType.VERSIONED);
-        assertThat(created.getProperties().get(ConfigOptions.TABLE_KV_TTL))
-                .isEqualTo(Duration.ofDays(7));
+        assertCreateTableFromLakeFails(
+                tablePath, ConfigOptions.TABLE_KV_TTL.key(), "604800000 ms", "BulkLoad");
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
     }
 
     @ParameterizedTest
-    @CsvSource({", allow", ", ignore", "first_row, ignore", "versioned, ignore"})
-    void testSetPrimaryKeyOptionsNotDerivedFromLake(
-            @Nullable String mergeEngine, String deleteBehavior) throws Exception {
-        TablePath tablePath =
-                TablePath.of(DATABASE, "primary_key_options_" + mergeEngine + "_" + deleteBehavior);
+    @ValueSource(strings = {"allow", "ignore"})
+    void testSetPrimaryKeyDeleteBehavior(String deleteBehavior) throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "primary_key_delete_" + deleteBehavior);
         createPaimonTable(
                 tablePath,
                 Schema.newBuilder()
@@ -332,12 +367,6 @@ class CreateTableFromLakeITCase {
 
         Map<String, String> options = new HashMap<>();
         options.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), deleteBehavior);
-        if (mergeEngine != null) {
-            options.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
-        }
-        if ("versioned".equals(mergeEngine)) {
-            options.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
-        }
         TableInfo created = admin.createTableFromLake(tablePath, options).get();
         assertThat(created.getProperties().toMap()).containsAllEntriesOf(options);
     }

@@ -40,6 +40,7 @@ import org.apache.paimon.fs.Path;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.schema.TableSchema;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
@@ -194,16 +195,18 @@ public class PaimonLakeCatalog implements LakeCatalog {
                 return;
             }
 
-            Schema currentPaimonSchema = fileStoreTable.schema().toSchema();
+            TableSchema currentPaimonSchema = fileStoreTable.schema();
 
             List<SchemaChange> paimonSchemaChanges;
             if (isPaimonSchemaCompatible(
-                    currentPaimonSchema, toPaimonSchema(context.getCurrentTable()))) {
+                    currentPaimonSchema,
+                    TableSchema.create(0, toPaimonSchema(context.getCurrentTable())))) {
                 // if the paimon schema is same as current fluss schema, directly apply all the
                 // changes.
                 paimonSchemaChanges = toPaimonSchemaChanges(table, changesToApply);
             } else if (isPaimonSchemaCompatible(
-                    currentPaimonSchema, toPaimonSchema(context.getExpectedTable()))) {
+                    currentPaimonSchema,
+                    TableSchema.create(0, toPaimonSchema(context.getExpectedTable())))) {
                 // if the schema is same as applied fluss schema , skip adding columns.
                 paimonSchemaChanges =
                         toPaimonSchemaChanges(
@@ -330,14 +333,16 @@ public class PaimonLakeCatalog implements LakeCatalog {
             try {
                 Table table = paimonCatalog.getTable(paimonPath);
                 FileStoreTable fileStoreTable = (FileStoreTable) table;
-                Schema existingSchema = fileStoreTable.schema().toSchema();
-                if (!isPaimonSchemaCompatible(existingSchema, schema)) {
+                TableSchema existingSchema = fileStoreTable.schema();
+                if (!isPaimonSchemaCompatible(existingSchema, TableSchema.create(0, schema))) {
                     throw new TableAlreadyExistException(
                             String.format(
                                     "The table %s already exists in Paimon catalog, but the table schema is not compatible. "
                                             + "Existing schema: %s, new schema: %s. "
                                             + "Please first drop the table in Paimon catalog or use a new table name.",
-                                    paimonPath.getEscapedFullName(), existingSchema, schema));
+                                    paimonPath.getEscapedFullName(),
+                                    existingSchema.toSchema(),
+                                    schema));
                 }
                 // if creating a new fluss table, we should ensure the lake table is empty
                 if (context.isCreatingFlussTable()) {

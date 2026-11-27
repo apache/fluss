@@ -24,6 +24,7 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.options.ConfigOption;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.schema.TableSchema;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.DataField;
@@ -36,9 +37,11 @@ import org.apache.paimon.types.VarBinaryType;
 import org.apache.paimon.types.VarCharType;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
@@ -54,13 +57,14 @@ public class PaimonTableValidation {
                     .collect(Collectors.toMap(ConfigOption::key, option -> option));
 
     /** Checks physical schema and immutable option compatibility. */
-    public static boolean isPaimonSchemaCompatible(Schema existingSchema, Schema newSchema) {
+    public static boolean isPaimonSchemaCompatible(
+            TableSchema existingSchema, TableSchema newSchema) {
         // FIP-27: newly generated schemas are always clean (no system columns). When the existing
         // table is a legacy table that still carries the three system columns (recognisable by the
         // presence of the __timestamp column), re-enabling lake tiering must keep that physical
         // layout. Enrich the clean new schema with the trailing system columns before comparison,
         // so an existing legacy table is recognised as compatible and its layout is preserved.
-        if (PaimonUtils.isLegacyTable(existingSchema.rowType())) {
+        if (PaimonUtils.isLegacyTable(existingSchema.logicalRowType())) {
             newSchema = appendSystemColumns(newSchema);
         }
 
@@ -81,23 +85,22 @@ public class PaimonTableValidation {
      * preserved. System-column field ids continue the existing id sequence to avoid collisions;
      * they are irrelevant to {@link #equalPhysicalSchema}, which ignores field ids.
      */
-    private static Schema appendSystemColumns(Schema cleanSchema) {
+    private static TableSchema appendSystemColumns(TableSchema cleanSchema) {
         List<DataField> fields = new ArrayList<>(cleanSchema.fields());
-        int nextFieldId = 0;
-        for (DataField field : fields) {
-            nextFieldId = Math.max(nextFieldId, field.id() + 1);
-        }
+        int nextFieldId = cleanSchema.highestFieldId() + 1;
         for (Map.Entry<String, org.apache.paimon.types.DataType> systemColumn :
                 LEGACY_SYSTEM_COLUMNS.entrySet()) {
             fields.add(
                     new DataField(nextFieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }
-        return new Schema(
-                fields,
-                cleanSchema.partitionKeys(),
-                cleanSchema.primaryKeys(),
-                cleanSchema.options(),
-                cleanSchema.comment());
+        return TableSchema.create(
+                cleanSchema.id(),
+                new Schema(
+                        fields,
+                        cleanSchema.partitionKeys(),
+                        cleanSchema.primaryKeys(),
+                        cleanSchema.options(),
+                        cleanSchema.comment()));
     }
 
     /**
@@ -115,7 +118,7 @@ public class PaimonTableValidation {
      *     options, and the precision of the system timestamp
      */
     public static boolean equalIgnoreSystemColumnTimestampPrecision(
-            Schema existingSchema, Schema newSchema) {
+            TableSchema existingSchema, TableSchema newSchema) {
         List<DataField> existingFields = new ArrayList<>(existingSchema.fields());
         // The precision relaxation only applies to a legacy table's trailing __timestamp system
         // column. A clean table (or any table whose last column is not __timestamp) has no such
@@ -140,11 +143,16 @@ public class PaimonTableValidation {
                             DataTypes.TIMESTAMP_LTZ_MILLIS(),
                             systemTimestampField.description()));
         }
-        existingSchema = existingSchema.copy(RowType.of(existingFields.toArray(new DataField[0])));
+        existingSchema =
+                TableSchema.create(
+                        existingSchema.id(),
+                        existingSchema
+                                .toSchema()
+                                .copy(RowType.of(existingFields.toArray(new DataField[0]))));
         return equalPhysicalSchema(existingSchema, newSchema);
     }
 
-    private static boolean equalPhysicalSchema(Schema existingSchema, Schema newSchema) {
+    private static boolean equalPhysicalSchema(TableSchema existingSchema, TableSchema newSchema) {
         List<DataField> existingFields = existingSchema.fields();
         List<DataField> newFields = newSchema.fields();
         if (existingFields.size() != newFields.size()) {
@@ -161,25 +169,22 @@ public class PaimonTableValidation {
 
         return Objects.equals(existingSchema.partitionKeys(), newSchema.partitionKeys())
                 && Objects.equals(existingSchema.primaryKeys(), newSchema.primaryKeys())
+                && Objects.equals(existingSchema.bucketKeys(), newSchema.bucketKeys())
                 && equalPaimonOptions(existingSchema.options(), newSchema.options());
     }
 
     private static boolean equalPaimonOptions(
-            Map<String, String> existingOptions, Map<String, String> newOptions) {
+            Map<String, String> existingOptions, Map<String, String> proposedOptions) {
         Options existing = Options.fromMap(existingOptions);
-        Options proposed = Options.fromMap(newOptions);
-        for (String option : PAIMON_UNSETTABLE_OPTIONS) {
-            if (PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY.equals(option)) {
-                // Existing Paimon tables keep their partition path encoding. Fluss addresses
-                // partitions through logical values and Paimon APIs rather than the directory name.
-                continue;
-            }
-            if (!equalPaimonOption(option, existing, proposed)) {
-                return false;
-            }
-        }
-
-        for (String option : CoreOptions.IMMUTABLE_OPTIONS) {
+        Options proposed = Options.fromMap(proposedOptions);
+        Set<String> optionKeys = new HashSet<>(PAIMON_UNSETTABLE_OPTIONS);
+        optionKeys.addAll(CoreOptions.IMMUTABLE_OPTIONS);
+        // equalPhysicalSchema compares resolved bucket keys, including Paimon's default, so
+        // equivalent implicit and explicit keys must not be compared as raw option values here.
+        optionKeys.remove(CoreOptions.BUCKET_KEY.key());
+        // Existing tables keep their partition path encoding; Fluss uses logical partition values.
+        optionKeys.remove(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY);
+        for (String option : optionKeys) {
             if (!equalPaimonOption(option, existing, proposed)) {
                 return false;
             }
