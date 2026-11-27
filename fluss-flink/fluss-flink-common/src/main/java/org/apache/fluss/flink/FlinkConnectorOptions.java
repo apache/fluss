@@ -180,6 +180,21 @@ public class FlinkConnectorOptions {
                                     + "The format is 'timestamp' or 'yyyy-MM-dd HH:mm:ss'. "
                                     + "Like '1678883047356' or '2023-12-09 23:09:12'.");
 
+    public static final ConfigOption<Boolean> SCAN_COMMIT_OFFSET_ON_CHECKPOINT =
+            ConfigOptions.key("scan.commit-offset-on-checkpoint")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether to commit consumed offsets to the Fluss consumer group"
+                                    + " on checkpoint completion. Defaults to true when"
+                                    + " 'client.consumer.group.id' is configured, and false"
+                                    + " otherwise. When enabled, the client's periodic auto-commit"
+                                    + " is disabled automatically unless it is configured"
+                                    + " explicitly, and offsets are committed when a checkpoint"
+                                    + " completes. If checkpointing is disabled, no offsets are"
+                                    + " committed. Requires a valid consumer group id"
+                                    + " ('client.consumer.group.id') to be configured.");
+
     public static final ConfigOption<ScanBoundedMode> SCAN_BOUNDED_MODE =
             ConfigOptions.key("scan.bounded.mode")
                     .enumType(ScanBoundedMode.class)
@@ -419,7 +434,14 @@ public class FlinkConnectorOptions {
                                 + "materializes all changes on the table.")),
         EARLIEST("earliest", text("Start reading logs from the earliest offset.")),
         LATEST("latest", text("Start reading logs from the latest offset.")),
-        TIMESTAMP("timestamp", text("Start reading logs from user-supplied timestamp."));
+        TIMESTAMP("timestamp", text("Start reading logs from user-supplied timestamp.")),
+        GROUP_OFFSETS(
+                "group-offsets",
+                text(
+                        "Start reading logs from the consumer group's last committed offsets."
+                                + " Buckets without a committed offset follow"
+                                + " 'client.consumer.auto-offset-reset'. Requires"
+                                + " 'client.consumer.group.id' to be configured."));
 
         private final String value;
         private final InlineElement description;

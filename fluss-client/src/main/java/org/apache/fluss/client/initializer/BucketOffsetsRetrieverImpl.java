@@ -19,8 +19,13 @@ package org.apache.fluss.client.initializer;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -28,7 +33,9 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
@@ -74,6 +81,68 @@ public class BucketOffsetsRetrieverImpl implements OffsetsInitializer.BucketOffs
     public Map<Integer, Long> offsetsFromTimestamp(
             @Nullable String partitionName, Collection<Integer> buckets, long timestamp) {
         return listOffsets(partitionName, buckets, new OffsetSpec.TimestampSpec(timestamp));
+    }
+
+    @Override
+    public Map<Integer, Long> committedOffsets(
+            String groupId, @Nullable String partitionName, Collection<Integer> buckets) {
+        return listConsumerOffsets(groupId, partitionName, buckets);
+    }
+
+    private Map<Integer, Long> listConsumerOffsets(
+            String groupId, @Nullable String partitionName, Collection<Integer> buckets) {
+        try {
+            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+            long tableId = tableInfo.getTableId();
+            Long partitionId = null;
+            if (partitionName != null) {
+                ResolvedPartitionSpec partitionSpec =
+                        ResolvedPartitionSpec.fromPartitionName(
+                                tableInfo.getPartitionKeys(), partitionName);
+                partitionId =
+                        flussAdmin
+                                .listPartitionInfos(tablePath, partitionSpec.toPartitionSpec())
+                                .get()
+                                .stream()
+                                .filter(p -> p.getPartitionName().equals(partitionName))
+                                .map(PartitionInfo::getPartitionId)
+                                .findFirst()
+                                .orElseThrow(
+                                        () ->
+                                                new FlussRuntimeException(
+                                                        "Partition not found: "
+                                                                + tablePath
+                                                                + "/"
+                                                                + partitionName));
+            }
+            Set<TableBucket> keys = new HashSet<>(buckets.size());
+            for (Integer bucket : buckets) {
+                keys.add(new TableBucket(tableId, partitionId, bucket));
+            }
+            Map<TableBucket, OffsetMetadata> committed =
+                    flussAdmin.listConsumerGroupOffsets(groupId, keys).get();
+            Map<Integer, Long> bucketOffsets = new HashMap<>(committed.size());
+            for (Map.Entry<TableBucket, OffsetMetadata> entry : committed.entrySet()) {
+                bucketOffsets.put(entry.getKey().getBucket(), entry.getValue().getOffset());
+            }
+            return bucketOffsets;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new FlussRuntimeException(
+                    "Interrupted while listing consumer offsets for group "
+                            + groupId
+                            + " and buckets: "
+                            + buckets,
+                    e);
+        } catch (ExecutionException e) {
+            throw new FlussRuntimeException(
+                    "Failed to list consumer offsets for group "
+                            + groupId
+                            + " and buckets: "
+                            + buckets
+                            + " due to",
+                    ExceptionUtils.stripExecutionException(e));
+        }
     }
 
     private Map<Integer, Long> listOffsets(

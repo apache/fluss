@@ -20,11 +20,13 @@ package org.apache.fluss.flink.source.reader;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvSnapshotAndLogBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -350,6 +352,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     startingOffset);
             subscribedBuckets.put(tableBucket, split.splitId());
         }
+    }
+
+    /** Commits the given offsets to the consumer group backing the log scanner. */
+    public void notifyCheckpointComplete(
+            Map<TableBucket, OffsetMetadata> offsetsToCommit, OffsetCommitCallback callback) {
+        logScanner.commitAsync(offsetsToCommit, callback);
     }
 
     public Set<TableBucket> removePartitions(Map<Long, String> removedPartitions) {

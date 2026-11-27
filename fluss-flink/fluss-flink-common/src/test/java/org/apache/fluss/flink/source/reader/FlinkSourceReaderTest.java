@@ -17,14 +17,19 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
@@ -34,14 +39,18 @@ import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.LogSplitState;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
+import org.apache.fluss.flink.source.split.SourceSplitState;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.lake.source.TestingLakeSource;
 import org.apache.fluss.lake.source.TestingLakeSplit;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -87,9 +96,264 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkSourceReader}. */
 class FlinkSourceReaderTest extends FlinkTestBase {
+
+    @Test
+    void testCommitOffsetOnCheckpointRequiresConsumerGroup() throws Exception {
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setBoolean(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key(), true);
+
+        assertThatThrownBy(
+                        () ->
+                                createReader(
+                                        sourceConf,
+                                        tableNames.tablePath(DEFAULT_DB, "missing_commit_group"),
+                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                                        new TestingReaderContext(),
+                                        null))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("Consumer group id");
+
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "  ");
+        assertThatThrownBy(
+                        () ->
+                                createReader(
+                                        sourceConf,
+                                        tableNames.tablePath(DEFAULT_DB, "empty_commit_group"),
+                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                                        new TestingReaderContext(),
+                                        null))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("ASCII letters");
+
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), "__reserved");
+        assertThatThrownBy(
+                        () ->
+                                createReader(
+                                        sourceConf,
+                                        tableNames.tablePath(DEFAULT_DB, "reserved_commit_group"),
+                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                                        new TestingReaderContext(),
+                                        null))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("must not start with '__'");
+    }
+
+    @Test
+    void testCommitOffsetsOnlyAfterCheckpointCompletion() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "commit_on_checkpoint");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        String groupId = tablePath.getTableName();
+        writeRows(conn, tablePath, Arrays.asList(row(1, "one"), row(2, "two")), true);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        // The consumer group coordinator leadership may still be moving between tablet servers
+        // when the group metadata becomes visible, so wait until the alter succeeds.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        admin.alterConsumerGroupOffsets(
+                                                        groupId,
+                                                        Collections.singletonMap(
+                                                                bucket, new OffsetMetadata(0L)))
+                                                .all())
+                                .succeedsWithin(Duration.ofSeconds(10)));
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), groupId);
+        sourceConf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL, Duration.ZERO);
+
+        // The reader context may not expose the job's programmatic checkpoint interval.
+        TestingReaderContext readerContext = new TestingReaderContext();
+        try (FlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        readerContext,
+                        null)) {
+            reader.addSplits(Collections.singletonList(new LogSplit(bucket, null, 0L)));
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(2);
+                    });
+
+            List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
+            assertThat(checkpoint).hasSize(1);
+            assertThat(checkpoint.get(0).asLogSplit().getStartingOffset()).isEqualTo(2L);
+            assertThat(admin.listConsumerGroupOffsets(groupId, Collections.singleton(bucket)).get())
+                    .containsEntry(bucket, new OffsetMetadata(0L));
+
+            reader.notifyCheckpointComplete(1L);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(
+                                        admin.listConsumerGroupOffsets(
+                                                groupId, Collections.singleton(bucket)))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(
+                                        Collections.singletonMap(bucket, new OffsetMetadata(2L)));
+                    });
+        }
+    }
+
+    @Test
+    void testFailedCommitKeepsPendingOffsetsUntilLaterSuccess() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "commit_failure_then_success");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        String groupId = tablePath.getTableName();
+        writeRows(conn, tablePath, Arrays.asList(row(1, "one"), row(2, "two")), true);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        admin.alterConsumerGroupOffsets(
+                                                        groupId,
+                                                        Collections.singletonMap(
+                                                                bucket, new OffsetMetadata(0L)))
+                                                .all())
+                                .succeedsWithin(Duration.ofSeconds(10)));
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), groupId);
+        sourceConf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL, Duration.ZERO);
+
+        TestingReaderContext readerContext = new TestingReaderContext();
+        try (TestingFlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        readerContext,
+                        null)) {
+            reader.addSplits(Collections.singletonList(new LogSplit(bucket, null, 0L)));
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(2);
+                    });
+
+            reader.snapshotState(1L);
+            reader.failNextCommitWith(new RuntimeException("injected commit failure"));
+            reader.notifyCheckpointComplete(1L);
+            assertThat(reader.getOffsetsToCommitForTest()).containsKey(1L);
+            assertThat(admin.listConsumerGroupOffsets(groupId, Collections.singleton(bucket)).get())
+                    .containsEntry(bucket, new OffsetMetadata(0L));
+
+            reader.snapshotState(2L);
+            reader.notifyCheckpointComplete(2L);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(
+                                        admin.listConsumerGroupOffsets(
+                                                groupId, Collections.singleton(bucket)))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(
+                                        Collections.singletonMap(bucket, new OffsetMetadata(2L)));
+                        assertThat(reader.getOffsetsToCommitForTest()).doesNotContainKeys(1L, 2L);
+                    });
+        }
+    }
+
+    @Test
+    void testHybridSnapshotBoundaryCommitsOnlyAfterSnapshotFinished() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "hybrid_snapshot_commit_boundary");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_PK_TABLE_SCHEMA)
+                        .distributedBy(1, "id")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor);
+
+        UpsertResult seedResult = upsert(tablePath, row(1, "snapshot"));
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+        KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
+        HybridSnapshotLogSplit split =
+                new HybridSnapshotLogSplit(
+                        tableBucket,
+                        null,
+                        snapshots.getSnapshotId(0).getAsLong(),
+                        0,
+                        false,
+                        snapshots.getLogOffset(0).getAsLong(),
+                        LogSplit.NO_STOPPING_OFFSET,
+                        false);
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(
+                ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), tablePath.getTableName());
+        try (TestingFlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        new TestingReaderContext(),
+                        null)) {
+            reader.addSplits(Collections.singletonList(split));
+
+            List<SourceSplitBase> beforeSnapshotCompletion = reader.snapshotState(1L);
+            assertThat(beforeSnapshotCompletion).hasSize(1);
+            assertThat(reader.getOffsetsToCommitForTest().get(1L)).isEmpty();
+
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(1);
+                        // The emitted record can reach the output before the split state records
+                        // the snapshot EOF, so wait for the finished state here.
+                        assertThat(
+                                        reader.snapshotState(2L)
+                                                .get(0)
+                                                .asHybridSnapshotLogSplit()
+                                                .isSnapshotFinished())
+                                .isTrue();
+                    });
+
+            List<SourceSplitBase> afterSnapshotCompletion = reader.snapshotState(2L);
+            assertThat(afterSnapshotCompletion).hasSize(1);
+            assertThat(
+                            afterSnapshotCompletion
+                                    .get(0)
+                                    .asHybridSnapshotLogSplit()
+                                    .isSnapshotFinished())
+                    .isTrue();
+            assertThat(reader.getOffsetsToCommitForTest().get(2L))
+                    .containsEntry(
+                            tableBucket, new OffsetMetadata(snapshots.getLogOffset(0).getAsLong()));
+        }
+    }
 
     @Test
     void testCheckpointHybridSnapshotFinishedBeforeFirstLogRecord() throws Exception {
@@ -236,6 +500,9 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                 new TrackingLakeSource(
                         Collections.singletonList(
                                 new GenericRecord(-1L, -1L, ChangeType.INSERT, row(1, "lake"))));
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(
+                ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), tablePath.getTableName());
         LakeSnapshotAndFlussLogSplit split =
                 new LakeSnapshotAndFlussLogSplit(
                         tableBucket,
@@ -246,27 +513,35 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
         TestingReaderOutput<RowData> lakeOutput = new TestingReaderOutput<>();
         LakeSnapshotAndFlussLogSplit checkpointSplit;
-        try (FlinkSourceReader<RowData> reader =
+        try (TestingFlinkSourceReader<RowData> reader =
                 createReader(
-                        clientConf,
+                        sourceConf,
                         tablePath,
                         tableDescriptor.getSchema().getRowType(),
                         new TestingReaderContext(),
                         lakeSource)) {
             reader.addSplits(Collections.singletonList(split));
 
-            // Poll until the lake EOF marker reaches the split state. No incremental record exists
-            // yet, so the checkpoint captures the lake-to-log boundary.
+            List<SourceSplitBase> beforeLakeCompletion = reader.snapshotState(1L);
+            assertThat(beforeLakeCompletion).hasSize(1);
+            assertThat(
+                            ((LakeSnapshotAndFlussLogSplit) beforeLakeCompletion.get(0))
+                                    .isLakeSplitFinished())
+                    .isFalse();
+            assertThat(reader.getOffsetsToCommitForTest().get(1L)).isEmpty();
+
+            // Poll until the lake EOF marker reaches the split state. No incremental record
+            // exists yet, so the next checkpoint captures the lake-to-log boundary.
             retry(
                     Duration.ofMinutes(1),
                     () -> {
                         reader.pollNext(lakeOutput);
-                        List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
-                        assertThat(checkpoint).hasSize(1);
-                        assertThat(checkpoint.get(0))
-                                .isInstanceOf(LakeSnapshotAndFlussLogSplit.class);
+                        assertThat(lakeOutput.getEmittedRecords()).hasSize(1);
+                        // The emitted record can reach the output before the split state records
+                        // the lake EOF, so wait for the finished state here.
                         assertThat(
-                                        ((LakeSnapshotAndFlussLogSplit) checkpoint.get(0))
+                                        ((LakeSnapshotAndFlussLogSplit)
+                                                        reader.snapshotState(2L).get(0))
                                                 .isLakeSplitFinished())
                                 .isTrue();
                     });
@@ -280,6 +555,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             assertThat(checkpointSplit.getStartingOffset()).isEqualTo(startingOffset);
             assertThat(checkpointSplit.getRecordsToSkip()).isEqualTo(1L);
             assertThat(checkpointSplit.getCurrentLakeSplitIndex()).isZero();
+            assertThat(reader.getOffsetsToCommitForTest().get(2L))
+                    .containsEntry(tableBucket, new OffsetMetadata(startingOffset));
             assertThat(lakeOutput.getEmittedRecords()).hasSize(1);
             assertThat(lakeOutput.getEmittedRecords().get(0).getInt(0)).isEqualTo(1);
             assertThat(lakeOutput.getEmittedRecords().get(0).getString(1).toString())
@@ -323,6 +600,132 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                     .isEqualTo(newLogResult.getLogEndOffset());
             assertThat(restoredCheckpointSplit.getRecordsToSkip()).isEqualTo(1L);
             assertThat(restoredCheckpointSplit.getCurrentLakeSplitIndex()).isZero();
+        }
+    }
+
+    @Test
+    void testFinishedLakeHybridSplitRecordsOnlyEligibleOffset() throws Exception {
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "finished_lake_hybrid_split_offsets");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_PK_TABLE_SCHEMA)
+                        .distributedBy(1, "id")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        TableBucket unfinishedBucket = new TableBucket(tableId, 0);
+        TableBucket finishedBucket = new TableBucket(tableId, 1);
+        TableBucket batchBucket = new TableBucket(tableId, 2);
+
+        LakeSnapshotAndFlussLogSplit unfinishedSplit =
+                new LakeSnapshotAndFlussLogSplit(
+                        unfinishedBucket,
+                        null,
+                        Collections.singletonList(new TestingLakeSplit(0, Collections.emptyList())),
+                        100L,
+                        LogSplit.NO_STOPPING_OFFSET);
+        LakeSnapshotAndFlussLogSplit finishedSplit =
+                new LakeSnapshotAndFlussLogSplit(
+                        finishedBucket, null, null, 200L, LogSplit.NO_STOPPING_OFFSET);
+        LakeSnapshotAndFlussLogSplit batchSplit =
+                new LakeSnapshotAndFlussLogSplit(
+                        batchBucket,
+                        null,
+                        Collections.singletonList(new TestingLakeSplit(0, Collections.emptyList())),
+                        300L,
+                        400L);
+
+        Map<String, SourceSplitState> finishedSplits = new HashMap<>();
+        finishedSplits.put(
+                unfinishedSplit.splitId(), new LakeSnapshotAndFlussLogSplitState(unfinishedSplit));
+        finishedSplits.put(
+                finishedSplit.splitId(), new LakeSnapshotAndFlussLogSplitState(finishedSplit));
+        finishedSplits.put(batchSplit.splitId(), new LakeSnapshotAndFlussLogSplitState(batchSplit));
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(
+                ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), tablePath.getTableName());
+        try (TestingFlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        new TestingReaderContext(),
+                        new TestingLakeSource())) {
+            reader.onSplitFinished(finishedSplits);
+            List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
+            assertThat(checkpoint).isEmpty();
+            assertThat(reader.getOffsetsToCommitForTest().get(1L))
+                    .containsEntry(finishedBucket, new OffsetMetadata(200L))
+                    .hasSize(1);
+        }
+    }
+
+    @Test
+    void testDelayedCommitDoesNotRemoveNewerFinishedOffset() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "delayed_commit_finished_offset");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        String groupId = tablePath.getTableName();
+        writeRows(conn, tablePath, Arrays.asList(row(1, "one"), row(2, "two")), true);
+        // Wait for the consumer group coordinator leadership; a commit sent while replicas are
+        // still installing leadership fails and, by design, is not retried by the reader.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        LogSplit split = new LogSplit(bucket, null, 0L);
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), groupId);
+        sourceConf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL, Duration.ZERO);
+
+        try (TestingFlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        new TestingReaderContext(),
+                        null)) {
+            reader.addSplits(Collections.singletonList(split));
+            List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
+            assertThat(checkpoint).hasSize(1);
+            assertThat(checkpoint.get(0).asLogSplit().getStartingOffset()).isEqualTo(0L);
+            assertThat(reader.getOffsetsToCommitForTest().get(1L))
+                    .containsEntry(bucket, new OffsetMetadata(0L));
+
+            LogSplitState finishedState = new LogSplitState(split);
+            finishedState.setNextOffset(2L);
+            reader.onSplitFinished(Collections.singletonMap(split.splitId(), finishedState));
+
+            reader.delayNextCommit();
+            reader.notifyCheckpointComplete(1L);
+            reader.completeDelayedCommit(null);
+            assertThat(reader.getOffsetsToCommitForTest()).doesNotContainKey(1L);
+
+            List<SourceSplitBase> laterCheckpoint = reader.snapshotState(2L);
+            assertThat(laterCheckpoint).hasSize(1);
+            assertThat(reader.getOffsetsToCommitForTest().get(2L))
+                    .containsEntry(bucket, new OffsetMetadata(2L));
+
+            reader.notifyCheckpointComplete(2L);
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(
+                                        admin.listConsumerGroupOffsets(
+                                                groupId, Collections.singleton(bucket)))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(
+                                        Collections.singletonMap(bucket, new OffsetMetadata(2L)));
+                        assertThat(reader.getOffsetsToCommitForTest()).doesNotContainKeys(1L, 2L);
+                    });
         }
     }
 
@@ -618,6 +1021,100 @@ class FlinkSourceReaderTest extends FlinkTestBase {
     }
 
     @Test
+    void testPartitionDeletionRetainsFinalOffsetUntilCheckpointCommit() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "partition_deletion_final_offset");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("name", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1, "id")
+                        .partitionedBy("pt")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        PartitionSpec partitionSpec = new PartitionSpec(Collections.singletonMap("pt", "deleted"));
+        admin.createPartition(tablePath, partitionSpec, false).get();
+        long partitionId =
+                admin.listPartitionInfos(tablePath, partitionSpec).get().get(0).getPartitionId();
+        TableBucket bucket = new TableBucket(tableId, partitionId, 0);
+        String groupId = tablePath.getTableName();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        admin.alterConsumerGroupOffsets(
+                                                        groupId,
+                                                        Collections.singletonMap(
+                                                                bucket, new OffsetMetadata(0L)))
+                                                .all())
+                                .succeedsWithin(Duration.ofSeconds(10)));
+        writeRows(
+                conn,
+                tablePath,
+                Arrays.asList(row(1, "one", "deleted"), row(2, "two", "deleted")),
+                true);
+
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setString(ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(), groupId);
+        sourceConf.set(ConfigOptions.CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL, Duration.ZERO);
+        TestingReaderContext readerContext = new TestingReaderContext();
+        try (TestingFlinkSourceReader<RowData> reader =
+                createReader(
+                        sourceConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        readerContext,
+                        null)) {
+            reader.addSplits(Collections.singletonList(new LogSplit(bucket, "deleted", 0L)));
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(2);
+                    });
+
+            List<SourceSplitBase> beforeDeletion = reader.snapshotState(1L);
+            assertThat(beforeDeletion).hasSize(1);
+            assertThat(beforeDeletion.get(0).asLogSplit().getStartingOffset()).isEqualTo(2L);
+
+            reader.handleSourceEvents(
+                    new PartitionsRemovedEvent(Collections.singletonMap(partitionId, "deleted")));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(reader.getNumberOfCurrentlyAssignedSplits()).isZero();
+                        assertThat(readerContext.getSentEvents())
+                                .contains(
+                                        new PartitionBucketsUnsubscribedEvent(
+                                                Collections.singleton(bucket)));
+                    });
+
+            assertThat(admin.listConsumerGroupOffsets(groupId, Collections.singleton(bucket)).get())
+                    .containsEntry(bucket, new OffsetMetadata(0L));
+
+            List<SourceSplitBase> afterDeletion = reader.snapshotState(2L);
+            assertThat(afterDeletion).isEmpty();
+            assertThat(reader.getOffsetsToCommitForTest().get(2L))
+                    .containsEntry(bucket, new OffsetMetadata(2L));
+
+            reader.notifyCheckpointComplete(2L);
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(
+                                            admin.listConsumerGroupOffsets(
+                                                            groupId, Collections.singleton(bucket))
+                                                    .get())
+                                    .containsEntry(bucket, new OffsetMetadata(2L)));
+        }
+    }
+
+    @Test
     void testPendingRecordsMetricAfterFetcherRecreation() throws Exception {
         TablePath tablePath =
                 tableNames.tablePath(DEFAULT_DB, "test_pending_records_after_fetcher_recreation");
@@ -771,6 +1268,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
         return new TestingFlinkSourceReader<>(
                 elementsQueue,
                 flussConf,
+                FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(flussConf),
+                false,
                 tablePath,
                 sourceOutputType,
                 context,
@@ -781,9 +1280,16 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     private static final class TestingFlinkSourceReader<OUT> extends FlinkSourceReader<OUT> {
 
+        private Exception nextCommitFailure;
+        private boolean delayNextCommit;
+        private Map<TableBucket, OffsetMetadata> delayedCommitOffsets;
+        private OffsetCommitCallback delayedCommitCallback;
+
         private TestingFlinkSourceReader(
                 FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
                 Configuration flussConfig,
+                boolean commitOffsetOnCheckpoint,
+                boolean batchExecution,
                 TablePath tablePath,
                 RowType sourceOutputType,
                 SourceReaderContext context,
@@ -793,6 +1299,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             super(
                     elementsQueue,
                     flussConfig,
+                    commitOffsetOnCheckpoint,
+                    batchExecution,
                     tablePath,
                     sourceOutputType,
                     context,
@@ -805,6 +1313,43 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
         private int getNumAliveFetchers() {
             return splitFetcherManager.getNumAliveFetchers();
+        }
+
+        private void failNextCommitWith(Exception failure) {
+            this.nextCommitFailure = failure;
+        }
+
+        private void delayNextCommit() {
+            this.delayNextCommit = true;
+        }
+
+        private void completeDelayedCommit(Exception exception) {
+            if (delayedCommitCallback == null) {
+                throw new IllegalStateException("delayed commit callback is not set");
+            }
+            OffsetCommitCallback callback = delayedCommitCallback;
+            Map<TableBucket, OffsetMetadata> offsets = delayedCommitOffsets;
+            delayedCommitCallback = null;
+            delayedCommitOffsets = null;
+            callback.onComplete(offsets, exception);
+        }
+
+        @Override
+        protected void commitOffsetsAsync(
+                Map<TableBucket, OffsetMetadata> offsetsToCommit, OffsetCommitCallback callback) {
+            if (delayNextCommit) {
+                delayNextCommit = false;
+                delayedCommitOffsets = offsetsToCommit;
+                delayedCommitCallback = callback;
+                return;
+            }
+            if (nextCommitFailure != null) {
+                Exception failure = nextCommitFailure;
+                nextCommitFailure = null;
+                callback.onComplete(offsetsToCommit, failure);
+                return;
+            }
+            super.commitOffsetsAsync(offsetsToCommit, callback);
         }
     }
 

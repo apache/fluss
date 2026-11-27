@@ -29,6 +29,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.LakeSourceUtils;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -91,6 +92,7 @@ public class FlussSourceBuilder<OUT> {
     private Integer splitPerAssignmentBatchSize;
     private OffsetsInitializer offsetsInitializer;
     @Nullable private OffsetsInitializer stoppingOffsetsInitializer;
+    @Nullable private Boolean commitOffsetOnCheckpoint;
 
     // Selects the Fluss batch-read path independently from the configured offset range. The
     // deprecated no-argument setBounded() is retained as a compatibility alias for setBatch().
@@ -153,6 +155,21 @@ public class FlussSourceBuilder<OUT> {
     public FlussSourceBuilder<OUT> setScanPartitionDiscoveryIntervalMs(
             long scanPartitionDiscoveryIntervalMs) {
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
+        return this;
+    }
+
+    /**
+     * Sets whether consumed offsets are committed to the Fluss consumer group on checkpoint
+     * completion. Enabled by default when a consumer group id ('client.consumer.group.id') is
+     * configured. If the client's periodic auto-commit is configured explicitly, that setting is
+     * preserved. This builder setting is independent of {@link #setFlussConfig(Configuration)} call
+     * order. Without checkpointing, no offsets are committed.
+     *
+     * @param enabled whether to commit offsets on checkpoint completion
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setCommitOffsetOnCheckpoint(boolean enabled) {
+        this.commitOffsetOnCheckpoint = enabled;
         return this;
     }
 
@@ -353,6 +370,10 @@ public class FlussSourceBuilder<OUT> {
         if (this.flussConf == null) {
             this.flussConf = new Configuration();
         }
+        boolean effectiveCommitOffsetOnCheckpoint =
+                commitOffsetOnCheckpoint != null
+                        ? commitOffsetOnCheckpoint
+                        : FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(flussConf);
 
         TablePath tablePath = new TablePath(this.database, this.tableName);
         this.flussConf.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
@@ -494,6 +515,7 @@ public class FlussSourceBuilder<OUT> {
                 splitPerAssignmentBatchSize,
                 deserializationSchema,
                 !isBatch,
-                lakeSource);
+                lakeSource,
+                effectiveCommitOffsetOnCheckpoint);
     }
 }

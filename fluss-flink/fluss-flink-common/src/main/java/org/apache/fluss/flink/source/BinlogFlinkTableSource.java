@@ -164,6 +164,11 @@ public class BinlogFlinkTableSource
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
                 break;
+            case GROUP_OFFSETS:
+                offsetsInitializer =
+                        OffsetsInitializer.committed(
+                                startupOptions.groupId, startupOptions.consumerOffsetReset);
+                break;
             default:
                 throw new IllegalArgumentException(
                         "Unsupported startup mode: " + startupOptions.startupMode);
@@ -196,7 +201,8 @@ public class BinlogFlinkTableSource
                         // top-level partition filter is pushable; always scan without one.
                         null,
                         null,
-                        LeaseContext.DEFAULT);
+                        LeaseContext.DEFAULT,
+                        FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(tableOptions));
 
         return SourceProvider.of(source);
     }

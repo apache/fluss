@@ -19,11 +19,15 @@ package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConsumerOffsetReset;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanBoundedMode;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.MergeEngineType;
 
 import org.apache.flink.api.connector.source.Boundedness;
@@ -42,6 +46,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -52,13 +57,21 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_BOUNDED_TIMESTAM
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
+import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.GROUP_OFFSETS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.TIMESTAMP;
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Utility class for {@link FlinkConnectorOptions}. */
 public class FlinkConnectorOptionsUtils {
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    private static final org.apache.fluss.config.ConfigOption<Boolean> COMMIT_OFFSET_ON_CHECKPOINT =
+            org.apache.fluss.config.ConfigBuilder.key(
+                            FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key())
+                    .booleanType()
+                    .noDefaultValue();
 
     public static ZoneId getLocalTimeZone(String timeZone) {
         return TableConfigOptions.LOCAL_TIME_ZONE.defaultValue().equals(timeZone)
@@ -67,9 +80,55 @@ public class FlinkConnectorOptionsUtils {
     }
 
     public static void validateTableSourceOptions(ReadableConfig tableOptions) {
+        if (commitOffsetsOnCheckpoint(tableOptions)) {
+            validateConsumerGroupId(
+                    tableOptions, FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT.key());
+        }
         validateScanStartupMode(tableOptions);
         validateScanBoundedMode(tableOptions);
         validateScanSplitAssignmentBatchSize(tableOptions);
+    }
+
+    public static boolean commitOffsetsOnCheckpoint(ReadableConfig tableOptions) {
+        return tableOptions
+                .getOptional(FlinkConnectorOptions.SCAN_COMMIT_OFFSET_ON_CHECKPOINT)
+                .orElseGet(
+                        () ->
+                                tableOptions
+                                        .getOptional(
+                                                toFlinkOption(
+                                                        ConfigOptions.CLIENT_CONSUMER_GROUP_ID))
+                                        .isPresent());
+    }
+
+    public static boolean commitOffsetsOnCheckpoint(Configuration flussConfig) {
+        return flussConfig
+                .getOptional(COMMIT_OFFSET_ON_CHECKPOINT)
+                .orElseGet(() -> flussConfig.get(ConfigOptions.CLIENT_CONSUMER_GROUP_ID) != null);
+    }
+
+    public static boolean commitOffsetsOnCheckpoint(Map<String, String> tableOptions) {
+        return commitOffsetsOnCheckpoint(
+                org.apache.flink.configuration.Configuration.fromMap(tableOptions));
+    }
+
+    private static void validateConsumerGroupId(
+            ReadableConfig tableOptions, String requiringOptionKey) {
+        String groupId =
+                tableOptions
+                        .getOptional(toFlinkOption(ConfigOptions.CLIENT_CONSUMER_GROUP_ID))
+                        .orElse(null);
+        try {
+            GroupId.of(groupId);
+        } catch (InvalidConsumerGroupIdException e) {
+            throw new ValidationException(
+                    String.format(
+                            "Option '%s' requires a valid '%s': %s",
+                            requiringOptionKey,
+                            ConfigOptions.CLIENT_CONSUMER_GROUP_ID.key(),
+                            e.getMessage()),
+                    e);
+        }
     }
 
     /**
@@ -155,6 +214,14 @@ public class FlinkConnectorOptionsUtils {
                             tableOptions.get(SCAN_STARTUP_TIMESTAMP),
                             SCAN_STARTUP_TIMESTAMP.key(),
                             timeZone);
+        } else if (scanStartupMode == GROUP_OFFSETS) {
+            options.groupId =
+                    tableOptions
+                            .getOptional(toFlinkOption(ConfigOptions.CLIENT_CONSUMER_GROUP_ID))
+                            .orElse(null);
+            options.consumerOffsetReset =
+                    tableOptions.get(
+                            toFlinkOption(ConfigOptions.CLIENT_CONSUMER_AUTO_OFFSET_RESET));
         }
         return options;
     }
@@ -250,6 +317,9 @@ public class FlinkConnectorOptionsUtils {
 
     private static void validateScanStartupMode(ReadableConfig tableOptions) {
         ScanStartupMode scanStartupMode = tableOptions.get(SCAN_STARTUP_MODE);
+        if (scanStartupMode == GROUP_OFFSETS) {
+            validateConsumerGroupId(tableOptions, SCAN_STARTUP_MODE.key());
+        }
         if (scanStartupMode == TIMESTAMP) {
             if (!tableOptions.getOptional(SCAN_STARTUP_TIMESTAMP).isPresent()) {
                 throw new ValidationException(
@@ -353,6 +423,8 @@ public class FlinkConnectorOptionsUtils {
     public static class StartupOptions {
         public ScanStartupMode startupMode;
         public long startupTimestampMs;
+        public String groupId;
+        public ConsumerOffsetReset consumerOffsetReset;
     }
 
     /** Immutable Fluss bounded options. */

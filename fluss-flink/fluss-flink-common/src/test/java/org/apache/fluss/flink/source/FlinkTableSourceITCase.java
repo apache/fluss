@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -27,6 +28,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
@@ -48,6 +50,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.GenericRowData;
@@ -230,6 +233,134 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         List<String> expected = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
         assertQueryResultExactOrder(tEnv, "select * from non_pk_table_test", expected);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testCommitOffsetsOnCheckpoint() throws Exception {
+        String tableName = tableNames.tableName("commit_offsets_on_checkpoint");
+        String groupId = tableName;
+        tEnv.executeSql(
+                String.format(
+                        "create table %s (id int, name varchar) with ("
+                                + "'bucket.num' = '1', "
+                                + "'client.consumer.group.id' = '%s', "
+                                + "'client.consumer.auto-commit.interval' = '0ms')",
+                        tableName, groupId));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TableBucket bucket = new TableBucket(admin.getTableInfo(tablePath).get().getTableId(), 0);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        admin.alterConsumerGroupOffsets(
+                                                        groupId,
+                                                        Collections.singletonMap(
+                                                                bucket, new OffsetMetadata(0L)))
+                                                .all())
+                                .succeedsWithin(Duration.ofSeconds(10)));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "one"), row(2, "two")), true);
+
+        execEnv.enableCheckpointing(100);
+        try (CloseableIterator<Row> results =
+                tEnv.executeSql("select * from " + tableName).collect()) {
+            assertThat(collectRowsWithTimeout(results, 2, false))
+                    .containsExactly("+I[1, one]", "+I[2, two]");
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(
+                                            admin.listConsumerGroupOffsets(
+                                                    groupId, Collections.singleton(bucket)))
+                                    .succeedsWithin(Duration.ofSeconds(10))
+                                    .isEqualTo(
+                                            Collections.singletonMap(
+                                                    bucket, new OffsetMetadata(2L))));
+        }
+
+        // Start a fresh job from the committed group offset, without restoring Flink state.
+        writeRows(conn, tablePath, Collections.singletonList(row(3, "three")), true);
+        try (CloseableIterator<Row> resumedResults =
+                tEnv.executeSql(
+                                "select * from "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.startup.mode' = 'group-offsets') */")
+                        .collect()) {
+            assertThat(collectRowsWithTimeout(resumedResults, 1, false))
+                    .containsExactly("+I[3, three]");
+        }
+    }
+
+    @Test
+    @MultiVersionTest
+    void testBatchQueryDoesNotUpdateConsumerGroupOffsets() throws Exception {
+        String tableName = tableNames.tableName("batch_query_group_offsets");
+        String groupId = tableName;
+        tEnv.executeSql(
+                String.format(
+                        "create table %s (id int, name varchar) with ("
+                                + "'bucket.num' = '1', "
+                                + "'client.consumer.group.id' = '%s', "
+                                + "'client.consumer.auto-commit.enabled' = 'true', "
+                                + "'client.consumer.auto-commit.interval' = '1ms')",
+                        tableName, groupId));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TableBucket bucket = new TableBucket(admin.getTableInfo(tablePath).get().getTableId(), 0);
+        // The consumer group coordinator leadership may still be installing when the test
+        // starts, so wait for readiness before altering and reading group offsets.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        admin.alterConsumerGroupOffsets(
+                                                        groupId,
+                                                        Collections.singletonMap(
+                                                                bucket, new OffsetMetadata(0L)))
+                                                .all())
+                                .succeedsWithin(Duration.ofSeconds(10)));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "one"), row(2, "two")), true);
+
+        // The runtime mode cannot be changed after a TableEnvironment is created, so use a
+        // separate batch environment that points at the same Fluss catalog.
+        TableEnvironment batchEnv = TableEnvironment.create(EnvironmentSettings.inBatchMode());
+        batchEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                        CATALOG_NAME, ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        batchEnv.executeSql("use catalog " + CATALOG_NAME);
+        batchEnv.useDatabase(DEFAULT_DB);
+        try (CloseableIterator<Row> results =
+                batchEnv.executeSql(
+                                "select * from "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.startup.mode' = 'group-offsets') */")
+                        .collect()) {
+            // Drain the bounded result so the job finishes and any wrongly enabled auto-commit
+            // gets a chance to run before we assert that the committed offset is unchanged.
+            assertThat(collectBatchRows(results)).containsExactly("+I[1, one]", "+I[2, two]");
+        }
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        admin.listConsumerGroupOffsets(
+                                                groupId, Collections.singleton(bucket)))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(
+                                        Collections.singletonMap(bucket, new OffsetMetadata(0L))));
     }
 
     @ParameterizedTest

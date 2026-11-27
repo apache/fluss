@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.source.reader.fetcher;
 
+import org.apache.fluss.client.admin.OffsetMetadata;
+import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
 import org.apache.fluss.flink.source.reader.FlinkSourceSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
@@ -88,6 +90,42 @@ public class FlinkSourceFetcherManager
                     splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
             startFetcher(splitFetcher);
         }
+    }
+
+    public void commitOffsets(
+            Map<TableBucket, OffsetMetadata> offsetsToCommit, OffsetCommitCallback callback) {
+        LOG.debug("Committing offsets {}", offsetsToCommit);
+        if (offsetsToCommit.isEmpty()) {
+            return;
+        }
+        SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher = getRunningFetcher();
+        if (splitFetcher != null) {
+            // The fetcher thread is still running. This should be the majority of the cases.
+            enqueueOffsetsCommitTask(splitFetcher, offsetsToCommit, callback);
+        } else {
+            splitFetcher = createSplitFetcher();
+            enqueueOffsetsCommitTask(splitFetcher, offsetsToCommit, callback);
+            startFetcher(splitFetcher);
+        }
+    }
+
+    private void enqueueOffsetsCommitTask(
+            SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher,
+            Map<TableBucket, OffsetMetadata> offsetsToCommit,
+            OffsetCommitCallback callback) {
+        FlinkSourceSplitReader splitReader = (FlinkSourceSplitReader) splitFetcher.getSplitReader();
+
+        splitFetcher.enqueueTask(
+                new SplitFetcherTask() {
+                    @Override
+                    public boolean run() {
+                        splitReader.notifyCheckpointComplete(offsetsToCommit, callback);
+                        return true;
+                    }
+
+                    @Override
+                    public void wakeUp() {}
+                });
     }
 
     private void enqueuePartitionsRemovedTask(

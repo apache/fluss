@@ -142,6 +142,12 @@ class LakeSplitGeneratorTest {
             return zeroOffsets(buckets);
         }
 
+        @Override
+        public Map<Integer, Long> committedOffsets(
+                String groupId, String partitionName, Collection<Integer> buckets) {
+            return zeroOffsets(buckets);
+        }
+
         private static Map<Integer, Long> zeroOffsets(Collection<Integer> buckets) {
             Map<Integer, Long> offsets = new HashMap<>();
             for (Integer bucket : buckets) {

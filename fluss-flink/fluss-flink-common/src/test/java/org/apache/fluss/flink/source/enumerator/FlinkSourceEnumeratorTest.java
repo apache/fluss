@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source.enumerator;
 
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
@@ -78,6 +79,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -423,20 +426,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                         new MockSplitEnumeratorContext<>(1);
                 SplitEnumerator<SourceSplitBase, SourceEnumeratorState> enumerator =
-                        new FlinkSource<RowData>(
-                                        flussConf,
-                                        defaultTablePath,
-                                        false,
-                                        true,
-                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
-                                        null,
-                                        null,
-                                        OffsetsInitializer.timestamp(1000L),
-                                        0L,
-                                        new RowDataDeserializationSchema(),
-                                        streaming,
-                                        null,
-                                        LeaseContext.DEFAULT)
+                        createStreamingSource(OffsetsInitializer.timestamp(1000L), null)
                                 .createEnumerator(context)) {
             checkpointState = enumerator.snapshotState(1L);
             assertThat(checkpointState.getRemainingHybridLakeFlussSplits()).isNull();
@@ -445,24 +435,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                         new MockSplitEnumeratorContext<>(DEFAULT_BUCKET_NUM);
                 SplitEnumerator<SourceSplitBase, SourceEnumeratorState> restoredEnumerator =
-                        new FlinkSource<RowData>(
-                                        flussConf,
-                                        defaultTablePath,
-                                        false,
-                                        true,
-                                        DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
-                                        null,
-                                        null,
-                                        OffsetsInitializer.full(),
-                                        0L,
-                                        FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE
-                                                .defaultValue(),
-                                        new RowDataDeserializationSchema(),
-                                        null,
-                                        streaming,
-                                        null,
-                                        lakeSource,
-                                        LeaseContext.DEFAULT)
+                        createStreamingSource(OffsetsInitializer.full(), lakeSource)
                                 .restoreEnumerator(context, checkpointState)) {
             assertThat(restoredEnumerator.snapshotState(1L).getRemainingHybridLakeFlussSplits())
                     .isEmpty();
@@ -1857,6 +1830,30 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     // ---------------------
+    private FlinkSource<RowData> createStreamingSource(
+            OffsetsInitializer startingOffsets, @Nullable LakeSource<LakeSplit> lakeSource) {
+        return new FlinkSource<>(
+                flussConf,
+                defaultTablePath,
+                false,
+                true,
+                DEFAULT_LOG_TABLE_SCHEMA.getRowType(),
+                null,
+                null,
+                startingOffsets,
+                new NoStoppingOffsetsInitializer(),
+                Boundedness.CONTINUOUS_UNBOUNDED,
+                0L,
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                new RowDataDeserializationSchema(),
+                null,
+                streaming,
+                null,
+                lakeSource,
+                LeaseContext.DEFAULT,
+                false);
+    }
+
     private void registerReader(
             MockSplitEnumeratorContext<SourceSplitBase> context,
             SplitEnumerator<SourceSplitBase, SourceEnumeratorState> enumerator,

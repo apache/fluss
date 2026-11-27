@@ -219,6 +219,11 @@ public class ChangelogFlinkTableSource
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
                 break;
+            case GROUP_OFFSETS:
+                offsetsInitializer =
+                        OffsetsInitializer.committed(
+                                startupOptions.groupId, startupOptions.consumerOffsetReset);
+                break;
             default:
                 throw new IllegalArgumentException(
                         "Unsupported startup mode: " + startupOptions.startupMode);
@@ -253,7 +258,8 @@ public class ChangelogFlinkTableSource
                         streaming,
                         partitionFilters,
                         null,
-                        LeaseContext.DEFAULT); // Lake source not supported
+                        LeaseContext.DEFAULT, // Lake source not supported
+                        FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(tableOptions));
 
         return SourceProvider.of(source);
     }
