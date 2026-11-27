@@ -56,6 +56,11 @@ public class PaimonSplit implements LakeSplit {
         return partition;
     }
 
+    @Override
+    public int totalBuckets() {
+        return dataSplit.totalBuckets();
+    }
+
     public DataSplit dataSplit() {
         return dataSplit;
     }

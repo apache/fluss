@@ -19,7 +19,9 @@ package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.metadata.BulkLoadBuildContext;
+import org.apache.fluss.client.metadata.BulkLoadHandle;
 import org.apache.fluss.client.metadata.BulkLoadInfo;
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.BulkLoadBucketWriter;
 import org.apache.fluss.client.tiering.FlussTableLakeSnapshotCommitter;
@@ -729,6 +731,103 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                 .isFalse();
         assertThat(admin.listPartitionInfos(path).get())
                 .noneMatch(partition -> expired.equals(partition.getPartitionName()));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"4, 8", "8, 4"})
+    void testRejectRescaledSourcePartitions(int oldBuckets, int newBuckets) throws Exception {
+        TablePath path = TablePath.of(DATABASE, "rescaled_source_" + oldBuckets + "_" + newBuckets);
+        FileStoreTable source =
+                createPaimonTable(
+                        path,
+                        Schema.newBuilder()
+                                .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                                .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                                .column("dt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                                .primaryKey("id", "dt")
+                                .partitionKeys("dt")
+                                .option(CoreOptions.BUCKET.key(), Integer.toString(oldBuckets))
+                                .option(CoreOptions.BUCKET_KEY.key(), "id")
+                                .option("partition.legacy-name", "false")
+                                .build());
+        GenericRow[] rows = new GenericRow[64];
+        for (int i = 0; i < rows.length; i++) {
+            rows[i] =
+                    GenericRow.of(
+                            (long) i,
+                            BinaryString.fromString("value"),
+                            BinaryString.fromString("old"));
+        }
+        writePaimonRows(source, rows);
+        Identifier identifier = Identifier.create(DATABASE, path.getTableName());
+        paimonCatalog.alterTable(
+                identifier,
+                Collections.singletonList(
+                        SchemaChange.setOption(
+                                CoreOptions.BUCKET.key(), Integer.toString(newBuckets))),
+                false);
+        paimonCatalog.invalidateTable(identifier);
+        source = (FileStoreTable) paimonCatalog.getTable(identifier);
+        long snapshot =
+                writePaimonRows(
+                        source,
+                        GenericRow.of(
+                                1000L,
+                                BinaryString.fromString("new"),
+                                BinaryString.fromString("new")));
+        List<DataSplit> splits =
+                source.newScan().plan().splits().stream()
+                        .map(split -> (DataSplit) split)
+                        .collect(Collectors.toList());
+        assertThat(splits)
+                .filteredOn(split -> "old".equals(split.partition().getString(0).toString()))
+                .extracting(DataSplit::totalBuckets)
+                .containsOnly(oldBuckets);
+        assertThat(splits)
+                .filteredOn(split -> "new".equals(split.partition().getString(0).toString()))
+                .extracting(DataSplit::totalBuckets)
+                .containsOnly(newBuckets);
+
+        TableInfo table = admin.createTableFromLake(path, Collections.emptyMap()).get();
+        assertThat(table.getNumBuckets()).isEqualTo(newBuckets);
+        BucketCalculator calculator = BucketCalculator.forBucketKeyRow(table);
+        // These source rows include a key that would be queried in a different target bucket.
+        assertThat(Arrays.asList(rows))
+                .anySatisfy(
+                        row -> {
+                            byte[] key = calculator.encodeKey(row(row.getLong(0)));
+                            assertThat(calculator.getBucketId(key, oldBuckets))
+                                    .isNotEqualTo(calculator.getBucketId(key, newBuckets));
+                        });
+        String loadId = UUID.randomUUID().toString();
+        List<String> arguments = loadActionArguments(path);
+        Collections.addAll(
+                arguments,
+                "--source-snapshot-id",
+                Long.toString(snapshot),
+                "--bulk-load-id",
+                loadId);
+        LoadLakeDataToFlussAction action =
+                (LoadLakeDataToFlussAction)
+                        ActionLoader.createAction(arguments.toArray(new String[0])).get();
+        assertThatThrownBy(
+                        () -> {
+                            // Cancel a job if validation incorrectly accepts the layout.
+                            JobClient job = action.submit(execEnv);
+                            job.cancel().get();
+                        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("source bucket count " + oldBuckets)
+                .hasMessageContaining("target bucket count " + newBuckets);
+        assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled()).isFalse();
+        assertThat(
+                        admin.getBulkLoadInfo(new BulkLoadHandle(table.getTableId(), loadId))
+                                .get()
+                                .getTargets())
+                .allSatisfy(target -> assertThat(target.getCommittedBucketCount()).isZero());
+        assertThatThrownBy(() -> admin.getLatestLakeSnapshot(path).get())
+                .cause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
     }
 
     @ParameterizedTest

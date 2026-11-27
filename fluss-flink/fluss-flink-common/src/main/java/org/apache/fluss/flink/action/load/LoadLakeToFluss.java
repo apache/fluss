@@ -141,13 +141,13 @@ final class LoadLakeToFluss {
                         bulkLoadId);
             } else {
                 SimpleVersionedSerializer<Split> serializer = source.getSplitSerializer();
-                Map<String, Map<Integer, List<byte[]>>> grouped =
-                        planBucketSplits(table, source, snapshotId, selectedPartitions, serializer);
+                Map<String, Map<Integer, List<Split>>> grouped =
+                        planBucketSplits(table, source, snapshotId, selectedPartitions);
                 if (context == null) {
                     context = beginLoad(admin, table, plan, grouped.keySet(), config);
                 }
                 if (context != null) {
-                    tasks = createLoadTasks(table, context, grouped, serializer.getVersion());
+                    tasks = createLoadTasks(table, context, grouped, serializer);
                 }
             }
         }
@@ -175,14 +175,13 @@ final class LoadLakeToFluss {
     }
 
     private static <Split extends LakeSplit>
-            Map<String, Map<Integer, List<byte[]>>> planBucketSplits(
+            Map<String, Map<Integer, List<Split>>> planBucketSplits(
                     TableInfo table,
                     LakeSource<Split> source,
                     long snapshotId,
-                    @Nullable Set<String> selectedPartitions,
-                    SimpleVersionedSerializer<Split> serializer)
+                    @Nullable Set<String> selectedPartitions)
                     throws IOException {
-        Map<String, Map<Integer, List<byte[]>>> grouped = new LinkedHashMap<>();
+        Map<String, Map<Integer, List<Split>>> grouped = new LinkedHashMap<>();
         // Selected target names limit the scan; file splits still come from the source snapshot.
         for (Split split :
                 planSplits(table, source, snapshotId, selectedPartitions, Instant.now())) {
@@ -193,7 +192,7 @@ final class LoadLakeToFluss {
             String partition = partitionName(table, split);
             grouped.computeIfAbsent(partition, ignored -> new LinkedHashMap<>())
                     .computeIfAbsent(split.bucket(), ignored -> new ArrayList<>())
-                    .add(serializer.serialize(split));
+                    .add(split);
         }
         return grouped;
     }
@@ -250,20 +249,31 @@ final class LoadLakeToFluss {
         }
     }
 
-    private static List<LoadTask> createLoadTasks(
+    private static <Split extends LakeSplit> List<LoadTask> createLoadTasks(
             TableInfo table,
             BulkLoadBuildContext context,
-            Map<String, Map<Integer, List<byte[]>>> grouped,
-            int splitVersion) {
+            Map<String, Map<Integer, List<Split>>> grouped,
+            SimpleVersionedSerializer<Split> serializer)
+            throws IOException {
         checkState(
                 context.getHandle().getTableId() == table.getTableId(),
                 "Table was replaced while preparing the load.");
         List<LoadTask> tasks = new ArrayList<>();
         for (BulkLoadBuildContext.Target target : context.getTargets()) {
-            Map<Integer, List<byte[]>> buckets =
+            Map<Integer, List<Split>> buckets =
                     grouped.getOrDefault(
                             target.getPath().getPartitionName(), Collections.emptyMap());
             for (int bucket : buckets.keySet()) {
+                for (Split split : buckets.get(bucket)) {
+                    // A valid bucket ID alone cannot detect old partitions with fewer buckets.
+                    checkArgument(
+                            split.totalBuckets() == target.getBucketCount(),
+                            "Cannot load %s: source bucket count %s differs from frozen target bucket count %s. "
+                                    + "Promotion of rescaled source partitions is not supported.",
+                            target.getPath(),
+                            split.totalBuckets(),
+                            target.getBucketCount());
+                }
                 checkArgument(
                         bucket < target.getBucketCount(),
                         "Source bucket %s does not match frozen target %s.",
@@ -271,13 +281,17 @@ final class LoadLakeToFluss {
                         target.getPath());
             }
             for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
+                List<byte[]> splits = new ArrayList<>();
+                for (Split split : buckets.getOrDefault(bucket, Collections.emptyList())) {
+                    splits.add(serializer.serialize(split));
+                }
                 tasks.add(
                         new LoadTask(
                                 target.getPath(),
                                 target.getPartitionId(),
                                 bucket,
-                                splitVersion,
-                                buckets.getOrDefault(bucket, Collections.emptyList())));
+                                serializer.getVersion(),
+                                splits));
             }
         }
         return tasks;

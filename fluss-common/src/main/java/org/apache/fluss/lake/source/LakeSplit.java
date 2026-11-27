@@ -40,6 +40,14 @@ public interface LakeSplit extends java.io.Serializable {
     int bucket();
 
     /**
+     * Returns the total number of buckets used to write this split's physical partition, or -1 if
+     * unknown. This can differ from the table's current bucket count after bucket rescaling.
+     */
+    default int totalBuckets() {
+        return -1;
+    }
+
+    /**
      * Returns the hierarchical partition values for this split, or an empty list if the split
      * doesn't belong to a specific partition in non-partitioned table.
      *
