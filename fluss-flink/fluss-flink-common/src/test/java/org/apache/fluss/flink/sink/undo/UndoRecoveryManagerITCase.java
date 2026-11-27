@@ -591,7 +591,8 @@ public class UndoRecoveryManagerITCase {
             for (int id = 0; id < 3; id++) {
                 writer.upsert(row(id, "p1_updated_" + id, 9999, partition1));
             }
-            for (int id = 5; id < 8; id++) {
+            // Recover the same non-partition key values independently in both partitions.
+            for (int id = 0; id < 3; id++) {
                 writer.delete(row(id, "p2_name_" + id, id * 20, partition2));
             }
             for (int id = 200; id < 205; id++) {

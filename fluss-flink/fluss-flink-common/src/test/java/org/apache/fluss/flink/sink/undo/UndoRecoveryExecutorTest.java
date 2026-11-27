@@ -20,6 +20,7 @@ package org.apache.fluss.flink.sink.undo;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.flink.utils.TestLogScanner;
 import org.apache.fluss.flink.utils.TestUpsertWriter;
@@ -33,16 +34,29 @@ import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiPredicate;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -70,6 +84,7 @@ class UndoRecoveryExecutorTest {
     private TestLogScanner mockScanner;
     private UndoComputer undoComputer;
     private UndoRecoveryExecutor executor;
+    @TempDir private Path temporaryRoot;
 
     // Short timeout value for testing (total ~300ms instead of 1 hour)
     private static final long TEST_MAX_TOTAL_WAIT_TIME_MS = 300;
@@ -87,8 +102,7 @@ class UndoRecoveryExecutorTest {
     }
 
     @Test
-    void testFilteredRecoveryIsolatesBucketKeysAndCompletesFromEmptyPollProgress()
-            throws Exception {
+    void testFilteredRecoveryDeduplicatesKeysAndCompletesFromEmptyPollProgress() throws Exception {
         TableBucket bucket0 = new TableBucket(TABLE_ID, 0);
         TableBucket bucket1 = new TableBucket(TABLE_ID, 1);
         BucketRecoveryContext ctx0 = new BucketRecoveryContext(bucket0, 0L, 3L);
@@ -96,7 +110,7 @@ class UndoRecoveryExecutorTest {
         ScanRecord first0 =
                 new ScanRecord(0L, 0L, ChangeType.UPDATE_BEFORE, row(1, "bucket0", 100));
         ScanRecord first1 =
-                new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(1, "bucket1", 200));
+                new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(3, "bucket1", 200));
         ScanRecord duplicate0 =
                 new ScanRecord(1L, 0L, ChangeType.UPDATE_BEFORE, row(1, "duplicate", 300));
         ScanRecord end0 = new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(2, "outside", 400));
@@ -113,8 +127,7 @@ class UndoRecoveryExecutorTest {
                             assertThat(filter.test(bucket0, end0)).isFalse();
                             assertThat(filter.test(bucket1, first1)).isTrue();
                             assertThat(filter.test(new TableBucket(TABLE_ID, 2), first0)).isFalse();
-                            assertThat(ctx0.getProcessedKeys()).isEmpty();
-                            assertThat(ctx1.getProcessedKeys()).isEmpty();
+
                             Map<TableBucket, List<ScanRecord>> selected = new HashMap<>();
                             selected.put(bucket0, Collections.singletonList(first0));
                             selected.put(bucket1, Collections.singletonList(first1));
@@ -145,44 +158,115 @@ class UndoRecoveryExecutorTest {
         assertThat(mockWriter.isFlushCalled()).isTrue();
         assertThat(ctx0.isComplete()).isTrue();
         assertThat(ctx1.isComplete()).isTrue();
-        assertThat(ctx0.getProcessedKeys()).hasSize(1);
-        assertThat(ctx1.getProcessedKeys()).hasSize(1);
+
+        assertThat(ctx0.getTotalUndoOperations()).isEqualTo(1);
+        assertThat(ctx1.getTotalUndoOperations()).isEqualTo(1);
         verify(scanner, times(2)).pollFiltered(any(Duration.class), any());
         verify(scanner).unsubscribe(0);
         verify(scanner).unsubscribe(1);
     }
 
+    private enum LateAcknowledgement {
+        SUCCESS,
+        FAILURE,
+        CANCELLED
+    }
+
     @Test
-    void testRecoveredOffsetWaitsForOutOfOrderAcknowledgements() throws Exception {
+    void testKeyStoreInitializationFailureStopsBeforeSubmittingWrites() throws Exception {
+        Path occupiedPath = Files.createFile(temporaryRoot.resolve("not-a-directory"));
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Collections.singletonList(
+                        new ScanRecord(0L, 0L, ChangeType.DELETE, row(1, "a", 100))));
+
+        assertThatThrownBy(
+                        () ->
+                                executor.execute(
+                                        Collections.singletonList(
+                                                new BucketRecoveryContext(bucket, 0L, 1L)),
+                                        occupiedPath))
+                .isInstanceOf(FileAlreadyExistsException.class);
+        assertThat(mockWriter.getUpsertCount()).isZero();
+        assertThat(mockWriter.isFlushCalled()).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(LateAcknowledgement.class)
+    void testWaitsForLateAcknowledgementAndCleansUp(LateAcknowledgement outcome) throws Exception {
         TableBucket bucket = new TableBucket(TABLE_ID, 0);
         CompletableFuture<UpsertResult> first = new CompletableFuture<>();
         CompletableFuture<UpsertResult> second = new CompletableFuture<>();
+        CountDownLatch flushed = new CountDownLatch(1);
+        List<String> writerCalls = new ArrayList<>();
         TestUpsertWriter writer =
                 new TestUpsertWriter() {
                     @Override
                     public CompletableFuture<UpsertResult> upsert(InternalRow record) {
+                        writerCalls.add("upsert");
                         return record.getInt(0) == 1 ? first : second;
                     }
 
                     @Override
                     public void flush() {
+                        writerCalls.add("flush");
                         second.complete(new UpsertResult(bucket, 20L));
-                        first.complete(new UpsertResult(bucket, 10L));
+                        flushed.countDown();
                     }
                 };
-        mockScanner.setRecordsForBucket(
-                bucket,
+        List<ScanRecord> records =
                 Arrays.asList(
                         new ScanRecord(0L, 0L, ChangeType.DELETE, row(1, "a", 100)),
-                        new ScanRecord(1L, 0L, ChangeType.DELETE, row(2, "b", 200))));
+                        new ScanRecord(1L, 0L, ChangeType.DELETE, row(2, "b", 200)));
+        mockScanner.setRecordsForBucket(bucket, records);
+        mockScanner.setBatchSize(1);
         UndoRecoveryExecutor recovery =
                 new UndoRecoveryExecutor(mockScanner, writer, new UndoComputer(keyEncoder, writer));
 
-        Map<TableBucket, Long> recovered =
-                recovery.execute(
-                        Collections.singletonList(new BucketRecoveryContext(bucket, 0L, 2L)));
+        FutureTask<Map<TableBucket, Long>> result =
+                new FutureTask<>(
+                        () ->
+                                recovery.execute(
+                                        Collections.singletonList(
+                                                new BucketRecoveryContext(bucket, 0L, 2L)),
+                                        temporaryRoot));
+        Thread recoveryThread = new Thread(result, "undo-recovery-test");
+        recoveryThread.setDaemon(true);
+        recoveryThread.start();
+        try {
+            assertThat(flushed.await(10, SECONDS)).isTrue();
+            assertThatThrownBy(() -> result.get(100, MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            if (outcome == LateAcknowledgement.FAILURE) {
+                first.completeExceptionally(
+                        new IllegalStateException("late acknowledgement failure"));
+                assertThatThrownBy(() -> result.get(10, SECONDS))
+                        .hasRootCauseMessage("late acknowledgement failure");
+            } else if (outcome == LateAcknowledgement.SUCCESS) {
+                first.complete(new UpsertResult(bucket, 10L));
+                assertThat(result.get(10, SECONDS))
+                        .containsOnlyKeys(bucket)
+                        .containsEntry(bucket, 20L);
+            }
+        } finally {
+            result.cancel(true);
+            recoveryThread.join(SECONDS.toMillis(10));
+        }
+        assertThat(recoveryThread.isAlive()).isFalse();
+        assertThat(writerCalls).containsExactly("upsert", "upsert", "flush");
+        assertThat(temporaryRoot).isEmptyDirectory();
 
-        assertThat(recovered).containsOnlyKeys(bucket).containsEntry(bucket, 20L);
+        if (outcome != LateAcknowledgement.SUCCESS) {
+            TestLogScanner retryScanner = new TestLogScanner();
+            retryScanner.setRecordsForBucket(bucket, records);
+            new UndoRecoveryExecutor(retryScanner, mockWriter, undoComputer)
+                    .execute(
+                            Collections.singletonList(new BucketRecoveryContext(bucket, 0L, 2L)),
+                            temporaryRoot);
+            assertThat(mockWriter.getUpsertCount()).isEqualTo(2);
+            assertThat(temporaryRoot).isEmptyDirectory();
+        }
     }
 
     /**
@@ -222,12 +306,14 @@ class UndoRecoveryExecutorTest {
         // - key=1: INSERT → delete
         // - key=2: INSERT → delete
         // - key=3: DELETE → upsert
-        assertThat(ctx0.getProcessedKeys()).hasSize(3);
+
+        assertThat(ctx0.getTotalUndoOperations()).isEqualTo(3);
 
         // Bucket1: 2 unique keys (UPDATE_AFTER skipped)
         // - key=10: DELETE → upsert
         // - key=12: INSERT → delete
-        assertThat(ctx1.getProcessedKeys()).hasSize(2);
+
+        assertThat(ctx1.getTotalUndoOperations()).isEqualTo(2);
 
         // Total: 3 deletes (key=1,2,12), 2 upserts (key=3,10)
         assertThat(mockWriter.getDeleteCount()).isEqualTo(3);
@@ -277,8 +363,9 @@ class UndoRecoveryExecutorTest {
      *
      * <p>Validates: Requirements 7.1, 7.2 - Exception propagation.
      */
-    @Test
-    void testExceptionPropagationFromWriter() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testExceptionPropagationFromWriter(boolean failSynchronously) {
         TableBucket bucket = new TableBucket(TABLE_ID, 0);
 
         BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 2L);
@@ -289,11 +376,23 @@ class UndoRecoveryExecutorTest {
                         new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "a", 100)),
                         new ScanRecord(1L, 0L, ChangeType.INSERT, row(2, "b", 200))));
 
-        mockWriter.setShouldFail(true);
+        TestUpsertWriter writer =
+                new TestUpsertWriter() {
+                    @Override
+                    public CompletableFuture<DeleteResult> delete(InternalRow row) {
+                        if (failSynchronously) {
+                            throw new IllegalStateException("Simulated write failure");
+                        }
+                        return super.delete(row);
+                    }
+                };
+        writer.setShouldFail(true);
+        UndoRecoveryExecutor recovery =
+                new UndoRecoveryExecutor(mockScanner, writer, new UndoComputer(keyEncoder, writer));
 
-        assertThatThrownBy(() -> executor.execute(Collections.singletonList(ctx)))
-                .hasCauseInstanceOf(RuntimeException.class)
+        assertThatThrownBy(() -> recovery.execute(Collections.singletonList(ctx), temporaryRoot))
                 .hasMessageContaining("Simulated write failure");
+        assertThat(temporaryRoot).isEmptyDirectory();
     }
 
     /**
@@ -354,7 +453,8 @@ class UndoRecoveryExecutorTest {
         // key=3: DELETE → upsert
         // key=4: UPDATE_BEFORE → upsert (UPDATE_AFTER skipped)
         // key=5: INSERT → delete
-        assertThat(ctx.getProcessedKeys()).hasSize(5);
+
+        assertThat(ctx.getTotalUndoOperations()).isEqualTo(5);
         assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(6);
         assertThat(mockWriter.getDeleteCount()).isEqualTo(3); // keys 1, 2, 5
         assertThat(mockWriter.getUpsertCount()).isEqualTo(2); // keys 3, 4

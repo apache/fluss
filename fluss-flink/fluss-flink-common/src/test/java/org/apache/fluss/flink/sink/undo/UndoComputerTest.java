@@ -26,16 +26,19 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArrayWrapper;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.nio.file.Path;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
 
@@ -56,28 +59,39 @@ class UndoComputerTest {
     private KeyEncoder keyEncoder;
     private TestUpsertWriter mockWriter;
     private UndoComputer undoComputer;
+    @TempDir private Path temporaryRoot;
+    private UndoRecoveryDeduplicationStore deduplicationStore;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         keyEncoder = KeyEncoder.of(ROW_TYPE, PRIMARY_KEY_COLUMNS, null);
         mockWriter = new TestUpsertWriter();
         undoComputer = new UndoComputer(keyEncoder, mockWriter);
+        deduplicationStore = new UndoRecoveryDeduplicationStore(temporaryRoot);
+    }
+
+    @AfterEach
+    void closeStore() throws Exception {
+        if (deduplicationStore != null) {
+            deduplicationStore.close();
+        }
     }
 
     @Test
     void testSelectionPreservesFirstChangeWithoutCommittingBorrowedKeys() {
-        Set<ByteArrayWrapper> processed = new HashSet<>();
-        Set<ByteArrayWrapper> selected = new HashSet<>();
+        Map<ByteArrayWrapper, Long> selected = new HashMap<>();
         ScanRecord before = new ScanRecord(0, 0, ChangeType.UPDATE_BEFORE, row(1, "old", 100));
         ScanRecord after = new ScanRecord(1, 0, ChangeType.UPDATE_AFTER, row(1, "new", 200));
-        assertThat(undoComputer.selectRecord(after, processed, selected)).isFalse();
+        ScanRecord later = new ScanRecord(2, 0, ChangeType.DELETE, row(1, "later", 300));
+        assertThat(undoComputer.selectRecord(after, deduplicationStore, selected)).isFalse();
         assertThat(selected).isEmpty();
-        assertThat(undoComputer.selectRecord(before, processed, selected)).isTrue();
-        assertThat(undoComputer.selectRecord(before, processed, selected)).isFalse();
-        assertThat(processed).isEmpty();
+        assertThat(undoComputer.selectRecord(before, deduplicationStore, selected)).isTrue();
+        assertThat(undoComputer.selectRecord(later, deduplicationStore, selected)).isFalse();
+        assertThat(undoComputer.selectRecord(before, deduplicationStore, selected)).isTrue();
         assertThat(mockWriter.getUpsertCount()).isZero();
-        undoComputer.processRecord(before, processed);
-        assertThat(undoComputer.selectRecord(before, processed, new HashSet<>())).isFalse();
+        undoComputer.processRecord(before, deduplicationStore);
+        assertThat(undoComputer.selectRecord(before, deduplicationStore, new HashMap<>()))
+                .isFalse();
         assertThat(mockWriter.getAllUpsertedRows()).containsExactly(before.getRow());
     }
 
@@ -104,18 +118,17 @@ class UndoComputerTest {
             boolean expectDelete,
             boolean expectUpsert,
             boolean expectNullFuture) {
-        Set<ByteArrayWrapper> processedKeys = new HashSet<>();
         GenericRow testRow = row(1, "test", 100);
         ScanRecord record = new ScanRecord(0L, 0L, changeType, testRow);
 
-        CompletableFuture<?> future = undoComputer.processRecord(record, processedKeys);
+        CompletableFuture<?> future = undoComputer.processRecord(record, deduplicationStore);
 
         if (expectNullFuture) {
             assertThat(future).isNull();
-            assertThat(processedKeys).isEmpty();
+            assertThat(deduplicationStore.contains(keyEncoder.encodeKey(testRow))).isFalse();
         } else {
             assertThat(future).isNotNull();
-            assertThat(processedKeys).hasSize(1);
+            assertThat(deduplicationStore.contains(keyEncoder.encodeKey(testRow))).isTrue();
         }
         assertThat(mockWriter.getDeleteCount()).isEqualTo(expectDelete ? 1 : 0);
         assertThat(mockWriter.getUpsertCount()).isEqualTo(expectUpsert ? 1 : 0);
@@ -146,40 +159,35 @@ class UndoComputerTest {
      */
     @Test
     void testPrimaryKeyDeduplication() {
-        Set<ByteArrayWrapper> processedKeys = new HashSet<>();
-
         // First record for key=1 (INSERT → delete)
         GenericRow row1 = row(1, "first", 100);
         CompletableFuture<?> f1 =
                 undoComputer.processRecord(
-                        new ScanRecord(0L, 0L, ChangeType.INSERT, row1), processedKeys);
+                        new ScanRecord(0L, 0L, ChangeType.INSERT, row1), deduplicationStore);
 
         // Second record for same key=1 (should be skipped)
         GenericRow row2 = row(1, "second", 200);
         CompletableFuture<?> f2 =
                 undoComputer.processRecord(
-                        new ScanRecord(1L, 0L, ChangeType.UPDATE_BEFORE, row2), processedKeys);
+                        new ScanRecord(1L, 0L, ChangeType.UPDATE_BEFORE, row2), deduplicationStore);
 
         // Third record for different key=2 (INSERT → delete)
         GenericRow row3 = row(2, "third", 300);
         CompletableFuture<?> f3 =
                 undoComputer.processRecord(
-                        new ScanRecord(2L, 0L, ChangeType.INSERT, row3), processedKeys);
+                        new ScanRecord(2L, 0L, ChangeType.INSERT, row3), deduplicationStore);
 
         // Fourth record for key=2 (should be skipped)
         GenericRow row4 = row(2, "fourth", 400);
         CompletableFuture<?> f4 =
                 undoComputer.processRecord(
-                        new ScanRecord(3L, 0L, ChangeType.DELETE, row4), processedKeys);
+                        new ScanRecord(3L, 0L, ChangeType.DELETE, row4), deduplicationStore);
 
         // Verify: only first occurrence of each key processed
         assertThat(f1).isNotNull();
         assertThat(f2).as("Duplicate key=1 should be skipped").isNull();
         assertThat(f3).isNotNull();
         assertThat(f4).as("Duplicate key=2 should be skipped").isNull();
-
-        // Verify: 2 unique keys tracked
-        assertThat(processedKeys).hasSize(2);
 
         // Verify: 2 deletes (one per unique key, both were INSERTs)
         assertThat(mockWriter.getDeleteCount()).isEqualTo(2);
@@ -196,21 +204,18 @@ class UndoComputerTest {
      */
     @Test
     void testUpdateAfterDoesNotBlockSubsequentRecords() {
-        Set<ByteArrayWrapper> processedKeys = new HashSet<>();
-
         // UPDATE_AFTER for key=1 (skipped, key NOT added to set)
         undoComputer.processRecord(
                 new ScanRecord(0L, 0L, ChangeType.UPDATE_AFTER, row(1, "after", 100)),
-                processedKeys);
+                deduplicationStore);
 
         // INSERT for same key=1 (should be processed since UPDATE_AFTER didn't add key)
         CompletableFuture<?> f =
                 undoComputer.processRecord(
                         new ScanRecord(1L, 0L, ChangeType.INSERT, row(1, "insert", 200)),
-                        processedKeys);
+                        deduplicationStore);
 
         assertThat(f).isNotNull();
         assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
-        assertThat(processedKeys).hasSize(1);
     }
 }
