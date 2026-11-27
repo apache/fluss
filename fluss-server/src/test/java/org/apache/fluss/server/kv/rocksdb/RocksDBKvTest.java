@@ -19,18 +19,29 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.metrics.util.TestHistogram;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import io.github.fluss_contrib.rocksdb.Cache;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
 import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.HistogramData;
+import io.github.fluss_contrib.rocksdb.HistogramType;
+import io.github.fluss_contrib.rocksdb.HyperClockCache;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -560,6 +571,103 @@ class RocksDBKvTest {
 
         // Reopening the same path also proves the native DB handle was released.
         try (RocksDBKv ignored = buildRocksDBKv(tempDir.toFile())) {}
+    }
+
+    @Test
+    void testNativeCountersSurviveDbClose(@TempDir Path directory) throws Exception {
+        TabletServerMetricGroup metrics =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
+        RocksDBStatisticsRegistry registry = new RocksDBStatisticsRegistry(true);
+        metrics.setRocksDBStatistics(registry);
+        try (Cache cache = new HyperClockCache(1024 * 1024, 0, -1, false)) {
+            long expectedHits;
+            long expectedMisses;
+            HistogramData getData;
+            HistogramData multiGetData;
+            RocksDBResourceContainer resources =
+                    new RocksDBResourceContainer(
+                            new Configuration(),
+                            directory.toFile(),
+                            true,
+                            KvManager.getDefaultRateLimiter(),
+                            cache);
+            resources.useSharedStatistics(registry.acquire(1));
+            try (RocksDBKv kv =
+                    new RocksDBKvBuilder(
+                                    directory.toFile(), resources, resources.getColumnOptions())
+                            .build()) {
+                byte[] key = {1};
+                kv.put(key, new byte[] {2});
+                try (FlushOptions flush = new FlushOptions().setWaitForFlush(true)) {
+                    kv.getDb().flush(flush);
+                }
+                kv.get(key);
+                kv.get(key);
+                assertThat(kv.multiGet(Arrays.asList(key, new byte[] {3})))
+                        .containsExactly(new byte[] {2}, null);
+                getData = kv.getStatistics().getHistogramData(HistogramType.DB_GET);
+                multiGetData = kv.getStatistics().getHistogramData(HistogramType.DB_MULTIGET);
+                assertThat(getData.getCount()).isEqualTo(2);
+                assertThat(multiGetData.getCount()).isEqualTo(1);
+                expectedHits = kv.getStatistics().getTickerCount(TickerType.BLOCK_CACHE_DATA_HIT);
+                expectedMisses =
+                        kv.getStatistics().getTickerCount(TickerType.BLOCK_CACHE_DATA_MISS);
+                assertThat(expectedHits).isPositive();
+                // Leave the final interval unsampled until the resource container closes.
+            }
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL,
+                                    "block_type",
+                                    "data"))
+                    .isEqualTo(expectedHits);
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL,
+                                    "block_type",
+                                    "data"))
+                    .isEqualTo(expectedMisses);
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL,
+                                    "operation",
+                                    "get"))
+                    .isEqualTo(getData.getCount());
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL,
+                                    "operation",
+                                    "get"))
+                    .isEqualTo(getData.getSum());
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL,
+                                    "operation",
+                                    "multiGet"))
+                    .isEqualTo(multiGetData.getCount());
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL,
+                                    "operation",
+                                    "multiGet"))
+                    .isEqualTo(multiGetData.getSum());
+        }
+    }
+
+    private static long metricValue(
+            TabletServerMetricGroup metrics,
+            String metricName,
+            String groupKey,
+            String groupValue) {
+        AbstractMetricGroup group = (AbstractMetricGroup) metrics.addGroup(groupKey, groupValue);
+        return ((Counter) group.getMetrics().get(metricName)).getCount();
     }
 
     private RocksDBKv buildRocksDBKv(File instanceBasePath) throws Exception {
