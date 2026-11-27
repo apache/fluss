@@ -29,13 +29,6 @@ public class Flink118ProcedureITCase extends FlinkProcedureITCase {
     @Test
     void testIndexArgument() throws Exception {}
 
-    @Override
-    @Test
-    void testEnableFlussOnLakeTableNamedArguments() {
-        // Optional named arguments require Flink 1.19 or later. Positional calls are tested by
-        // the inherited testEnableFlussOnLakeTableCallSignatures.
-    }
-
     @Test
     @MultiVersionTest
     void testLackParams() {

@@ -101,7 +101,7 @@ public class LoadLakeDataToFlussAction implements Action {
                 "The expected table ID must not be negative.");
         checkArgument(
                 (sourceSnapshotId == null) == (bulkLoadId == null),
-                "--source-snapshot-id and --bulk-load-id must be supplied together.");
+                "The source snapshot ID and Bulk Load ID must be supplied together.");
         this.bulkLoadId = bulkLoadId;
         this.expectedTableId = expectedTableId;
     }

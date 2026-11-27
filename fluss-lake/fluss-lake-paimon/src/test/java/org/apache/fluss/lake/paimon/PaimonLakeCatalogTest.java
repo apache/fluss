@@ -22,6 +22,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
+import org.apache.fluss.lake.paimon.utils.PaimonTableValidation;
 import org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
@@ -52,8 +53,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import javax.annotation.Nullable;
-
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -69,7 +68,6 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_MERGE_ENGINE;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.LAKESTREAM_ENABLED_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
-import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -619,7 +617,7 @@ class PaimonLakeCatalogTest {
 
     @Test
     void testPaimonSchemaCompatibilityChecksPhysicalMetadata() {
-        TableSchema schema =
+        org.apache.paimon.schema.Schema schema =
                 createPaimonSchema(
                         Arrays.asList("id", "pt"), Collections.singletonList("pt"), "1", "id");
 
@@ -683,71 +681,48 @@ class PaimonLakeCatalogTest {
                                         "id")))
                 .isTrue();
         assertThat(CoreOptions.IMMUTABLE_OPTIONS).contains(CoreOptions.BUCKET_FUNCTION_TYPE.key());
-        TableSchema schemaWithExplicitDefault =
-                TableSchema.create(
-                        0,
-                        createPaimonSchemaBuilder(
-                                        Arrays.asList("id", "pt"),
-                                        Collections.singletonList("pt"),
-                                        "1",
-                                        "id")
-                                .option(CoreOptions.ROW_TRACKING_ENABLED.key(), "false")
-                                .build());
+        org.apache.paimon.schema.Schema schemaWithExplicitDefault =
+                createPaimonSchemaBuilder(
+                                Arrays.asList("id", "pt"),
+                                Collections.singletonList("pt"),
+                                "1",
+                                "id")
+                        .option(CoreOptions.ROW_TRACKING_ENABLED.key(), "false")
+                        .build();
         assertThat(isPaimonSchemaCompatible(schemaWithExplicitDefault, schema)).isTrue();
-        TableSchema schemaWithDifferentImmutableOption =
-                TableSchema.create(
-                        0,
-                        createPaimonSchemaBuilder(
-                                        Arrays.asList("id", "pt"),
-                                        Collections.singletonList("pt"),
-                                        "1",
-                                        "id")
-                                .option(
-                                        PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY,
-                                        Boolean.FALSE.toString())
-                                .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
-                                .build());
+        org.apache.paimon.schema.Schema schemaWithDifferentImmutableOption =
+                createPaimonSchemaBuilder(
+                                Arrays.asList("id", "pt"),
+                                Collections.singletonList("pt"),
+                                "1",
+                                "id")
+                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, Boolean.FALSE.toString())
+                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                        .build();
         assertThat(isPaimonSchemaCompatible(schema, schemaWithDifferentImmutableOption)).isFalse();
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "id,,id,true",
-        "'id,pt',pt,id,true",
-        "'id,pt',,'id,pt',true",
-        "'id,pt',,id,false",
-        "'id,pt',,'pt,id',false"
-    })
-    void testDefaultBucketKey(
-            String primaryKeys,
-            @Nullable String partitionKey,
-            String bucketKey,
-            boolean compatible) {
-        TableSchema implicit =
-                TableSchema.create(
-                        0,
-                        org.apache.paimon.schema.Schema.newBuilder()
-                                .column("id", org.apache.paimon.types.DataTypes.INT().notNull())
-                                .column("pt", org.apache.paimon.types.DataTypes.STRING().notNull())
-                                .primaryKey(Arrays.asList(primaryKeys.split(",")))
-                                .partitionKeys(
-                                        partitionKey == null
-                                                ? Collections.emptyList()
-                                                : Collections.singletonList(partitionKey))
-                                .option(CoreOptions.BUCKET.key(), "3")
-                                .build());
+    @CsvSource({"'id,version',true", "id,false", "'version,id',false"})
+    void testDefaultBucketKey(String bucketKey, boolean compatible) {
+        org.apache.paimon.schema.Schema implicit =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.INT().notNull())
+                        .column("version", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("pt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .primaryKey("id", "version", "pt")
+                        .partitionKeys("pt")
+                        .option(CoreOptions.BUCKET.key(), "3")
+                        .build();
         Map<String, String> options = new HashMap<>(implicit.options());
         options.put(CoreOptions.BUCKET_KEY.key(), bucketKey);
-        TableSchema explicit =
-                TableSchema.create(
-                        0,
-                        new org.apache.paimon.schema.Schema(
-                                implicit.fields(),
-                                implicit.partitionKeys(),
-                                implicit.primaryKeys(),
-                                options,
-                                implicit.comment()));
-
+        org.apache.paimon.schema.Schema explicit =
+                new org.apache.paimon.schema.Schema(
+                        implicit.fields(),
+                        implicit.partitionKeys(),
+                        implicit.primaryKeys(),
+                        options,
+                        implicit.comment());
         assertThat(isPaimonSchemaCompatible(implicit, explicit)).isEqualTo(compatible);
         assertThat(isPaimonSchemaCompatible(explicit, implicit)).isEqualTo(compatible);
         assertThat(implicit.options()).doesNotContainKey(CoreOptions.BUCKET_KEY.key());
@@ -763,77 +738,52 @@ class PaimonLakeCatalogTest {
     void testPaimonSchemaCompatibilityWithExistingMergeOptions(String key, String value) {
         List<String> primaryKeys = Arrays.asList("id", "pt");
         List<String> partitionKeys = Collections.singletonList("pt");
-        TableSchema existingSchema =
-                TableSchema.create(
-                        0,
-                        createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
-                                .option(key, value)
-                                .build());
-        TableSchema expectedSchema =
-                TableSchema.create(
-                        0,
-                        createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id").build());
+        org.apache.paimon.schema.Schema existingSchema =
+                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                        .option(key, value)
+                        .build();
+        org.apache.paimon.schema.Schema expectedSchema =
+                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id").build();
 
         assertThat(isPaimonSchemaCompatible(existingSchema, expectedSchema)).isFalse();
 
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
-                                TableSchema.create(
-                                        0,
-                                        createPaimonSchemaBuilder(
-                                                        primaryKeys, partitionKeys, "2", "id")
-                                                .option(key, value)
-                                                .build())))
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "2", "id")
+                                        .option(key, value)
+                                        .build()))
                 .isFalse();
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
-                                TableSchema.create(
-                                        0,
-                                        createPaimonSchemaBuilder(
-                                                        primaryKeys, partitionKeys, "1", "id")
-                                                .option(key, value)
-                                                .option(
-                                                        CoreOptions.BUCKET_FUNCTION_TYPE.key(),
-                                                        "mod")
-                                                .build())))
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(key, value)
+                                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                                        .build()))
                 .isFalse();
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
-                                TableSchema.create(
-                                        0,
-                                        createPaimonSchemaBuilder(
-                                                        primaryKeys, partitionKeys, "1", "id")
-                                                .option(key, value)
-                                                .column(
-                                                        "extra",
-                                                        org.apache.paimon.types.DataTypes.INT())
-                                                .build())))
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(key, value)
+                                        .column("extra", org.apache.paimon.types.DataTypes.INT())
+                                        .build()))
                 .isFalse();
     }
 
     @Test
     void testPaimonSchemaCompatibilityWithVarCharAndVarBinary() {
-        TableSchema existingSchema =
-                TableSchema.create(
-                        0,
-                        org.apache.paimon.schema.Schema.newBuilder()
-                                .column(
-                                        "name",
-                                        org.apache.paimon.types.DataTypes.VARCHAR(20).notNull())
-                                .column("payload", org.apache.paimon.types.DataTypes.VARBINARY(128))
-                                .build());
-        TableSchema convertedSchema =
-                TableSchema.create(
-                        0,
-                        org.apache.paimon.schema.Schema.newBuilder()
-                                .column(
-                                        "name",
-                                        org.apache.paimon.types.DataTypes.STRING().notNull())
-                                .column("payload", org.apache.paimon.types.DataTypes.BYTES())
-                                .build());
+        org.apache.paimon.schema.Schema existingSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("name", org.apache.paimon.types.DataTypes.VARCHAR(20).notNull())
+                        .column("payload", org.apache.paimon.types.DataTypes.VARBINARY(128))
+                        .build();
+        org.apache.paimon.schema.Schema convertedSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("name", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .column("payload", org.apache.paimon.types.DataTypes.BYTES())
+                        .build();
 
         // Fluss loses the declared lengths, but the converted types retain nullability.
         assertThat(isPaimonSchemaCompatible(existingSchema, convertedSchema)).isTrue();
@@ -842,93 +792,77 @@ class PaimonLakeCatalogTest {
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
-                                TableSchema.create(
-                                        0,
-                                        org.apache.paimon.schema.Schema.newBuilder()
-                                                .column(
-                                                        "name",
-                                                        org.apache.paimon.types.DataTypes.STRING())
-                                                .column(
-                                                        "payload",
-                                                        org.apache.paimon.types.DataTypes.BYTES())
-                                                .build())))
+                                org.apache.paimon.schema.Schema.newBuilder()
+                                        .column("name", org.apache.paimon.types.DataTypes.STRING())
+                                        .column(
+                                                "payload",
+                                                org.apache.paimon.types.DataTypes.BYTES())
+                                        .build()))
                 .isFalse();
 
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
-                                TableSchema.create(
-                                        0,
-                                        org.apache.paimon.schema.Schema.newBuilder()
-                                                .column(
-                                                        "name",
-                                                        org.apache.paimon.types.DataTypes.STRING()
-                                                                .notNull())
-                                                .column(
-                                                        "payload",
-                                                        org.apache.paimon.types.DataTypes.BYTES()
-                                                                .notNull())
-                                                .build())))
+                                org.apache.paimon.schema.Schema.newBuilder()
+                                        .column(
+                                                "name",
+                                                org.apache.paimon.types.DataTypes.STRING()
+                                                        .notNull())
+                                        .column(
+                                                "payload",
+                                                org.apache.paimon.types.DataTypes.BYTES().notNull())
+                                        .build()))
                 .isFalse();
     }
 
     @Test
     void testPaimonSchemaCompatibilityWithNestedVarCharAndVarBinary() {
-        TableSchema existingSchema =
-                TableSchema.create(
-                        0,
-                        org.apache.paimon.schema.Schema.newBuilder()
-                                .column(
-                                        "names",
-                                        org.apache.paimon.types.DataTypes.ARRAY(
-                                                org.apache.paimon.types.DataTypes.VARCHAR(20)
-                                                        .notNull()))
-                                .column(
-                                        "payloads",
-                                        org.apache.paimon.types.DataTypes.ARRAY(
-                                                org.apache.paimon.types.DataTypes.VARBINARY(128)))
-                                .column(
-                                        "attributes",
-                                        org.apache.paimon.types.DataTypes.MAP(
-                                                org.apache.paimon.types.DataTypes.VARCHAR(20),
-                                                org.apache.paimon.types.DataTypes.VARBINARY(128)))
-                                .column(
-                                        "person",
-                                        org.apache.paimon.types.DataTypes.ROW(
-                                                org.apache.paimon.types.DataTypes.FIELD(
-                                                        0,
-                                                        "name",
-                                                        org.apache.paimon.types.DataTypes.VARCHAR(
-                                                                20))))
-                                .build());
-        TableSchema convertedSchema =
-                TableSchema.create(
-                        0,
-                        org.apache.paimon.schema.Schema.newBuilder()
-                                .column(
-                                        "names",
-                                        org.apache.paimon.types.DataTypes.ARRAY(
-                                                org.apache.paimon.types.DataTypes.STRING()
-                                                        .notNull()))
-                                .column(
-                                        "payloads",
-                                        org.apache.paimon.types.DataTypes.ARRAY(
-                                                org.apache.paimon.types.DataTypes.BYTES()))
-                                .column(
-                                        "attributes",
-                                        org.apache.paimon.types.DataTypes.MAP(
-                                                org.apache.paimon.types.DataTypes.STRING()
-                                                        .notNull(),
-                                                org.apache.paimon.types.DataTypes.BYTES()))
-                                .column(
-                                        "person",
-                                        org.apache.paimon.types.DataTypes.ROW(
-                                                org.apache.paimon.types.DataTypes.FIELD(
-                                                        1,
-                                                        "name",
-                                                        org.apache.paimon.types.DataTypes
-                                                                .STRING())))
-                                .build());
+        org.apache.paimon.schema.Schema existingSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column(
+                                "names",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.VARCHAR(20).notNull()))
+                        .column(
+                                "payloads",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.VARBINARY(128)))
+                        .column(
+                                "attributes",
+                                org.apache.paimon.types.DataTypes.MAP(
+                                        org.apache.paimon.types.DataTypes.VARCHAR(20),
+                                        org.apache.paimon.types.DataTypes.VARBINARY(128)))
+                        .column(
+                                "person",
+                                org.apache.paimon.types.DataTypes.ROW(
+                                        org.apache.paimon.types.DataTypes.FIELD(
+                                                0,
+                                                "name",
+                                                org.apache.paimon.types.DataTypes.VARCHAR(20))))
+                        .build();
+        org.apache.paimon.schema.Schema convertedSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column(
+                                "names",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.STRING().notNull()))
+                        .column(
+                                "payloads",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.BYTES()))
+                        .column(
+                                "attributes",
+                                org.apache.paimon.types.DataTypes.MAP(
+                                        org.apache.paimon.types.DataTypes.STRING().notNull(),
+                                        org.apache.paimon.types.DataTypes.BYTES()))
+                        .column(
+                                "person",
+                                org.apache.paimon.types.DataTypes.ROW(
+                                        org.apache.paimon.types.DataTypes.FIELD(
+                                                1,
+                                                "name",
+                                                org.apache.paimon.types.DataTypes.STRING())))
+                        .build();
 
         // Conversion drops bounded lengths and ROW field ids; Fluss also makes MAP keys non-null.
         assertThat(isPaimonSchemaCompatible(existingSchema, convertedSchema)).isTrue();
@@ -972,16 +906,12 @@ class PaimonLakeCatalogTest {
         for (DataType[] types : mismatchedTypes) {
             assertThat(
                             isPaimonSchemaCompatible(
-                                    TableSchema.create(
-                                            0,
-                                            org.apache.paimon.schema.Schema.newBuilder()
-                                                    .column("value", types[0])
-                                                    .build()),
-                                    TableSchema.create(
-                                            0,
-                                            org.apache.paimon.schema.Schema.newBuilder()
-                                                    .column("value", types[1])
-                                                    .build())))
+                                    org.apache.paimon.schema.Schema.newBuilder()
+                                            .column("value", types[0])
+                                            .build(),
+                                    org.apache.paimon.schema.Schema.newBuilder()
+                                            .column("value", types[1])
+                                            .build()))
                     .isFalse();
         }
     }
@@ -1257,30 +1187,32 @@ class PaimonLakeCatalogTest {
         assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
     }
 
-    private TableSchema createPaimonSchema(
+    private static boolean isPaimonSchemaCompatible(
+            org.apache.paimon.schema.Schema existing, org.apache.paimon.schema.Schema proposed) {
+        return PaimonTableValidation.isPaimonSchemaCompatible(
+                TableSchema.create(0, existing), TableSchema.create(0, proposed));
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchema(
             List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
         return createPaimonSchema(
                 primaryKeys, partitionKeys, bucket, bucketKey, Boolean.FALSE.toString());
     }
 
-    private TableSchema createPaimonSchema(
+    private org.apache.paimon.schema.Schema createPaimonSchema(
             List<String> primaryKeys,
             List<String> partitionKeys,
             String bucket,
             String bucketKey,
             String partitionLegacyName) {
-        return TableSchema.create(
-                0,
-                createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey)
-                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, partitionLegacyName)
-                        .build());
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey)
+                .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, partitionLegacyName)
+                .build();
     }
 
-    private TableSchema createPaimonSchemaWithoutPartitionLegacyName(
+    private org.apache.paimon.schema.Schema createPaimonSchemaWithoutPartitionLegacyName(
             List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
-        return TableSchema.create(
-                0,
-                createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey).build());
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey).build();
     }
 
     private org.apache.paimon.schema.Schema.Builder createPaimonSchemaBuilder(

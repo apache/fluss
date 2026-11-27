@@ -31,7 +31,7 @@ import java.util.Optional;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
-/** Factory for loading Paimon data using the Manager's existing action arguments. */
+/** Factory for the {@code load_lake_data_to_fluss} action. */
 @Internal
 public class LoadLakeDataToFlussActionFactory implements ActionFactory {
 

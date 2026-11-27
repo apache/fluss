@@ -44,6 +44,7 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.ChangeType;
@@ -134,7 +135,7 @@ final class LoadLakeToFluss {
                         bulkLoadId);
                 List<String> originalNames = Collections.emptyList();
                 if (table.isPartitioned()) {
-                    selectedPartitions = restorePartitions(admin, table, previous, config);
+                    selectedPartitions = getOriginalPartitionNames(admin, table, previous, config);
                     originalNames = new ArrayList<>(selectedPartitions);
                 }
                 // An existing ID replays its frozen context without creating another load.
@@ -159,7 +160,7 @@ final class LoadLakeToFluss {
         return submitJob(executionEnvironment, config, source, plan, context, tasks);
     }
 
-    private static Set<String> restorePartitions(
+    private static Set<String> getOriginalPartitionNames(
             Admin admin, TableInfo table, BulkLoadInfo previous, Configuration config)
             throws Exception {
         Set<Long> existingPartitionIds = new HashSet<>();
@@ -501,28 +502,26 @@ final class LoadLakeToFluss {
         }
     }
 
-    private static void completeLoad(
-            LoadPlan plan, Map<TableBucket, Long> offsets, Configuration config) throws Exception {
-        try (Connection connection = ConnectionFactory.createConnection(config);
-                Admin admin = connection.getAdmin()) {
-            TableInfo current = await(admin.getTableInfo(plan.tablePath), config);
-            checkState(
-                    current.getTableId() == plan.tableId,
-                    "Table %s was replaced during loading.",
-                    plan.tablePath);
-            if (current.getTableConfig().isDataLakeEnabled()) {
-                return;
-            }
-            registerLakeSnapshot(admin, current, plan, offsets, config);
-            await(
-                    admin.alterTable(
-                            plan.tablePath,
-                            Collections.singletonList(
-                                    TableChange.set(
-                                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
-                            false),
-                    config);
+    private static void registerSnapshotAndEnableLake(
+            Admin admin, LoadPlan plan, Map<TableBucket, Long> offsets, Configuration config)
+            throws Exception {
+        TableInfo current = await(admin.getTableInfo(plan.tablePath), config);
+        checkState(
+                current.getTableId() == plan.tableId,
+                "Table %s was replaced during loading.",
+                plan.tablePath);
+        if (current.getTableConfig().isDataLakeEnabled()) {
+            return;
         }
+        registerLakeSnapshot(admin, current, plan, offsets, config);
+        await(
+                admin.alterTable(
+                        plan.tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false),
+                config);
     }
 
     private static void registerLakeSnapshot(
@@ -613,25 +612,7 @@ final class LoadLakeToFluss {
         @Override
         public TableBucket map(LoadTask task) throws Exception {
             if (connection == null) {
-                // The connection initializes Fluss filesystems with the client.fs.* options.
-                connection = ConnectionFactory.createConnection(config);
-                table = connection.getTable(task.path.getTablePath());
-                bulkLoad = table.newBulkLoad();
-                // Check once per operator attempt. Finalization can fail after commit, and a
-                // withdrawn target may then have no individual bucket commit to replay.
-                loadCommitted =
-                        await(bulkLoad.getInfo(handle), config).getState()
-                                == BulkLoadInfo.State.COMMITTED;
-                if (!loadCommitted) {
-                    // The JobGraph carries the original selection. Idempotent Begin retrieves
-                    // the frozen context without serializing SDK implementation objects.
-                    context = await(bulkLoad.begin(handle.getBulkLoadId(), partitionNames), config);
-                }
-                MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
-                rowsProcessed = metricGroup.counter("rowsProcessed");
-                completedBuckets = metricGroup.counter("completedBuckets");
-                // Each subtask reports the same frozen total; aggregate this gauge with MAX.
-                metricGroup.gauge("totalBucketsToLoad", () -> totalBucketsToLoad);
+                initialize(task.path.getTablePath());
             }
             TableBucket result =
                     new TableBucket(handle.getTableId(), task.partitionId, task.bucket);
@@ -658,25 +639,7 @@ final class LoadLakeToFluss {
                                 context.getHandle().getBulkLoadId(),
                                 task.bucket,
                                 task.path);
-                        for (byte[] bytes : task.splits) {
-                            Split split =
-                                    source.getSplitSerializer()
-                                            .deserialize(task.splitVersion, bytes);
-                            try (CloseableIterator<LogRecord> records =
-                                    source.createRecordReader(() -> split).read()) {
-                                while (records.hasNext()) {
-                                    LogRecord record = records.next();
-                                    checkState(
-                                            record.getChangeType() == ChangeType.INSERT
-                                                    || record.getChangeType()
-                                                            == ChangeType.UPDATE_AFTER,
-                                            "Lake snapshot reader must return the final primary-key"
-                                                    + " state.");
-                                    writer.write(record.getRow());
-                                    rowsProcessed.inc();
-                                }
-                            }
-                        }
+                        readSplits(task, writer);
                         writer.commit();
                     }
                     LOG.info(
@@ -700,6 +663,47 @@ final class LoadLakeToFluss {
             }
             completedBuckets.inc();
             return result;
+        }
+
+        private void initialize(TablePath tablePath) throws Exception {
+            // The connection initializes Fluss filesystems with the client.fs.* options.
+            connection = ConnectionFactory.createConnection(config);
+            table = connection.getTable(tablePath);
+            bulkLoad = table.newBulkLoad();
+            // Check once per operator attempt. Finalization can fail after commit, and a
+            // withdrawn target may then have no individual bucket commit to replay.
+            loadCommitted =
+                    await(bulkLoad.getInfo(handle), config).getState()
+                            == BulkLoadInfo.State.COMMITTED;
+            if (!loadCommitted) {
+                // The JobGraph carries the original selection. Idempotent Begin retrieves
+                // the original context without serializing SDK implementation objects.
+                context = await(bulkLoad.begin(handle.getBulkLoadId(), partitionNames), config);
+            }
+            MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
+            rowsProcessed = metricGroup.counter("rowsProcessed");
+            completedBuckets = metricGroup.counter("completedBuckets");
+            // Each subtask reports the same total; aggregate this gauge with MAX.
+            metricGroup.gauge("totalBucketsToLoad", () -> totalBucketsToLoad);
+        }
+
+        private void readSplits(LoadTask task, BulkLoadBucketWriter writer) throws Exception {
+            for (byte[] bytes : task.splits) {
+                Split split = source.getSplitSerializer().deserialize(task.splitVersion, bytes);
+                try (CloseableIterator<LogRecord> records =
+                        source.createRecordReader(() -> split).read()) {
+                    while (records.hasNext()) {
+                        LogRecord record = records.next();
+                        checkState(
+                                record.getChangeType() == ChangeType.INSERT
+                                        || record.getChangeType() == ChangeType.UPDATE_AFTER,
+                                "Lake snapshot reader must return the final primary-key"
+                                        + " state.");
+                        writer.write(record.getRow());
+                        rowsProcessed.inc();
+                    }
+                }
+            }
         }
 
         @Override
@@ -738,44 +742,28 @@ final class LoadLakeToFluss {
                 SinkWriterMetricGroup metricGroup,
                 int subtaskIndex) {
             return new SinkWriter<TableBucket>() {
-                private final Set<TableBucket> completed = new LinkedHashSet<>();
-
                 @Override
-                public void write(TableBucket bucket, Context writerContext) {
-                    checkState(completed.add(bucket), "Duplicate load result for %s.", bucket);
-                }
+                public void write(TableBucket bucket, Context writerContext) {}
 
                 @Override
                 public void flush(boolean endOfInput) throws IOException, InterruptedException {
                     if (!endOfInput) {
                         return;
                     }
-                    try {
+                    try (Connection connection = ConnectionFactory.createConnection(config);
+                            Admin admin = connection.getAdmin()) {
                         Map<TableBucket, Long> offsets = new LinkedHashMap<>();
                         if (handle != null) {
-                            try (Connection connection =
-                                            ConnectionFactory.createConnection(config);
-                                    Table table = connection.getTable(plan.tablePath)) {
-                                BulkLoad bulkLoad = table.newBulkLoad();
-                                BulkLoadInfo info = await(bulkLoad.getInfo(handle), config);
-                                checkState(
-                                        info.getState() != BulkLoadInfo.State.ABORTED,
-                                        "Bulk Load %s was aborted.",
-                                        plan.bulkLoadId);
-                                if (info.getState() == BulkLoadInfo.State.RUNNING) {
-                                    checkState(
-                                            completed.containsAll(expected),
-                                            "Load results do not cover the prepared physical buckets.");
-                                    await(bulkLoad.commit(handle), config);
-                                }
+                            try (Table table = connection.getTable(plan.tablePath)) {
+                                await(table.newBulkLoad().commit(handle), config);
                             }
-                            // Bulk Load produces no WAL during new-table initialization.
-                            // completeLoad removes deleted partitions before registering offsets.
+                            // New-table Bulk Load produces no WAL. Deleted targets are excluded
+                            // before the snapshot is registered.
                             for (TableBucket bucket : expected) {
                                 offsets.put(bucket, 0L);
                             }
                         }
-                        completeLoad(plan, offsets, config);
+                        registerSnapshotAndEnableLake(admin, plan, offsets, config);
                     } catch (InterruptedException e) {
                         throw e;
                     } catch (Exception e) {

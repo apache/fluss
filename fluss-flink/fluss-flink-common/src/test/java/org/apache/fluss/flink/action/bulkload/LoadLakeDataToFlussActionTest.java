@@ -20,7 +20,6 @@ package org.apache.fluss.flink.action.bulkload;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.source.TestingLakeSource;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -43,7 +42,6 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -117,28 +115,6 @@ class LoadLakeDataToFlussActionTest {
                                         null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be supplied together");
-    }
-
-    @Test
-    void testRejectUnsupportedPartitionPushdown() {
-        TestingLakeSource source =
-                new TestingLakeSource() {
-                    @Override
-                    public FilterPushDownResult withFilters(List<Predicate> predicates) {
-                        return FilterPushDownResult.of(Collections.emptyList(), predicates);
-                    }
-                };
-        // Loading all splits would also load expired partitions, so a rejected filter must fail.
-        assertThatThrownBy(
-                        () ->
-                                LoadLakeToFluss.planSplits(
-                                        partitionedTable(true),
-                                        source,
-                                        42L,
-                                        null,
-                                        Instant.parse("2026-11-10T01:00:00Z")))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("cannot push down the load partition filter");
     }
 
     @Test

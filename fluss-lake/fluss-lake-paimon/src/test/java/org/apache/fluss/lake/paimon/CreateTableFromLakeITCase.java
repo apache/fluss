@@ -39,6 +39,7 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
+import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
@@ -50,6 +51,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -57,6 +59,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -146,65 +149,53 @@ class CreateTableFromLakeITCase {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "merge-engine,first-row,table.merge-engine,first_row",
-        "sequence.field,version,table.merge-engine,versioned",
-        "record-level.expire-time,7 d,table.kv.ttl,7 d"
-    })
-    void testRejectUnsupportedBulkLoadOptions(
-            String sourceKey, String sourceValue, String targetKey, String targetValue)
+    @ValueSource(booleans = {true, false})
+    void testRejectUnsupportedBulkLoadOptions(boolean sourceMergeEngine, @TempDir Path tempDir)
             throws Exception {
-        String database = "unsupported_bulkload_" + sourceKey.replace('.', '_').replace('-', '_');
-        TablePath sourcePath = TablePath.of(database, "native_options");
-        TablePath overridePath = TablePath.of(database, "override_options");
-        Schema base =
+        String database =
+                "unsupported_bulkload_"
+                        + (sourceMergeEngine ? "source_merge_engine" : "caller_ttl");
+        TablePath tablePath = TablePath.of(database, "source");
+        Schema.Builder schema =
                 Schema.newBuilder()
                         .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
-                        .column("version", org.apache.paimon.types.DataTypes.BIGINT().notNull())
-                        .column(
-                                "event_time",
-                                org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(3))
+                        .column("payload", org.apache.paimon.types.DataTypes.STRING())
                         .primaryKey("id")
-                        .option(CoreOptions.BUCKET.key(), "3")
-                        .option(CoreOptions.IGNORE_DELETE.key(), "true")
-                        .build();
-        Map<String, String> sourceOptions = new HashMap<>(base.options());
-        sourceOptions.put(sourceKey, sourceValue);
-        if (CoreOptions.RECORD_LEVEL_EXPIRE_TIME.key().equals(sourceKey)) {
-            sourceOptions.put(CoreOptions.RECORD_LEVEL_TIME_FIELD.key(), "event_time");
+                        .option(CoreOptions.BUCKET.key(), "3");
+        if (sourceMergeEngine) {
+            schema.option(CoreOptions.MERGE_ENGINE.key(), "first-row")
+                    .option(CoreOptions.IGNORE_DELETE.key(), "true");
         }
-        createPaimonTable(
-                sourcePath,
-                new Schema(
-                        base.fields(),
-                        base.partitionKeys(),
-                        base.primaryKeys(),
-                        sourceOptions,
-                        base.comment()));
-        createPaimonTable(overridePath, base);
+        createPaimonTable(tablePath, schema.build());
+        FileStoreTable source = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        BatchWriteBuilder writeBuilder = source.newBatchWriteBuilder();
+        try (IOManager ioManager = IOManager.create(tempDir.toString());
+                BatchTableWrite write = writeBuilder.newWrite().withIOManager(ioManager);
+                BatchTableCommit commit = writeBuilder.newCommit()) {
+            write.write(GenericRow.of(1L, BinaryString.fromString("existing")));
+            commit.commit(write.prepareCommit());
+        }
+        Long snapshotId = source.snapshotManager().latestSnapshotId();
+        assertThat(snapshotId).isNotNull();
         assertThat(admin.databaseExists(database).get()).isFalse();
 
-        assertThatThrownBy(
-                        () -> admin.createTableFromLake(sourcePath, Collections.emptyMap()).get())
+        Map<String, String> options =
+                sourceMergeEngine
+                        ? Collections.emptyMap()
+                        : Collections.singletonMap(ConfigOptions.TABLE_KV_TTL.key(), "7 d");
+        assertThatThrownBy(() -> admin.createTableFromLake(tablePath, options).get())
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining("BulkLoad");
-
-        // The same restriction applies after caller options are merged into a plain source.
-        Map<String, String> overrides = new HashMap<>();
-        overrides.put(targetKey, targetValue);
-        if ("versioned".equals(targetValue)) {
-            overrides.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
-        }
-        assertThatThrownBy(() -> admin.createTableFromLake(overridePath, overrides).get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining("BulkLoad");
+                .hasMessageContaining("BulkLoad")
+                .hasMessageContaining(
+                        sourceMergeEngine
+                                ? ConfigOptions.TABLE_MERGE_ENGINE.key()
+                                : ConfigOptions.TABLE_KV_TTL.key());
         assertThat(admin.databaseExists(database).get()).isFalse();
-        assertThat(admin.tableExists(sourcePath).get()).isFalse();
-        assertThat(admin.tableExists(overridePath).get()).isFalse();
-        assertThat(paimonCatalog.getTable(toPaimon(sourcePath)).options())
-                .containsEntry(sourceKey, sourceValue);
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
+        FileStoreTable unchanged = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        assertThat(unchanged.schema()).isEqualTo(source.schema());
+        assertThat(unchanged.snapshotManager().latestSnapshotId()).isEqualTo(snapshotId);
     }
 
     @ParameterizedTest
