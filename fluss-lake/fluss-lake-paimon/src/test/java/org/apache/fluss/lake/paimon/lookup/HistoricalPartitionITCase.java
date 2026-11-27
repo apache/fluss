@@ -289,6 +289,18 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
                                     "+I[1, Alice-latest]", "+I[1, Active-latest]");
                 }
             }
+            assertQueryResults(
+                    tableEnv,
+                    String.format(
+                            "SELECT id, name FROM `%s$stream` "
+                                    + "/*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                    + "'scan.bounded.mode' = 'latest-offset') */",
+                            tablePath.getTableName()),
+                    primaryKey
+                            ? new String[] {
+                                "+I[1, Active]", "-U[1, Active]", "+U[1, Active-updated]"
+                            }
+                            : new String[] {"+I[1, Active]", "+I[1, Active-latest]"});
         } finally {
             dropTable(tablePath);
         }

@@ -423,9 +423,14 @@ public class FlinkTableSource
 
         OffsetsInitializer stoppingOffsetsInitializer = createStoppingOffsetsInitializer();
 
+        Configuration sourceConf = new Configuration(flussConfig);
+        if (!lakeUnionReadEnabled) {
+            // Fluss-only reads must not subscribe to the shared historical partition.
+            sourceConf.set(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, false);
+        }
         FlinkSource<RowData> source =
                 new FlinkSource<>(
-                        flussConfig,
+                        sourceConf,
                         tablePath,
                         hasPrimaryKey(),
                         isPartitioned(),

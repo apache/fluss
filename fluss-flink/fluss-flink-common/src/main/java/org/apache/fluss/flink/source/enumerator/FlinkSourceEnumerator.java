@@ -87,6 +87,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -848,7 +849,13 @@ public class FlinkSourceEnumerator
         }
         try {
             boolean includeHistoricalPartition =
-                    streaming && tableInfo.getTableConfig().isHistoricalPartitionEnabled();
+                    streaming
+                            && flussConf
+                                    .getOptional(TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)
+                                    .orElse(
+                                            tableInfo
+                                                    .getTableConfig()
+                                                    .isHistoricalPartitionEnabled());
             List<PartitionInfo> partitionInfos =
                     flussAdmin.listPartitionInfos(tablePath, includeHistoricalPartition).get();
             return new LinkedHashSet<>(applyPartitionFilter(partitionInfos));
