@@ -510,6 +510,24 @@ class KvBatchScannerTest {
     }
 
     @Test
+    void closeReleasesSessionFromLateOpenResponse() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        CompletableFuture<ScanKvResponse> open = neverCompleting();
+        gateway.enqueue(open);
+        ScanKvResponse opened = parseFromWire(emptyContinuationResponse(SCANNER_ID));
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            assertThat(scanner.pollBatch(Duration.ZERO)).isNotNull();
+        }
+        assertThat(gateway.requests).hasSize(1);
+        open.complete(opened);
+        assertThat(gateway.requests).hasSize(2);
+        assertThat(isCloseRequest(gateway.requests.get(1))).isTrue();
+        assertThat(gateway.requests.get(1).getScannerId()).isEqualTo(SCANNER_ID);
+        assertThat(opened.getParsedByteBuf().refCnt()).isZero();
+    }
+
+    @Test
     void closeScannerBusinessErrorResponseBufIsReleased() throws Exception {
         RecordingGateway gateway = new RecordingGateway();
         gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
@@ -527,7 +545,7 @@ class KvBatchScannerTest {
     void closeReleasesCloseAckCompletedAfterClose() throws Exception {
         RecordingGateway gateway = new RecordingGateway();
         gateway.enqueue(parseFromWire(emptyContinuationResponse(SCANNER_ID)));
-        gateway.enqueue(neverCompleting());
+        gateway.enqueue(emptyContinuationResponse(SCANNER_ID));
         CompletableFuture<ScanKvResponse> closeAck = new CompletableFuture<>();
         gateway.enqueueClose(closeAck);
 
@@ -557,7 +575,7 @@ class KvBatchScannerTest {
         assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT))
                 .isInstanceOf(RuntimeException.class);
         assertThat(invalid.getParsedByteBuf().refCnt()).isEqualTo(0);
-        assertThat(prefetched.getParsedByteBuf().refCnt()).isEqualTo(1);
+        assertThat(prefetched.getParsedByteBuf().refCnt()).isEqualTo(0);
 
         scanner.close();
         assertThat(prefetched.getParsedByteBuf().refCnt()).isEqualTo(0);

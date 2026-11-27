@@ -43,6 +43,7 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
@@ -90,6 +91,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_TOTAL;
@@ -465,6 +467,176 @@ public class ServerConnectionTest {
                     .isInstanceOf(UnsupportedVersionException.class)
                     .hasMessageContaining("requires ALTER_TABLE version 1 or newer")
                     .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testRejectOrderedPointAccessForOldServer() throws Exception {
+        AtomicInteger puts = new AtomicInteger();
+        AtomicInteger lookups = new AtomicInteger();
+        nettyServer.close();
+        buildNettyServer(
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        return super.apiVersions(request)
+                                .thenApply(
+                                        response -> {
+                                            for (PbApiVersion version :
+                                                    response.getApiVersionsList()) {
+                                                if (version.getApiKey() == ApiKeys.PUT_KV.id) {
+                                                    version.setMaxVersion(3);
+                                                } else if (version.getApiKey()
+                                                        == ApiKeys.LOOKUP.id) {
+                                                    version.setMaxVersion(1);
+                                                }
+                                            }
+                                            return response;
+                                        });
+                    }
+
+                    @Override
+                    public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                        puts.incrementAndGet();
+                        return CompletableFuture.completedFuture(new PutKvResponse());
+                    }
+
+                    @Override
+                    public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+                        lookups.incrementAndGet();
+                        return CompletableFuture.completedFuture(new LookupResponse());
+                    }
+                });
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            assertThat(connection.send(ApiKeys.PUT_KV, putKvRequest(null)).get())
+                    .isInstanceOf(PutKvResponse.class);
+            assertThat(connection.send(ApiKeys.LOOKUP, new LookupRequest().setTableId(1L)).get())
+                    .isInstanceOf(LookupResponse.class);
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(
+                                                    ApiKeys.PUT_KV,
+                                                    putKvRequest(null).setOrderedKeys(true))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class);
+            assertThatThrownBy(
+                            () ->
+                                    connection
+                                            .send(
+                                                    ApiKeys.LOOKUP,
+                                                    new LookupRequest()
+                                                            .setTableId(1L)
+                                                            .setOrderedKeys(true))
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class);
+            assertThat(puts).hasValue(1);
+            assertThat(lookups).hasValue(1);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testRejectRangeBoundsForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.ScanKvRequest request =
+                    new org.apache.fluss.rpc.messages.ScanKvRequest();
+            request.setBucketScanReq().setTableId(1).setBucketId(0);
+            connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 0, request);
+            for (boolean reverse : new boolean[] {false, true}) {
+                org.apache.fluss.rpc.messages.ScanKvRequest directed =
+                        new org.apache.fluss.rpc.messages.ScanKvRequest();
+                directed.setBucketScanReq().setTableId(1).setBucketId(0).setReverse(reverse);
+                assertThatThrownBy(
+                                () ->
+                                        connection.validateVersionCompatibility(
+                                                ApiKeys.SCAN_KV, (short) 0, directed))
+                        .isInstanceOf(UnsupportedVersionException.class);
+                connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 1, directed);
+            }
+
+            request.getBucketScanReq().setStartKey(new byte[] {1});
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.SCAN_KV, (short) 0, request))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("SCAN_KV version 1");
+            connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 1, request);
+            org.apache.fluss.rpc.messages.ScanKvRequest upperOnly =
+                    new org.apache.fluss.rpc.messages.ScanKvRequest();
+            upperOnly.setBucketScanReq().setTableId(1).setBucketId(0).setEndKey(new byte[] {2});
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.SCAN_KV, (short) 0, upperOnly))
+                    .isInstanceOf(UnsupportedVersionException.class);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testRejectBoundedPrefixLookupForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.PrefixLookupRequest request =
+                    new org.apache.fluss.rpc.messages.PrefixLookupRequest().setTableId(1);
+            org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket bucket =
+                    request.addBucketsReq().setBucketId(0);
+            bucket.addKey(new byte[] {1});
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 1, request);
+            for (boolean reverse : new boolean[] {false, true}) {
+                org.apache.fluss.rpc.messages.PrefixLookupRequest directed =
+                        new org.apache.fluss.rpc.messages.PrefixLookupRequest().setTableId(1);
+                directed.addBucketsReq()
+                        .setBucketId(0)
+                        .addLookup()
+                        .setPrefixKey(new byte[] {1})
+                        .setReverse(reverse);
+                assertThatThrownBy(
+                                () ->
+                                        connection.validateVersionCompatibility(
+                                                ApiKeys.PREFIX_LOOKUP, (short) 1, directed))
+                        .isInstanceOf(UnsupportedVersionException.class);
+                connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, directed);
+            }
+
+            bucket.clearKeys();
+            bucket.addLookup().setPrefixKey(new byte[] {1}).setStartKey(new byte[] {1, 2});
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.PREFIX_LOOKUP, (short) 1, request))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("PREFIX_LOOKUP version 2");
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, request);
         } finally {
             connection.close().get();
         }

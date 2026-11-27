@@ -18,11 +18,14 @@
 package org.apache.fluss.client.table.scanner;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.utils.Range;
 
 import javax.annotation.Nullable;
 
@@ -39,6 +42,53 @@ import java.util.List;
  */
 @PublicEvolving
 public interface Scan {
+
+    /**
+     * Returns a new configuration with the given index traversal direction. Repeated calls replace
+     * the direction. Requires an ordered-key table; validation happens when the reader is created.
+     * Ordered reads default to {@link ReadDirection#FORWARD}.
+     *
+     * <p>Direction applies to the whole physical index key, including fields after the range
+     * column. The order covers all batches and buckets in the scan. Equal physical keys across
+     * partitions have unspecified relative order. Log and snapshot-ID scanners do not support
+     * explicit direction.
+     *
+     * @param direction the index traversal direction
+     */
+    default Scan direction(ReadDirection direction) {
+        throw new UnsupportedOperationException("Read direction is not supported.");
+    }
+
+    /**
+     * Returns a new scan with the given equality conditions for an index range scan. Values follow
+     * the order of the column names. Repeated calls replace the entire equality condition set. The
+     * column names and values are copied before this method returns.
+     *
+     * <p>Currently, batch range scans require both this configuration and {@link #range}, an
+     * order-preserving key format and a routable primary-key index path.
+     */
+    default Scan equalTo(List<String> columnNames, InternalRow values) {
+        throw new UnsupportedOperationException("Equality range configuration is not supported.");
+    }
+
+    /**
+     * Returns a new scan with a range on the given table column. Repeated calls replace the range
+     * column and bounds. Endpoint values are copied before this method returns.
+     *
+     * <p>Currently, excluding partition columns, equality conditions must identify a physical
+     * primary-key prefix containing all bucket fields. All partition fields require equality
+     * values, and the range column must immediately follow the physical prefix. Batch range scans
+     * require {@code table.kv.ordered-key.enabled=true}. Log and snapshot scanners do not support
+     * index range conditions.
+     *
+     * <p>Each finite endpoint must contain exactly one non-null field of the range column's
+     * internal type. Reversed bounds are invalid. The scanner holds a fixed KV view across batches.
+     * Results follow index key order across batches. A configured limit selects the first rows in
+     * the chosen direction.
+     */
+    default Scan range(String columnName, Range<? extends InternalRow> bounds) {
+        throw new UnsupportedOperationException("Range configuration is not supported.");
+    }
 
     /**
      * Returns a new scan from this that will read the given data columns.
@@ -89,8 +139,9 @@ public interface Scan {
     /**
      * Creates a {@link BatchScanner} to read current data in the given table bucket.
      *
-     * <p>For Primary Key Tables, this performs a full RocksDB-backed KV scan of the bucket and does
-     * not require {@link #limit(int)}. For Log Tables, {@link #limit(int)} must be set.
+     * <p>For Primary Key Tables, this reads the RocksDB-backed KV data in the bucket, applying any
+     * configured index range conditions, and does not require {@link #limit(int)}. For Log Tables,
+     * {@link #limit(int)} must be set.
      */
     BatchScanner createBatchScanner(TableBucket tableBucket);
 
@@ -105,7 +156,8 @@ public interface Scan {
 
     /**
      * Creates a {@link BatchScanner} that scans across all buckets of the table, expanding all
-     * partitions for partitioned tables. For Log Tables, {@link #limit(int)} must be set.
+     * partitions for partitioned tables. Configured index range conditions prune the buckets
+     * accessed and constrain the returned rows. For Log Tables, {@link #limit(int)} must be set.
      */
     BatchScanner createBatchScanner() throws IOException;
 }

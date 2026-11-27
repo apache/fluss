@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
@@ -48,10 +49,10 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * that is responsible for turning these lookup operations into network requests and transmitting
  * them to the cluster.
  *
- * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean, String)} method is asynchronous,
- * when called, it adds the lookup operation to a queue of pending lookup operations and immediately
- * returns. This allows the lookup operations to batch together individual lookup operations for
- * efficiency.
+ * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean, String, int, boolean)} method is
+ * asynchronous, when called, it adds the lookup operation to a queue of pending lookup operations
+ * and immediately returns. This allows the lookup operations to batch together individual lookup
+ * operations for efficiency.
  */
 @ThreadSafe
 @Internal
@@ -125,6 +126,8 @@ public class LookupClient {
      * @param originalPartitionName null for a regular lookup against an active Fluss partition; the
      *     original partition name for a historical lookup against a partition whose Fluss data has
      *     expired and is looked up from lake storage
+     * @param bucketCount the bucket count used to route the key
+     * @param orderedKeys whether the key uses the ordered primary-key encoding
      * @return a future containing the serialized value, or null if the key does not exist
      */
     public CompletableFuture<byte[]> lookup(
@@ -133,7 +136,8 @@ public class LookupClient {
             byte[] keyBytes,
             boolean insertIfNotExists,
             @Nullable String originalPartitionName,
-            int bucketCount) {
+            int bucketCount,
+            boolean orderedKeys) {
         LookupQuery lookup =
                 new LookupQuery(
                         tablePath,
@@ -141,15 +145,29 @@ public class LookupClient {
                         keyBytes,
                         insertIfNotExists,
                         originalPartitionName,
-                        bucketCount);
+                        bucketCount,
+                        orderedKeys);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
     public CompletableFuture<List<byte[]>> prefixLookup(
             TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
+        return prefixLookup(tablePath, tableBucket, keyBytes, bucketCount, null, null, null);
+    }
+
+    /** Adds an index prefix read with optional bounds and direction. */
+    public CompletableFuture<List<byte[]>> prefixLookup(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            int bucketCount,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey,
+            @Nullable ReadDirection direction) {
         PrefixLookupQuery prefixLookup =
-                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCount);
+                new PrefixLookupQuery(
+                        tablePath, tableBucket, keyBytes, bucketCount, startKey, endKey, direction);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

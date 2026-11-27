@@ -18,15 +18,21 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.stream.Collectors;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** API for configuring and creating {@link Lookuper}. */
 public class TableLookup implements Lookup {
@@ -37,6 +43,8 @@ public class TableLookup implements Lookup {
     private final LookupClient lookupClient;
 
     @Nullable private final List<String> lookupColumnNames;
+    @Nullable private final String rangeColumn;
+    @Nullable private final ReadDirection direction;
 
     private final boolean insertIfNotExists;
 
@@ -45,7 +53,7 @@ public class TableLookup implements Lookup {
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient) {
-        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false);
+        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false, null, null);
     }
 
     private TableLookup(
@@ -54,19 +62,46 @@ public class TableLookup implements Lookup {
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             @Nullable List<String> lookupColumnNames,
-            boolean insertIfNotExists) {
+            boolean insertIfNotExists,
+            @Nullable String rangeColumn,
+            @Nullable ReadDirection direction) {
         this.tableInfo = tableInfo;
         this.schemaGetter = schemaGetter;
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
-        this.lookupColumnNames = lookupColumnNames;
+        this.lookupColumnNames =
+                lookupColumnNames == null
+                        ? null
+                        : Collections.unmodifiableList(new ArrayList<>(lookupColumnNames));
         this.insertIfNotExists = insertIfNotExists;
+        this.rangeColumn = rangeColumn;
+        this.direction = direction;
+    }
+
+    @Override
+    public Lookup direction(ReadDirection direction) {
+        return new TableLookup(
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                lookupColumnNames,
+                insertIfNotExists,
+                rangeColumn,
+                checkNotNull(direction, "direction"));
     }
 
     @Override
     public Lookup enableInsertIfNotExists() {
         return new TableLookup(
-                tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames, true);
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                lookupColumnNames,
+                true,
+                rangeColumn,
+                direction);
     }
 
     @Override
@@ -77,11 +112,35 @@ public class TableLookup implements Lookup {
                 metadataUpdater,
                 lookupClient,
                 lookupColumnNames,
-                insertIfNotExists);
+                insertIfNotExists,
+                rangeColumn,
+                direction);
+    }
+
+    @Override
+    public Lookup rangeBy(String columnName) {
+        return new TableLookup(
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                lookupColumnNames,
+                insertIfNotExists,
+                checkNotNull(columnName, "columnName"),
+                direction);
     }
 
     @Override
     public Lookuper createLookuper() {
+        checkArgument(
+                direction == null || tableInfo.getTableConfig().isOrderedKeyEnabled(),
+                "Read direction requires table.kv.ordered-key.enabled=true.");
+        checkArgument(
+                rangeColumn == null || lookupColumnNames != null,
+                "Range lookup requires explicit lookupBy columns.");
+        checkArgument(
+                rangeColumn == null || !insertIfNotExists,
+                "Range lookup cannot be combined with insert-if-not-exists.");
         if (lookupColumnNames == null) {
             if (insertIfNotExists) {
                 // get all non-nullable columns that are not primary key columns and auto increment
@@ -128,7 +187,13 @@ public class TableLookup implements Lookup {
                                 + ". Please use primary key lookup (Lookuper without lookupBy) instead.");
             }
             return new PrefixKeyLookuper(
-                    tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
+                    tableInfo,
+                    schemaGetter,
+                    metadataUpdater,
+                    lookupClient,
+                    lookupColumnNames,
+                    rangeColumn,
+                    direction);
         }
     }
 

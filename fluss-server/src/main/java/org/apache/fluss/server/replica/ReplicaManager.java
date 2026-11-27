@@ -73,6 +73,7 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -802,7 +803,8 @@ public class ReplicaManager implements ServerReconfigurable {
      * Put kv records to leader replicas of the buckets, the kv data will write to kv tablet and the
      * response callback need to wait for the cdc log to be replicated to other replicas if needed.
      *
-     * @param apiVersion the client API version for backward compatibility validation
+     * @param apiKey the API that originated the write, including LOOKUP for insert-if-not-exists
+     * @param apiVersion the originating API version for backward compatibility validation
      */
     public void putRecordsToKv(
             int timeoutMs,
@@ -810,6 +812,7 @@ public class ReplicaManager implements ServerReconfigurable {
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            ApiKeys apiKey,
             short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
@@ -819,7 +822,13 @@ public class ReplicaManager implements ServerReconfigurable {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
+                putToLocalKv(
+                        entriesPerBucket,
+                        targetColumns,
+                        mergeMode,
+                        requiredAcks,
+                        apiKey,
+                        apiVersion);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -901,7 +910,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 throw new InvalidPartitionException(
                         "Historical write request must target a historical partition.");
             }
-            validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+            validateClientVersionForPkTable(ApiKeys.PUT_KV, apiVersion, replica.getTableInfo());
 
             KvRecordBatch records = putData.records();
             checkArgument(
@@ -1017,9 +1026,14 @@ public class ReplicaManager implements ServerReconfigurable {
         lookups(false, null, null, entriesPerBucket, apiVersion, responseCallback);
     }
 
-    /** Lookup historical lake data for requests that carry original partition names. */
+    /**
+     * Lookup historical lake data for requests that carry original partition names.
+     *
+     * @param apiVersion the LOOKUP request version for backward compatibility validation
+     */
     public void historicalLookups(
             List<LookupDataForBucket> lookupData,
+            short apiVersion,
             Consumer<List<LookupResultForBucket>> responseCallback) {
         if (lookupData.isEmpty()) {
             responseCallback.accept(Collections.emptyList());
@@ -1045,6 +1059,7 @@ public class ReplicaManager implements ServerReconfigurable {
                     throw new InvalidPartitionException(
                             "Historical lookup request must target a historical partition.");
                 }
+                validateClientVersionForPkTable(ApiKeys.LOOKUP, apiVersion, replica.getTableInfo());
                 lookupFuture =
                         historicalPartitionManager.lookup(
                                 replica, data, replica.tableMetrics()::recordHistoricalLakeLookup);
@@ -1100,7 +1115,7 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = entry.getKey();
             try {
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(ApiKeys.LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
                 lookupResultForBucketMap.put(
@@ -1153,6 +1168,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         produceEntryData,
                         schema.getPrimaryKeyIndexes(),
                         MergeMode.DEFAULT,
+                        ApiKeys.LOOKUP,
                         apiVersion,
                         (result) ->
                                 responseCallback.accept(
@@ -1220,21 +1236,34 @@ public class ReplicaManager implements ServerReconfigurable {
      * @param apiVersion the client API version for backward compatibility validation
      */
     public void prefixLookups(
-            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            Map<TableBucket, List<PbPrefixLookupKey>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
         TableMetricGroup tableMetrics = null;
         Map<TableBucket, PrefixLookupResultForBucket> result = new HashMap<>();
-        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+        for (Map.Entry<TableBucket, List<PbPrefixLookupKey>> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
             List<List<ByteArraySlice>> resultForBucket = new ArrayList<>();
             try {
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(
+                        ApiKeys.PREFIX_LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
-                for (byte[] prefixKey : entry.getValue()) {
-                    List<ByteArraySlice> resultForPerKey = replica.prefixLookup(prefixKey);
+                for (PbPrefixLookupKey key : entry.getValue()) {
+                    if (key.hasStartKey() || key.hasEndKey() || key.hasReverse()) {
+                        if (apiVersion < 2
+                                || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
+                            throw new UnsupportedVersionException(
+                                    "Ordered or bounded prefix lookups require PREFIX_LOOKUP v2 and ordered keys.");
+                        }
+                    }
+                    List<ByteArraySlice> resultForPerKey =
+                            replica.prefixLookup(
+                                    key.getPrefixKey(),
+                                    key.hasStartKey() ? key.getStartKey() : null,
+                                    key.hasEndKey() ? key.getEndKey() : null,
+                                    key.hasReverse() && key.isReverse());
                     resultForBucket.add(resultForPerKey);
                 }
                 result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));
@@ -1706,6 +1735,7 @@ public class ReplicaManager implements ServerReconfigurable {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             int requiredAcks,
+            ApiKeys apiKey,
             short apiVersion) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
@@ -1714,7 +1744,7 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(apiKey, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -2765,7 +2795,18 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     /** Validates whether a client API version can access this primary-key table. */
-    public static void validateClientVersionForPkTable(int apiVersion, TableInfo tableInfo) {
+    public static void validateClientVersionForPkTable(
+            ApiKeys apiKey, int apiVersion, TableInfo tableInfo) {
+        if (tableInfo.getTableConfig().isOrderedKeyEnabled()) {
+            int minimum =
+                    apiKey == ApiKeys.PUT_KV
+                            ? ApiKeys.ORDERED_KEYS_PUT_KV_MIN_VERSION
+                            : ApiKeys.ORDERED_KEYS_LOOKUP_MIN_VERSION;
+            if (apiVersion < minimum) {
+                throw new UnsupportedVersionException(
+                        "Ordered keys require " + apiKey + " version " + minimum + " or newer.");
+            }
+        }
         if (apiVersion >= 1) {
             return;
         }

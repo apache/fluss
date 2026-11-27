@@ -18,6 +18,8 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.utils.Range;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -33,8 +35,27 @@ public interface TypedLookuper<T> {
     /**
      * Lookups certain row from the given lookup key.
      *
+     * <p>A lookuper configured with {@link Lookup#rangeBy(String)} requires {@link #lookup(Object,
+     * Range)} instead.
+     *
      * @param lookupKey the lookup key
      * @return the result of lookup.
+     * @throws UnsupportedOperationException if the lookuper requires range bounds
      */
     CompletableFuture<LookupResult> lookup(T lookupKey);
+
+    /**
+     * Looks up rows using the POJO equality key and bounds for the configured range column.
+     *
+     * <p>Has the same semantics as {@link Lookuper#lookup(org.apache.fluss.row.InternalRow,
+     * Range)}.
+     *
+     * @param lookupKey values for the configured lookup columns
+     * @param bounds the range bounds
+     * @return the complete lookup result
+     */
+    default CompletableFuture<LookupResult> lookup(
+            T lookupKey, Range<? extends InternalRow> bounds) {
+        throw new UnsupportedOperationException("This lookuper does not support range bounds.");
+    }
 }

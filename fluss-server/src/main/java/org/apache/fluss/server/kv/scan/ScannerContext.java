@@ -27,8 +27,10 @@ import org.apache.fluss.utils.IOUtils;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
 import io.github.fluss_contrib.rocksdb.Snapshot;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.Closeable;
@@ -55,6 +57,8 @@ public class ScannerContext implements Closeable {
     private final ReadOptions readOptions;
     private final Snapshot snapshot;
     private final ResourceGuard.Lease resourceLease;
+    @Nullable private final Slice iteratorBound;
+    private final boolean reverse;
 
     /** Log offset captured when the snapshot was opened. */
     private final long logOffset;
@@ -84,6 +88,37 @@ public class ScannerContext implements Closeable {
             long logOffset,
             long initialAccessTimeMs,
             KvValueLayout kvValueLayout) {
+        this(
+                scannerId,
+                tableBucket,
+                rocksDBKv,
+                iterator,
+                readOptions,
+                snapshot,
+                resourceLease,
+                limit,
+                logOffset,
+                initialAccessTimeMs,
+                kvValueLayout,
+                null,
+                false);
+    }
+
+    /** Creates a scan session owning its optional iterator bound slice. */
+    public ScannerContext(
+            String scannerId,
+            TableBucket tableBucket,
+            RocksDBKv rocksDBKv,
+            RocksIterator iterator,
+            ReadOptions readOptions,
+            Snapshot snapshot,
+            ResourceGuard.Lease resourceLease,
+            long limit,
+            long logOffset,
+            long initialAccessTimeMs,
+            KvValueLayout kvValueLayout,
+            @Nullable Slice iteratorBound,
+            boolean reverse) {
         this.scannerId = scannerId;
         this.scannerIdBytes = scannerId.getBytes(StandardCharsets.UTF_8);
         this.tableBucket = tableBucket;
@@ -93,6 +128,8 @@ public class ScannerContext implements Closeable {
         this.readOptions = readOptions;
         this.snapshot = snapshot;
         this.resourceLease = resourceLease;
+        this.iteratorBound = iteratorBound;
+        this.reverse = reverse;
         this.remainingLimit = limit <= 0 ? -1L : limit;
         this.logOffset = logOffset;
         this.lastAccessTime = initialAccessTimeMs;
@@ -131,17 +168,22 @@ public class ScannerContext implements Closeable {
 
     /** Advances the cursor; must be called only when {@link #isValid()} is {@code true}. */
     public void advance() {
-        iterator.next();
+        if (reverse) {
+            iterator.prev();
+        } else {
+            iterator.next();
+        }
         if (remainingLimit > 0) {
             remainingLimit--;
         }
     }
 
     /**
-     * Surfaces RocksDB-internal iterator errors. {@link RocksIterator#next()} does not throw on
-     * such errors; instead the iterator silently transitions to invalid. Callers MUST invoke this
-     * once iteration has stopped, otherwise an internal failure would be indistinguishable from a
-     * clean end-of-range and the client would think the scan completed when rows were dropped.
+     * Surfaces RocksDB-internal iterator errors. {@link RocksIterator#next()} and {@link
+     * RocksIterator#prev()} do not throw on such errors; instead the iterator transitions to
+     * invalid. Callers MUST invoke this once iteration has stopped, otherwise an internal failure
+     * would be indistinguishable from a clean end-of-range and the client would think the scan
+     * completed when rows were dropped.
      *
      * @throws KvStorageException if the iterator reports an internal error
      */
@@ -213,6 +255,7 @@ public class ScannerContext implements Closeable {
             inUse.set(false);
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
+            IOUtils.closeQuietly(iteratorBound);
             IOUtils.closeQuietly(() -> rocksDBKv.getDb().releaseSnapshot(snapshot));
             IOUtils.closeQuietly(snapshot);
             IOUtils.closeQuietly(resourceLease);

@@ -54,12 +54,14 @@ public enum ApiKeys {
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
     // Version 3: Supports original_partition_name in requests and responses for historical writes.
-    PUT_KV(1016, 0, 3, PUBLIC),
+    // Version 4: Supports ordered primary keys.
+    PUT_KV(1016, 0, 4, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    LOOKUP(1017, 0, 1, PUBLIC),
+    // Version 2: Supports ordered primary keys.
+    LOOKUP(1017, 0, 2, PUBLIC),
 
     NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
     STOP_REPLICA(1019, 0, 0, PRIVATE),
@@ -82,7 +84,8 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for prefix key encoding when bucket key differs from
     //            primary key, ensuring encoded bucket key bytes are a prefix of primary key bytes.
-    PREFIX_LOOKUP(1034, 0, 1, PUBLIC),
+    // Version 2: Supports ordered primary-key prefixes and per-lookup range bounds and direction.
+    PREFIX_LOOKUP(1034, 0, 2, PUBLIC),
 
     GET_DATABASE_INFO(1035, 0, 0, PUBLIC),
     CREATE_PARTITION(1036, 0, 0, PUBLIC),
@@ -115,7 +118,8 @@ public enum ApiKeys {
     DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC),
     GET_TABLE_STATS(1059, 0, 0, PUBLIC),
     ALTER_DATABASE(1060, 0, 0, PUBLIC),
-    SCAN_KV(1061, 0, 0, PUBLIC),
+    // Version 1: Supports ordered reads with bounds and direction in new scan requests.
+    SCAN_KV(1061, 0, 1, PUBLIC),
     GET_CLUSTER_HEALTH(1062, 0, 0, PUBLIC),
     LIST_REMOTE_LOG_MANIFESTS(1063, 0, 0, PUBLIC),
     LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC),
@@ -145,6 +149,12 @@ public enum ApiKeys {
                     .collect(Collectors.toMap(key -> (int) key.id, Function.identity()));
 
     /** the permanent and immutable id of an API - this can't change ever. */
+    /** First PUT_KV version that supports ordered primary keys. */
+    public static final short ORDERED_KEYS_PUT_KV_MIN_VERSION = 4;
+
+    /** First LOOKUP version that supports ordered primary keys. */
+    public static final short ORDERED_KEYS_LOOKUP_MIN_VERSION = 2;
+
     public final short id;
 
     public final short lowestSupportedVersion;

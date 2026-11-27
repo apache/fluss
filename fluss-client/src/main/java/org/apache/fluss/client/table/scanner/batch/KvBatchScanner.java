@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.scanner.batch;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -85,6 +86,11 @@ public final class KvBatchScanner implements BatchScanner {
     private final int targetSchemaId;
     private final int batchSizeBytes;
     @Nullable private final int[] projectedColumns;
+    @Nullable private final byte[] startKey;
+    @Nullable private final byte[] endKey;
+    @Nullable private final Integer limit;
+    @Nullable private final Integer routingBucketCount;
+    @Nullable private final ReadDirection direction;
     private final Map<Short, int[]> schemaMappingCache = new HashMap<>();
     private final ValueRecordReadContext readContext;
 
@@ -105,6 +111,33 @@ public final class KvBatchScanner implements BatchScanner {
             MetadataUpdater metadataUpdater,
             int batchSizeBytes,
             @Nullable int[] projectedColumns) {
+        this(
+                tableInfo,
+                tableBucket,
+                schemaGetter,
+                metadataUpdater,
+                batchSizeBytes,
+                projectedColumns,
+                null,
+                null,
+                null,
+                null,
+                null);
+    }
+
+    /** Creates a scanner with fixed physical bounds and the bucket count used for routing. */
+    public KvBatchScanner(
+            TableInfo tableInfo,
+            TableBucket tableBucket,
+            SchemaGetter schemaGetter,
+            MetadataUpdater metadataUpdater,
+            int batchSizeBytes,
+            @Nullable int[] projectedColumns,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey,
+            @Nullable Integer limit,
+            @Nullable Integer routingBucketCount,
+            @Nullable ReadDirection direction) {
         this.tablePath = tableInfo.getTablePath();
         this.bucket = tableBucket;
         this.schemaGetter = schemaGetter;
@@ -112,6 +145,11 @@ public final class KvBatchScanner implements BatchScanner {
         this.targetSchemaId = tableInfo.getSchemaId();
         this.batchSizeBytes = Math.max(1, batchSizeBytes);
         this.projectedColumns = projectedColumns;
+        this.startKey = startKey == null ? null : startKey.clone();
+        this.endKey = endKey == null ? null : endKey.clone();
+        this.limit = limit;
+        this.routingBucketCount = routingBucketCount;
+        this.direction = direction;
         this.readContext =
                 ValueRecordReadContext.createReadContext(
                         schemaGetter, tableInfo.getTableConfig().getKvFormat());
@@ -171,6 +209,9 @@ public final class KvBatchScanner implements BatchScanner {
                 return drained ? null : CloseableIterator.emptyIterator();
             }
             return CloseableIterator.wrap(parseRecords(response).iterator());
+        } catch (RuntimeException e) {
+            terminate();
+            throw e;
         } finally {
             // getRecords() copies the data, so returned rows no longer reference this buffer.
             releaseResponse(response);
@@ -216,6 +257,21 @@ public final class KvBatchScanner implements BatchScanner {
         }
         cluster.getBucketCount(TableOrPartition.of(bucket.getTableId(), bucket.getPartitionId()))
                 .ifPresent(bucketReq::setRoutingBucketCount);
+        if (routingBucketCount != null) {
+            bucketReq.setRoutingBucketCount(routingBucketCount);
+        }
+        if (direction != null) {
+            bucketReq.setReverse(direction == ReadDirection.REVERSE);
+        }
+        if (startKey != null) {
+            bucketReq.setStartKey(startKey);
+        }
+        if (endKey != null) {
+            bucketReq.setEndKey(endKey);
+        }
+        if (limit != null) {
+            bucketReq.setLimit(limit);
+        }
 
         ScanKvRequest request =
                 new ScanKvRequest()
@@ -304,22 +360,42 @@ public final class KvBatchScanner implements BatchScanner {
         }
         CompletableFuture<ScanKvResponse> pending = inFlight;
         inFlight = null;
-        if (pending != null) {
-            pending.whenComplete((response, throwable) -> releaseResponse(response));
+        if (pending == null) {
+            if (!drained) {
+                sendBestEffortClose(scannerId);
+            }
+        } else {
+            // A close must follow the in-flight call. In particular, the open response may
+            // be the only place where the server tells us which snapshot to close.
+            byte[] knownScannerId = scannerId;
+            pending.whenComplete(
+                    (response, throwable) -> {
+                        try {
+                            if (response != null
+                                    && response.hasHasMoreResults()
+                                    && !response.isHasMoreResults()) {
+                                return;
+                            }
+                            byte[] id =
+                                    response != null && response.hasScannerId()
+                                            ? response.getScannerId()
+                                            : knownScannerId;
+                            sendBestEffortClose(id);
+                        } finally {
+                            releaseResponse(response);
+                        }
+                    });
         }
-        sendBestEffortClose();
     }
 
-    private void sendBestEffortClose() {
-        // After natural EOF the server already closed the session; sending close_scanner is
-        // unnecessary and would be a stale request.
-        if (scannerId == null || gateway == null || drained) {
+    private void sendBestEffortClose(@Nullable byte[] id) {
+        if (id == null || gateway == null) {
             return;
         }
         try {
             gateway.scanKv(
                             new ScanKvRequest()
-                                    .setScannerId(scannerId)
+                                    .setScannerId(id)
                                     .setBatchSizeBytes(batchSizeBytes)
                                     .setCloseScanner(true))
                     .whenComplete(

@@ -42,6 +42,7 @@ import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.OrderedKeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -1059,6 +1060,65 @@ class PaimonLakeTableLookuperTest {
             assertThat(newValue.row.getInt(0)).isEqualTo(2);
             assertThat(newValue.row.getString(2).toString()).isEqualTo("Bob");
             assertThat(newValue.row.getString(3).toString()).isEqualTo("new-value");
+        }
+    }
+
+    @ParameterizedTest(name = "lookupMode={0}")
+    @EnumSource(LakeLookupMode.class)
+    void testLookupOrderedKeys(LakeLookupMode lookupMode) throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("sub_id", DataTypes.STRING())
+                        .column("dt", DataTypes.STRING())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id", "sub_id", "dt")
+                        .build();
+        for (boolean defaultBucketKey : new boolean[] {false, true}) {
+            TablePath tablePath = TablePath.of(DB, "ordered_" + defaultBucketKey);
+            TableDescriptor.Builder descriptor =
+                    TableDescriptor.builder().schema(schema).partitionedBy("dt");
+            if (defaultBucketKey) {
+                descriptor.distributedBy(16);
+            } else {
+                descriptor.distributedBy(16, "id");
+            }
+            FileStoreTable table = createPaimonTable(tablePath, descriptor.build());
+            byte[] bucketKey =
+                    new PaimonKeyEncoder(
+                                    schema.getRowType(),
+                                    defaultBucketKey
+                                            ? Arrays.asList("id", "sub_id")
+                                            : Collections.singletonList("id"))
+                            .encodeKey(row(-256, "sub-1", "20240101", "Alice"));
+            int expectedBucket = new PaimonBucketingFunction().bucketing(bucketKey, 16);
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            expectedBucket,
+                            Collections.singletonList(
+                                    paimonRow(-256, "sub-1", "20240101", "Alice"))));
+            Configuration config = new Configuration();
+            config.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, KV_FORMAT_VERSION_2);
+            config.set(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true);
+            config.set(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE, lookupMode);
+            try (LakeTableLookuper lookuper =
+                    createLookuper(tablePath, new TableConfig(config), NO_OP_DISK_WRITE_GUARD)) {
+                byte[] key =
+                        OrderedKeyEncoder.createKeyEncoder(
+                                        schema.getRowType(), Arrays.asList("id", "sub_id"))
+                                .encodeKey(row(-256, "sub-1", "20240101", ""));
+                for (Integer bucket : Arrays.asList(expectedBucket, null)) {
+                    BinaryValue value =
+                            decodeValue(
+                                    lookuper.lookup(
+                                            key,
+                                            lookupContext(schema, "20240101", bucket, SCHEMA_ID)),
+                                    SCHEMA_ID,
+                                    schema);
+                    assertRow(value.row, -256, "sub-1", "20240101", "Alice");
+                }
+            }
         }
     }
 
