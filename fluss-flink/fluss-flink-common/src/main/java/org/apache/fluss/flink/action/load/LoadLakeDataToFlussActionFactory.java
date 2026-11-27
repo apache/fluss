@@ -97,6 +97,7 @@ public class LoadLakeDataToFlussActionFactory implements ActionFactory {
                 + "Supply the snapshot ID and Bulk Load ID together, preserving the original"
                 + " pair on retries.\n"
                 + "Retries use the original transaction's frozen partitions.\n"
+                + "Deleted physical targets are skipped, including when their names are reused.\n"
                 + "Stop all old writers before resubmission. Failures preserve the original"
                 + " transaction.\n"
                 + "The job preserves the historical-partition setting and configured restart"

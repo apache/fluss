@@ -157,18 +157,32 @@ final class LoadLakeToFluss {
     private static Set<String> restorePartitions(
             Admin admin, TableInfo table, BulkLoadInfo previous, Configuration config)
             throws Exception {
-        Map<Long, String> originalNames = new LinkedHashMap<>();
+        Map<Long, String> currentNames = new LinkedHashMap<>();
         for (PartitionInfo partition :
                 await(admin.listPartitionInfos(table.getTablePath()), config)) {
-            originalNames.put(partition.getPartitionId(), partition.getPartitionName());
+            currentNames.put(partition.getPartitionId(), partition.getPartitionName());
         }
         Set<String> selectedPartitions = new LinkedHashSet<>();
         for (BulkLoadInfo.TargetProgress target : previous.getTargets()) {
-            String name = originalNames.get(target.getPartitionId());
+            String name = target.getPartitionName();
+            if (name == null) {
+                // Older coordinators omit the frozen name. Live targets remain resumable.
+                name = currentNames.get(target.getPartitionId());
+            }
             checkState(
                     name != null,
-                    "Cannot recover the original name of deleted partition %s with the current Bulk Load SDK.",
+                    "The coordinator did not return the original name for deleted partition %s. "
+                            + "Upgrade the coordinator before resuming this Bulk Load.",
                     target.getPartitionId());
+            if (!currentNames.containsKey(target.getPartitionId())) {
+                LOG.warn(
+                        "Bulk Load {} target {} (partition ID {}) was deleted and will be skipped.",
+                        previous.getHandle().getBulkLoadId(),
+                        name,
+                        target.getPartitionId());
+            }
+            // Replay Begin with the complete original names. The writer uses the frozen ID to
+            // skip a withdrawn target, even if a new partition has since reused its name.
             selectedPartitions.add(name);
         }
         return selectedPartitions;
@@ -561,6 +575,7 @@ final class LoadLakeToFluss {
         private final BulkLoadBuildContext context;
         private final LakeSource<Split> source;
         private transient Connection connection;
+        private transient boolean loadCommitted;
         private transient Counter rowsProcessed;
         private transient Counter completedBuckets;
 
@@ -576,6 +591,12 @@ final class LoadLakeToFluss {
             if (connection == null) {
                 // The connection initializes Fluss filesystems with the client.fs.* options.
                 connection = ConnectionFactory.createConnection(config);
+                // Check once per operator attempt. Finalization can fail after commit, and a
+                // withdrawn target may then have no individual bucket commit to replay.
+                loadCommitted =
+                        await(connection.getAdmin().getBulkLoadInfo(context.getHandle()), config)
+                                        .getState()
+                                == BulkLoadInfo.State.COMMITTED;
                 MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
                 rowsProcessed = metricGroup.counter("rowsProcessed");
                 completedBuckets = metricGroup.counter("completedBuckets");
@@ -590,6 +611,18 @@ final class LoadLakeToFluss {
             checkState(
                     Objects.equals(target.getPartitionId(), task.partitionId),
                     "Load task no longer belongs to the original physical partition.");
+            TableBucket result =
+                    new TableBucket(
+                            context.getHandle().getTableId(), target.getPartitionId(), task.bucket);
+            if (loadCommitted) {
+                LOG.info(
+                        "Skipping Bulk Load {} bucket {} of {} because the transaction is already committed.",
+                        context.getHandle().getBulkLoadId(),
+                        task.bucket,
+                        task.path);
+                completedBuckets.inc();
+                return result;
+            }
             try {
                 Optional<BulkLoadBucketWriter> opened =
                         connection.tryOpenBulkLoadBucketWriter(target, task.bucket);
@@ -641,8 +674,7 @@ final class LoadLakeToFluss {
                 LOG.info("Skipping deleted Bulk Load target {}.", target.getPath());
             }
             completedBuckets.inc();
-            return new TableBucket(
-                    context.getHandle().getTableId(), target.getPartitionId(), task.bucket);
+            return result;
         }
 
         @Override

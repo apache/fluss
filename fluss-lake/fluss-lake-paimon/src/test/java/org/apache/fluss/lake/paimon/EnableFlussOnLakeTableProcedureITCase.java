@@ -21,6 +21,7 @@ import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.metadata.BulkLoadBuildContext;
 import org.apache.fluss.client.metadata.BulkLoadHandle;
 import org.apache.fluss.client.metadata.BulkLoadInfo;
+import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.BulkLoadBucketWriter;
@@ -37,6 +38,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -1203,6 +1205,185 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                                     .getSingletonRow())
                     .withSchema(table.getRowType())
                     .isEqualTo(row(1L, "paimon"));
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "false, false, false",
+        "false, true, false",
+        "true, false, false",
+        "true, true, false",
+        "false, false, true",
+        "false, true, true"
+    })
+    void testResumeAfterPartitionDeletion(
+            boolean committed, boolean recreate, boolean failRegistration) throws Exception {
+        TablePath path =
+                TablePath.of(
+                        DATABASE,
+                        "resume_deleted_" + committed + "_" + recreate + "_" + failRegistration);
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        String old = today.minusDays(1).toString();
+        String current = today.toString();
+        FileStoreTable source =
+                createPaimonTable(
+                        path,
+                        Schema.newBuilder()
+                                .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                                .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                                .column("dt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                                .primaryKey("id", "dt")
+                                .partitionKeys("dt")
+                                .option(CoreOptions.BUCKET.key(), "1")
+                                .option(CoreOptions.BUCKET_KEY.key(), "id")
+                                .option(
+                                        CoreOptions.PARTITION_TIMESTAMP_FORMATTER.key(),
+                                        "yyyy-MM-dd")
+                                .option("sink.process-time-zone", "UTC")
+                                .option("partition.legacy-name", "false")
+                                .build());
+        long snapshot =
+                writePaimonRows(
+                        source,
+                        GenericRow.of(
+                                1L, BinaryString.fromString("old"), BinaryString.fromString(old)),
+                        GenericRow.of(
+                                2L,
+                                BinaryString.fromString("current"),
+                                BinaryString.fromString(current)));
+        TableInfo table = admin.createTableFromLake(path, Collections.emptyMap()).get();
+        assertThat(table.isAutoPartitioned()).isTrue();
+        List<String> partitions = Arrays.asList(old, current);
+        for (String partition : partitions) {
+            admin.createPartition(
+                            path,
+                            new PartitionSpec(Collections.singletonMap("dt", partition)),
+                            true)
+                    .get();
+        }
+        for (PartitionInfo partition : admin.listPartitionInfos(path).get()) {
+            FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                    table.getTableId(), partition.getPartitionId());
+        }
+        String loadId = UUID.randomUUID().toString();
+        BulkLoadBuildContext context = admin.beginBulkLoad(path, partitions, loadId).get();
+        BulkLoadBuildContext.Target oldTarget = context.getTarget(PhysicalTablePath.of(path, old));
+        BulkLoadBuildContext.Target currentTarget =
+                context.getTarget(PhysicalTablePath.of(path, current));
+        if (committed) {
+            try (BulkLoadBucketWriter writer =
+                    conn.tryOpenBulkLoadBucketWriter(currentTarget, 0).get()) {
+                writer.write(row(2L, "current", current));
+                writer.commit();
+            }
+        }
+
+        // Model retention deleting an original target while the job is stopped and lake is
+        // disabled.
+        assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled()).isFalse();
+        admin.dropPartition(path, new PartitionSpec(Collections.singletonMap("dt", old)), false)
+                .get();
+        if (committed) {
+            // The deleted target has no bucket commit record, but the transaction may still finish.
+            admin.commitBulkLoad(context.getHandle()).get();
+        }
+        if (recreate) {
+            admin.createPartition(
+                            path, new PartitionSpec(Collections.singletonMap("dt", old)), false)
+                    .get();
+            assertThat(admin.listPartitionInfos(path).get())
+                    .filteredOn(partition -> old.equals(partition.getPartitionName()))
+                    .singleElement()
+                    .satisfies(
+                            partition -> {
+                                FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                                        table.getTableId(), partition.getPartitionId());
+                                assertThat(partition.getPartitionId())
+                                        .isNotEqualTo(oldTarget.getPartitionId());
+                            });
+        }
+        List<String> arguments = loadActionArguments(path);
+        Collections.addAll(
+                arguments,
+                "--source-snapshot-id",
+                Long.toString(snapshot),
+                "--bulk-load-id",
+                loadId);
+        LoadLakeDataToFlussAction action =
+                (LoadLakeDataToFlussAction)
+                        ActionLoader.createAction(arguments.toArray(new String[0])).get();
+        assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getTargets())
+                .extracting(BulkLoadInfo.TargetProgress::getPartitionName)
+                .containsExactlyInAnyOrder(old, current);
+        FsPath metadata =
+                new FsPath(
+                        FlussPaths.remoteLakeTableSnapshotDir(
+                                FLUSS_CLUSTER_EXTENSION.getRemoteDataDir(),
+                                path,
+                                table.getTableId()),
+                        "metadata");
+        FileSystem fs = metadata.getFileSystem();
+        try {
+            if (failRegistration) {
+                fs.mkdirs(metadata.getParent());
+                try (OutputStream out = fs.create(metadata, FileSystem.WriteMode.NO_OVERWRITE)) {
+                    out.write(0);
+                }
+                org.apache.flink.configuration.Configuration jobConfig =
+                        new org.apache.flink.configuration.Configuration();
+                jobConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, "full");
+                jobConfig.set(RestartStrategyOptions.RESTART_STRATEGY, "fixed-delay");
+                jobConfig.set(RestartStrategyOptions.RESTART_STRATEGY_FIXED_DELAY_ATTEMPTS, 3);
+                jobConfig.set(
+                        RestartStrategyOptions.RESTART_STRATEGY_FIXED_DELAY_DELAY,
+                        Duration.ofSeconds(3));
+                execEnv.configure(jobConfig);
+            }
+            JobClient job = action.submit(execEnv);
+            if (failRegistration) {
+                waitUntil(
+                        () -> job.getJobStatus().get() == JobStatus.RESTARTING,
+                        Duration.ofMinutes(1),
+                        "The load did not restart after snapshot registration failed.");
+                assertThat(admin.getBulkLoadInfo(context.getHandle()).get().getState())
+                        .isEqualTo(BulkLoadInfo.State.COMMITTED);
+                fs.delete(metadata, false);
+            }
+            job.getJobExecutionResult().get(2, TimeUnit.MINUTES);
+        } finally {
+            if (failRegistration && fs.exists(metadata) && !fs.getFileStatus(metadata).isDir()) {
+                fs.delete(metadata, false);
+            }
+        }
+
+        BulkLoadInfo completed = admin.getBulkLoadInfo(context.getHandle()).get();
+        assertThat(completed.getState()).isEqualTo(BulkLoadInfo.State.COMMITTED);
+        assertThat(completed.getTargets())
+                .filteredOn(target -> oldTarget.getPartitionId().equals(target.getPartitionId()))
+                .singleElement()
+                .satisfies(target -> assertThat(target.getCommittedBucketCount()).isZero());
+        assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled()).isTrue();
+        LakeSnapshot registered = admin.getLatestLakeSnapshot(path).get();
+        assertThat(registered.getSnapshotId()).isEqualTo(snapshot);
+        // Neither the dropped ID nor a replacement ID belongs to the resumed snapshot's offsets.
+        assertThat(registered.getTableBucketsOffset())
+                .containsExactlyEntriesOf(
+                        Collections.singletonMap(
+                                new TableBucket(
+                                        table.getTableId(), currentTarget.getPartitionId(), 0),
+                                0L));
+        waitUntilImportedBucketsReady(path);
+        try (Table loaded = conn.getTable(path)) {
+            Lookuper lookuper = loaded.newLookup().createLookuper();
+            assertThatRow(lookuper.lookup(row(2L, current)).get().getSingletonRow())
+                    .withSchema(table.getRowType())
+                    .isEqualTo(row(2L, "current", current));
+            if (recreate) {
+                assertThat(lookuper.lookup(row(1L, old)).get().getSingletonRow()).isNull();
+                assertThat(admin.getLatestKvSnapshots(path, old).get().getSnapshotId(0))
+                        .isNotPresent();
+            }
         }
     }
 
