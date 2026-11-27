@@ -69,6 +69,34 @@ pub(crate) async fn plan_with_context(
     plan_prepared(scan, context, &table_info, bound).await
 }
 
+pub(crate) fn bucket_selector<'a>(
+    context: &'a FlussLakeReadContext,
+    table_info: &TableInfo,
+    filter: &'a fluss::predicate::BoundPredicate,
+) -> Result<impl FnMut(i32, i32) -> bool + 'a> {
+    let lake_format = table_info
+        .table_config
+        .get_datalake_format()
+        .map_err(|error| planning_client_error("resolve bucket encoding", error))?;
+    // Partitions retain their own hash modulus after a table-default change.
+    // Cache once per distinct layout, rather than re-encoding keys per bucket.
+    let mut bucket_pruners = std::collections::HashMap::new();
+    Ok(move |bucket_id, bucket_count| {
+        bucket_pruners
+            .entry(bucket_count)
+            .or_insert_with(|| {
+                BucketPruner::new(
+                    context.table_schema().row_type(),
+                    context.bucket_keys(),
+                    bucket_count,
+                    &lake_format,
+                    filter,
+                )
+            })
+            .bucket_may_match(bucket_id)
+    })
+}
+
 async fn plan_prepared(
     scan: &FlussLakeScan,
     context: &FlussLakeReadContext,
@@ -95,27 +123,7 @@ async fn plan_prepared(
         context.partition_keys(),
         &filter,
     );
-    let lake_format = table_info
-        .table_config
-        .get_datalake_format()
-        .map_err(|error| planning_client_error("resolve bucket encoding", error))?;
-    // Partitions retain their own hash modulus after a table-default change.
-    // Cache once per distinct layout, rather than re-encoding keys per bucket.
-    let mut bucket_pruners = std::collections::HashMap::new();
-    let mut bucket_may_match = |bucket_id, bucket_count| {
-        bucket_pruners
-            .entry(bucket_count)
-            .or_insert_with(|| {
-                BucketPruner::new(
-                    context.table_schema().row_type(),
-                    context.bucket_keys(),
-                    bucket_count,
-                    &lake_format,
-                    &filter,
-                )
-            })
-            .bucket_may_match(bucket_id)
-    };
+    let mut bucket_may_match = bucket_selector(context, table_info, &filter)?;
     let is_primary_key = table_info.has_primary_key();
     if is_primary_key && !scan.lake_only() {
         validate_pk_union_merge_engine(table_info)?;
@@ -1214,7 +1222,10 @@ mod tests {
     fn unsupported_merge_engine_is_rejected() {
         let info = pk_table_info(
             Vec::new(),
-            HashMap::from([("table.merge-engine".into(), "first_row".into())]),
+            HashMap::from([
+                ("table.merge-engine".into(), "first_row".into()),
+                ("table.changelog.image".into(), "WAL".into()),
+            ]),
         );
         assert!(matches!(
             validate_pk_union_merge_engine(&info),

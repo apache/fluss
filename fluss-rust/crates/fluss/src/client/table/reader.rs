@@ -630,7 +630,7 @@ impl arrow::record_batch::RecordBatchReader for SyncRecordBatchLogReader {
 
 /// Validate that every bucket in a bounded read belongs to the scanned table
 /// and appears exactly once. An unknown bucket count leaves the range check to the server.
-fn validate_read_buckets<'a>(
+pub(super) fn validate_read_buckets<'a>(
     table_id: TableId,
     is_partitioned: bool,
     bucket_count_of: impl Fn(&TableBucket) -> Option<i32>,

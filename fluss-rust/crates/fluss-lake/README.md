@@ -18,7 +18,7 @@ limitations under the License.
 
 # Bounded UnionRead
 
-`fluss-lake` plans and executes bounded Append, deduplicate PK and lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
+`fluss-lake` plans and executes bounded Append, PK and lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -81,7 +81,7 @@ The protocol starts at version 1. Optional additive fields are compatible only w
 | `None`, Append table | Start at the captured earliest retained offset. |
 | `None`, PK table | Complete log history from offset zero. Truncated history fails with `DataUnavailable`, even if the retained range is empty. |
 
-Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty. Boundary capture preserves merge-engine metadata; the default PK executor supports deduplicate tables.
+Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty. Boundary capture preserves merge-engine metadata. The default PK reader also accepts Fluss `first_row`, `versioned`, and `aggregation` with FULL images. Paimon baseline restrictions are unchanged.
 
 Call `validate_available()` for required ranges after safe pruning. It detects a baseline seam already below the captured retention boundary; execution must also detect later retention or truncation. Missing required data fails the attempt rather than advancing offsets or substituting a newer snapshot. Engines discard partial results before retrying; a fresh context may observe different data and is not guaranteed to recover missing history.
 
@@ -123,6 +123,37 @@ Fluss S3/OSS data requests use rustls and return the stored object bytes without
 
 Create one reader per execution attempt with `scan.new_reader()`. The reader and its clones share the initial table identity lookup and lake source across splits. Create a fresh reader on retry. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
 
-The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. For a deduplicate PK table, each bucket's unfiltered changelog tail is folded before the pinned baseline is reconciled. Filtering and output projection happen on the resulting current view. Use `reader.with_memory_budget(...)` to bound retained PK state across tasks; exhaustion fails the attempt without spilling.
+The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. For a PK table, each bucket's unfiltered changelog tail is folded before the pinned baseline is reconciled. Filtering and output projection happen on the resulting current view. Use `reader.with_memory_budget(...)` to bound retained PK state across tasks; exhaustion fails the attempt without spilling.
 
 Without the `kv-snapshot` feature the reader rejects KV tasks before reading. An empty log tail still returns the snapshot rows.
+
+## Snapshot followed by a live changelog
+
+For an Append table, the bootstrap emits the captured lake and log rows. For a FULL PK table, it emits the reconciled current view. Once all assigned splits finish, the stream emits a single marker and follows each selected bucket from its exclusive stop offset. Writes during bootstrap are picked up from the log, in order within each bucket. Without a filter, PK changes retain the source change types.
+
+```rust,no_run
+# use fluss_lake::{FlussLakeTable, Result};
+# use futures::TryStreamExt;
+# async fn import(table: &FlussLakeTable) -> Result<()> {
+let context = table.capture_read_context().await?;
+let scan = table.new_scan().new_stream();
+let mut events = scan.start(&context).await?;
+while let Some(event) = events.try_next().await? {
+    use fluss_lake::UnionReadEvent::*;
+    match event {
+        Snapshot(batch) => { /* stage rows */ }
+        SnapshotFinished(next) => { /* commit staged rows and offsets together */ }
+        Changes { batches, next_offsets } => { /* apply ALL batches and commit their offsets together */ }
+        PartitionsDropped(positions) => { /* remove these bucket IDs from the checkpoint */ }
+    }
+}
+# Ok(()) }
+```
+
+If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, checkpoint)` with the **next unread offset** of every selected bucket that has not been retired. Use the event's exclusive consumed offset even for a bucket that returned no rows (for example, a delete of a missing key). Restore the original context, projection and filter with the checkpoint. The checkpoint binds the original boundary, filter and ordered projection; changing the view requires a fresh bootstrap. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
+
+Partition scopes are supported at capture. New partitions are not discovered, and an empty bucket assignment ends after bootstrap. Bootstrap has the same baseline restrictions as bounded execution and accepts the same PK memory budget.
+
+Both phases return exactly the requested columns in order. Predicate-only columns are internal. A keyed sink should request its key columns explicitly. Each change batch contains the visible Arrow rows and, for PK tables, one source change type per row. FULL evaluates the predicate on each change image, so an update leaving the result retracts its matching old row. Streaming PK WAL is not supported.
+
+Follow uses the same partition and bucket pruning as bootstrap. When a captured partition is confirmed deleted, the reader reports its last consumed position (not a final log offset) and continues with the remaining IDs. On resume, missing checkpoint buckets are accepted only if the original partition no longer exists. Table replacement and loss of required log offsets still fail the read.

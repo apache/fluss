@@ -442,6 +442,16 @@ impl<'a> TableScan<'a> {
         RecordBatchLogReader::new_from_ranges(self.batch_log_scanner(true)?, ranges).await
     }
 
+    /// Follow a fixed set of buckets from exclusive checkpoint positions, retaining
+    /// batch change types and progress even when the source has no visible rows.
+    pub fn create_follow_log_reader(
+        self,
+        offsets: HashMap<TableBucket, i64>,
+    ) -> Result<super::FollowLogReader> {
+        let admin = self.conn.get_admin()?;
+        super::FollowLogReader::new(self.batch_log_scanner(true)?, admin, offsets)
+    }
+
     fn batch_log_scanner(self, allow_primary_key: bool) -> Result<RecordBatchLogScanner> {
         self.reject_limit("RecordBatchLogScanner")?;
         validate_scan_support_inner(
@@ -1200,6 +1210,15 @@ impl RecordBatchLogScanner {
     /// or its offset is changed before that poll.
     pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         Ok(self.poll_with_progress(timeout).await?.batches)
+    }
+
+    pub(super) async fn poll_follow(&self) -> Result<PolledBatches> {
+        // Surface missing leaders even when another bucket keeps the fetch buffer full.
+        let fetcher = &self.inner.log_fetcher;
+        fetcher
+            .check_and_update_metadata(&fetcher.fetchable_buckets(), Some(self.table_id()))
+            .await?;
+        self.poll_with_progress(DEFAULT_POLL_TIMEOUT).await
     }
 
     pub(super) async fn poll_with_progress(&self, timeout: Duration) -> Result<PolledBatches> {
