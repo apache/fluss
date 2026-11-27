@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::admin_gateway::{GatewayTarget, RetryableGateway};
 use crate::client::metadata::Metadata;
 use crate::cluster::{Cluster, ServerNode};
 use crate::metadata::{
@@ -26,6 +27,7 @@ use crate::metadata::{
     RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema, SchemaInfo,
     ServerTag, TableBucket, TableDescriptor, TableInfo, TableOrPartition, TablePath, TableStats,
 };
+use crate::rpc::RpcClient;
 use crate::rpc::message::{
     AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
     AlterDatabaseRequest, AlterTableRequest, CancelRebalanceRequest, CreateAclsRequest,
@@ -41,7 +43,6 @@ use crate::rpc::message::{
     ReleaseKvSnapshotLeaseRequest, RemoveServerTagRequest, TableExistsRequest,
 };
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
-use crate::rpc::{RpcClient, ServerConnection};
 
 use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
@@ -61,32 +62,26 @@ fn parse_table_descriptor(bytes: &[u8]) -> Result<TableDescriptor> {
 pub struct FlussAdmin {
     metadata: Arc<Metadata>,
     rpc_client: Arc<RpcClient>,
+    tablet_gateway: RetryableGateway,
+    coordinator_gateway: RetryableGateway,
 }
 
 impl FlussAdmin {
     pub fn new(connections: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
         FlussAdmin {
+            tablet_gateway: RetryableGateway::new(
+                GatewayTarget::TabletServer,
+                metadata.clone(),
+                connections.clone(),
+            ),
+            coordinator_gateway: RetryableGateway::new(
+                GatewayTarget::Coordinator,
+                metadata.clone(),
+                connections.clone(),
+            ),
             metadata,
             rpc_client: connections,
         }
-    }
-
-    async fn admin_gateway(&self) -> Result<ServerConnection> {
-        let cluster = self.metadata.get_cluster();
-        let coordinator =
-            cluster
-                .get_coordinator_server()
-                .ok_or_else(|| Error::UnexpectedError {
-                    message: "Coordinator server not found in cluster metadata".to_string(),
-                    source: None,
-                })?;
-        self.rpc_client.get_connection(coordinator).await
-    }
-
-    async fn read_only_gateway(&self) -> Result<ServerConnection> {
-        self.rpc_client
-            .get_connection(&self.metadata.admin_read_server()?)
-            .await
     }
 
     pub async fn create_database(
@@ -96,8 +91,7 @@ impl FlussAdmin {
         ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(CreateDatabaseRequest::new(
                 database_name,
                 database_descriptor,
@@ -114,8 +108,7 @@ impl FlussAdmin {
         ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(CreateTableRequest::new(
                 table_path,
                 table_descriptor,
@@ -131,8 +124,7 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DropTableRequest::new(table_path, ignore_if_not_exists))
             .await?;
         Ok(())
@@ -146,8 +138,7 @@ impl FlussAdmin {
         schema_id: Option<i32>,
     ) -> Result<SchemaInfo> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(GetTableSchemaRequestMsg::new(table_path, schema_id))
             .await?;
 
@@ -162,16 +153,15 @@ impl FlussAdmin {
     pub async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
         let info = self.fetch_table_info(table_path).await?;
         // Refresh bucket routing for callers that use the table id to request table stats.
-        self.metadata
-            .refresh_admin_metadata(Some(table_path))
+        self.tablet_gateway
+            .call(|server| self.metadata.refresh_table_routing(server, table_path))
             .await?;
         Ok(info)
     }
 
     async fn fetch_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(GetTableRequest::new(table_path))
             .await?;
         let GetTableInfoResponse {
@@ -198,8 +188,7 @@ impl FlussAdmin {
     /// List all tables in the given database
     pub async fn list_tables(&self, database_name: &str) -> Result<Vec<String>> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(ListTablesRequest::new(database_name))
             .await?;
         Ok(response.table_name)
@@ -217,8 +206,7 @@ impl FlussAdmin {
         partial_partition_spec: Option<&PartitionSpec>,
     ) -> Result<Vec<PartitionInfo>> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(ListPartitionInfosRequest::new(
                 table_path,
                 partial_partition_spec,
@@ -243,8 +231,7 @@ impl FlussAdmin {
         ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(CreatePartitionRequest::new(
                 table_path,
                 partition_spec,
@@ -262,8 +249,7 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DropPartitionRequest::new(
                 table_path,
                 partition_spec,
@@ -276,8 +262,7 @@ impl FlussAdmin {
     /// Check if a table exists
     pub async fn table_exists(&self, table_path: &TablePath) -> Result<bool> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(TableExistsRequest::new(table_path))
             .await?;
         Ok(response.exists)
@@ -291,8 +276,7 @@ impl FlussAdmin {
         cascade: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DropDatabaseRequest::new(
                 database_name,
                 ignore_if_not_exists,
@@ -305,8 +289,7 @@ impl FlussAdmin {
     /// List all databases
     pub async fn list_databases(&self) -> Result<Vec<String>> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(ListDatabasesRequest::new())
             .await?;
         Ok(response.database_name)
@@ -315,8 +298,7 @@ impl FlussAdmin {
     /// Check if a database exists
     pub async fn database_exists(&self, database_name: &str) -> Result<bool> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(DatabaseExistsRequest::new(database_name))
             .await?;
         Ok(response.exists)
@@ -325,7 +307,7 @@ impl FlussAdmin {
     /// Get database information
     pub async fn get_database_info(&self, database_name: &str) -> Result<DatabaseInfo> {
         let request = GetDatabaseInfoRequest::new(database_name);
-        let response = self.read_only_gateway().await?.request(request).await?;
+        let response = self.tablet_gateway.request(request).await?;
 
         // Convert proto response to DatabaseInfo
         let database_descriptor = DatabaseDescriptor::from_json_bytes(&response.database_json)?;
@@ -341,21 +323,14 @@ impl FlussAdmin {
     /// Get all alive server nodes in the cluster, including the coordinator
     /// and all tablet servers. Refreshes cluster metadata before returning.
     pub async fn get_server_nodes(&self) -> Result<Vec<ServerNode>> {
-        if let Err(error) = self.metadata.refresh_admin_metadata(None).await {
-            if !error.is_retriable() && !matches!(error, Error::InvalidServerType { .. }) {
-                return Err(error);
-            }
-            // Explicit discovery still works when no cached tablet can answer.
-            self.metadata.reinit_cluster().await?;
-        }
+        self.metadata.refresh_server_nodes(None).await?;
         Ok(self.metadata.get_cluster().get_server_nodes())
     }
 
     /// Get the latest lake snapshot for a table
     pub async fn get_latest_lake_snapshot(&self, table_path: &TablePath) -> Result<LakeSnapshot> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(GetLatestLakeSnapshotRequest::new(table_path))
             .await?;
 
@@ -534,8 +509,7 @@ impl FlussAdmin {
     /// List database summaries (name, created_time, table_count).
     pub async fn list_database_summaries(&self) -> Result<Vec<DatabaseSummary>> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(ListDatabaseSummariesRequest::new())
             .await?;
         Ok(response
@@ -554,8 +528,7 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(AlterDatabaseRequest::new(
                 name,
                 ignore_if_not_exists,
@@ -576,8 +549,7 @@ impl FlussAdmin {
     ) -> Result<()> {
         changes.validate()?;
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(AlterTableRequest::new(
                 table_path,
                 ignore_if_not_exists,
@@ -667,8 +639,7 @@ impl FlussAdmin {
         partition_name: Option<&str>,
     ) -> Result<LatestKvSnapshots> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(GetLatestKvSnapshotsRequest::new(table_path, partition_name))
             .await?;
         Ok(LatestKvSnapshots::from_pb(&response))
@@ -683,8 +654,7 @@ impl FlussAdmin {
         snapshot_id: SnapshotId,
     ) -> Result<KvSnapshotMetadata> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(GetKvSnapshotMetadataRequest::new(
                 table_id,
                 partition_id,
@@ -703,8 +673,7 @@ impl FlussAdmin {
         snapshots_to_lease: Vec<KvSnapshotLeaseForTable>,
     ) -> Result<AcquireKvSnapshotLeaseResult> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(AcquireKvSnapshotLeaseRequest::new(
                 lease_id,
                 lease_duration_ms,
@@ -722,8 +691,7 @@ impl FlussAdmin {
         readable: Option<bool>,
     ) -> Result<LakeSnapshotInfo> {
         let response = self
-            .read_only_gateway()
-            .await?
+            .tablet_gateway
             .request(GetLakeSnapshotRequest::new(
                 table_path,
                 snapshot_id,
@@ -736,8 +704,7 @@ impl FlussAdmin {
     /// Create ACLs. Returns one result per submitted ACL (success or per-ACL error).
     pub async fn create_acls(&self, acls: Vec<AclInfo>) -> Result<Vec<CreateAclResult>> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(CreateAclsRequest::new(acls))
             .await?;
         response
@@ -750,8 +717,7 @@ impl FlussAdmin {
     /// List ACLs matching a filter.
     pub async fn list_acls(&self, acl_filter: AclFilter) -> Result<Vec<AclInfo>> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(ListAclsRequest::new(acl_filter))
             .await?;
         response.acl.iter().map(AclInfo::from_pb).collect()
@@ -763,8 +729,7 @@ impl FlussAdmin {
         acl_filters: Vec<AclFilter>,
     ) -> Result<Vec<DropAclsFilterResult>> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DropAclsRequest::new(acl_filters))
             .await?;
         response
@@ -777,8 +742,7 @@ impl FlussAdmin {
     /// Describe cluster configuration.
     pub async fn describe_cluster_configs(&self) -> Result<Vec<DescribeConfig>> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DescribeClusterConfigsRequest::new())
             .await?;
         Ok(response
@@ -791,8 +755,7 @@ impl FlussAdmin {
     /// Alter cluster configuration.
     pub async fn alter_cluster_configs(&self, alter_configs: Vec<AlterConfig>) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(AlterClusterConfigsRequest::new(alter_configs))
             .await?;
         Ok(())
@@ -801,8 +764,7 @@ impl FlussAdmin {
     /// Add a tag to servers.
     pub async fn add_server_tag(&self, server_ids: Vec<i32>, server_tag: ServerTag) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(AddServerTagRequest::new(server_ids, server_tag))
             .await?;
         Ok(())
@@ -815,8 +777,7 @@ impl FlussAdmin {
         server_tag: ServerTag,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(RemoveServerTagRequest::new(server_ids, server_tag))
             .await?;
         Ok(())
@@ -825,8 +786,7 @@ impl FlussAdmin {
     /// Trigger a rebalance. Returns the rebalance id assigned by the server.
     pub async fn rebalance(&self, goals: Vec<GoalType>) -> Result<String> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(RebalanceRequest::new(goals))
             .await?;
         Ok(response.rebalance_id)
@@ -838,8 +798,7 @@ impl FlussAdmin {
         rebalance_id: Option<&str>,
     ) -> Result<RebalanceProgress> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(ListRebalanceProgressRequest::new(rebalance_id))
             .await?;
         RebalanceProgress::from_pb(&response)
@@ -848,8 +807,7 @@ impl FlussAdmin {
     /// Cancel a rebalance.
     pub async fn cancel_rebalance(&self, rebalance_id: Option<&str>) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(CancelRebalanceRequest::new(rebalance_id))
             .await?;
         Ok(())
@@ -863,8 +821,7 @@ impl FlussAdmin {
         ttl_ms: Option<i64>,
     ) -> Result<Option<RegisterProducerResult>> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(RegisterProducerOffsetsRequest::new(
                 producer_id,
                 table_offsets,
@@ -880,8 +837,7 @@ impl FlussAdmin {
     /// Get producer offsets.
     pub async fn get_producer_offsets(&self, producer_id: &str) -> Result<ProducerOffsets> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(GetProducerOffsetsRequest::new(producer_id))
             .await?;
         Ok(ProducerOffsets::from_pb(&response))
@@ -890,8 +846,7 @@ impl FlussAdmin {
     /// Delete producer offsets.
     pub async fn delete_producer_offsets(&self, producer_id: &str) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DeleteProducerOffsetsRequest::new(producer_id))
             .await?;
         Ok(())
@@ -900,8 +855,7 @@ impl FlussAdmin {
     /// Get cluster health status.
     pub async fn get_cluster_health(&self) -> Result<ClusterHealth> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(GetClusterHealthRequest::new())
             .await?;
         ClusterHealth::from_pb(&response)
@@ -914,8 +868,7 @@ impl FlussAdmin {
         partition_id: Option<PartitionId>,
     ) -> Result<Vec<RemoteLogManifestEntry>> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(ListRemoteLogManifestsRequest::new(table_id, partition_id))
             .await?;
         Ok(response
@@ -932,8 +885,7 @@ impl FlussAdmin {
         partition_id: Option<PartitionId>,
     ) -> Result<ActiveKvSnapshots> {
         let response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(ListKvSnapshotsRequest::new(table_id, partition_id))
             .await?;
         Ok(ActiveKvSnapshots::from_pb(&response))
@@ -946,8 +898,7 @@ impl FlussAdmin {
         buckets_to_release: Vec<TableBucket>,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(ReleaseKvSnapshotLeaseRequest::new(
                 lease_id,
                 buckets_to_release,
@@ -959,8 +910,7 @@ impl FlussAdmin {
     /// Drop an entire KV snapshot lease.
     pub async fn drop_kv_snapshot_lease(&self, lease_id: &str) -> Result<()> {
         let _response = self
-            .admin_gateway()
-            .await?
+            .coordinator_gateway
             .request(DropKvSnapshotLeaseRequest::new(lease_id))
             .await?;
         Ok(())

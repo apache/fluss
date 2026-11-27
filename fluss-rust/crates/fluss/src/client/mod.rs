@@ -16,6 +16,7 @@
 // under the License.
 
 mod admin;
+mod admin_gateway;
 mod connection;
 mod credentials;
 pub mod lookup;

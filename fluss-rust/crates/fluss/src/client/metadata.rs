@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::admin_gateway::GatewayTarget;
 use crate::cluster::{Cluster, ServerNode, ServerType};
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
@@ -26,6 +27,7 @@ use crate::{PartitionId, TableId};
 use arc_swap::{ArcSwap, Guard};
 use log::{info, warn};
 use parking_lot::{Mutex, MutexGuard, RwLock};
+use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -59,7 +61,7 @@ struct BootstrapServer {
 impl Metadata {
     pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
         let cluster =
-            Self::init_cluster(bootstrap, connections.clone(), METADATA_REQUEST_TIMEOUT).await?;
+            Self::init_cluster(bootstrap, &connections, METADATA_REQUEST_TIMEOUT, None).await?;
         let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
             cluster: ArcSwap::from_pointee(cluster),
@@ -162,8 +164,9 @@ impl Metadata {
 
     async fn init_cluster(
         bootstrap_servers: &str,
-        connections: Arc<RpcClient>,
+        connections: &RpcClient,
         request_timeout: Duration,
+        target: Option<GatewayTarget>,
     ) -> Result<Cluster> {
         let bootstraps = Self::parse_bootstrap_servers(bootstrap_servers)?;
         let bootstrap_count = bootstraps.len();
@@ -191,30 +194,28 @@ impl Metadata {
                 ServerType::Unknown,
             );
 
-            let cluster_result = if bootstrap_count == 1 {
-                Self::retry_bootstrap(
-                    &bootstrap.raw,
-                    || {
-                        Self::fetch_cluster_from_bootstrap(
-                            &server_node,
-                            connections.clone(),
-                            request_timeout,
-                        )
-                    },
-                    || connections.disconnect_endpoint(&server_node),
-                )
-                .await
-            } else {
+            let fetch = || {
                 Self::fetch_cluster_from_bootstrap(
                     &server_node,
-                    connections.clone(),
+                    connections,
                     request_timeout,
+                    target,
                 )
+            };
+            let cluster_result = if target.is_none() && bootstrap_count == 1 {
+                Self::retry_bootstrap(&bootstrap.raw, fetch, || {
+                    connections.disconnect_endpoint(&server_node)
+                })
                 .await
+            } else {
+                fetch().await
             };
 
             match cluster_result {
                 Ok(cluster) => return Ok(cluster),
+                Err(err) if target.is_some() && !GatewayTarget::needs_refresh(&err) => {
+                    return Err(err);
+                }
                 Err(err) => {
                     if index + 1 < bootstrap_count {
                         warn!(
@@ -257,16 +258,23 @@ impl Metadata {
 
     async fn fetch_cluster_from_bootstrap(
         server_node: &ServerNode,
-        connections: Arc<RpcClient>,
+        connections: &RpcClient,
         request_timeout: Duration,
+        target: Option<GatewayTarget>,
     ) -> Result<Cluster> {
         let response = Self::request_metadata(
-            &connections,
+            connections,
             server_node,
             UpdateMetadataRequest::new(&HashSet::default(), &HashSet::new(), vec![]),
             request_timeout,
         )
         .await?;
+        if let Some(target) = target.filter(|target| !target.is_available(&response)) {
+            return Err(crate::rpc::RpcError::ConnectionError(format!(
+                "Bootstrap metadata contains no {target:?}"
+            ))
+            .into());
+        }
         Cluster::from_metadata_response(response, None)
     }
 
@@ -306,24 +314,24 @@ impl Metadata {
             })
     }
 
-    pub(super) async fn refresh_admin_metadata(&self, table: Option<&TablePath>) -> Result<()> {
-        let request =
-            UpdateMetadataRequest::new(&table.into_iter().collect(), &HashSet::new(), vec![]);
-        let response = Self::request_metadata(
-            &self.connections,
-            &self.admin_read_server()?,
-            request,
-            self.request_timeout,
-        )
-        .await?;
+    pub(super) async fn refresh_table_routing(
+        &self,
+        server: ServerNode,
+        table: &TablePath,
+    ) -> Result<()> {
+        let request = UpdateMetadataRequest::new(&HashSet::from([table]), &HashSet::new(), vec![]);
+        let response =
+            Self::request_metadata(&self.connections, &server, request, self.request_timeout)
+                .await?;
         self.update(response).await
     }
 
-    pub(crate) async fn reinit_cluster(&self) -> Result<()> {
+    async fn reinit_cluster(&self, target: Option<GatewayTarget>) -> Result<()> {
         let cluster = Self::init_cluster(
             &self.bootstrap,
-            self.connections.clone(),
+            &self.connections,
             self.request_timeout,
+            target,
         )
         .await?;
         let changing = self.changing.lock();
@@ -456,6 +464,44 @@ impl Metadata {
             .cloned()
     }
 
+    /// A rolling replacement can invalidate every cached address. Try each known tablet
+    /// once, then rediscover nodes from bootstrap using the existing backoff.
+    pub(super) async fn refresh_server_nodes(
+        &self,
+        target: Option<GatewayTarget>,
+    ) -> Result<Option<ServerNode>> {
+        let mut tablets = self.get_cluster().get_server_nodes();
+        tablets.retain(|s| s.server_type() == &ServerType::TabletServer);
+        tablets.shuffle(&mut rand::rng());
+        for tablet in tablets {
+            match Self::request_metadata(
+                &self.connections,
+                &tablet,
+                UpdateMetadataRequest::new(&HashSet::new(), &HashSet::new(), vec![]),
+                self.request_timeout,
+            )
+            .await
+            {
+                Ok(response) if target.is_none_or(|target| target.is_available(&response)) => {
+                    self.update(response).await?;
+                    return Ok(Some(tablet));
+                }
+                Ok(_) => continue,
+                Err(error) if GatewayTarget::needs_refresh(&error) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        if target.is_some() {
+            // Back off between complete discovery rounds, not between addresses: a second
+            // bootstrap may already know the new endpoint. An empty node list is a valid
+            // reply on a healthy connection, so keep that connection for the next round.
+            Self::retry_bootstrap(&self.bootstrap, || self.reinit_cluster(target), || {}).await?;
+        } else {
+            self.reinit_cluster(None).await?;
+        }
+        Ok(None)
+    }
+
     pub async fn update_tables_metadata(
         &self,
         table_paths: &HashSet<&TablePath>,
@@ -511,7 +557,7 @@ impl Metadata {
                 info!(
                     "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
                 );
-                self.reinit_cluster().await?;
+                self.reinit_cluster(None).await?;
                 return Ok(None);
             }
         };
@@ -727,6 +773,8 @@ impl Metadata {
 
 #[cfg(test)]
 mod tests {
+    mod admin_gateway;
+
     use super::*;
     use crate::error::ApiError;
     use crate::metadata::{TableBucket, TablePath};
