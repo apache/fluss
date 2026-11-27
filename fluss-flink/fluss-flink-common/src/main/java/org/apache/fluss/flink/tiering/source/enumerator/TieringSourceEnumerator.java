@@ -27,6 +27,7 @@ import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
@@ -51,6 +52,8 @@ import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -75,11 +78,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
@@ -132,7 +138,17 @@ public class TieringSourceEnumerator
     private Connection connection;
     private Admin flussAdmin;
     private TieringSplitGenerator splitGenerator;
-    private int flussCoordinatorEpoch;
+    private volatile int flussCoordinatorEpoch;
+    /** The coordinator changed while reports or rounds from the previous one were outstanding. */
+    private volatile boolean drainingPreviousCoordinator = false;
+
+    private final long heartbeatFailureToleranceNanos;
+    /** Clock time in nanoseconds of the first failure in the current streak, if any. */
+    @Nullable private volatile Long firstHeartbeatFailureNanos;
+
+    private Clock clock = SystemClock.getInstance();
+
+    private Runnable coordinatorMetadataRefresh = () -> {};
 
     private volatile boolean isFailOvering = false;
 
@@ -180,6 +196,10 @@ public class TieringSourceEnumerator
             ScheduledExecutorService timerService) {
         this.flussConf = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
+        this.heartbeatFailureToleranceNanos =
+                lakeTieringConfig
+                        .get(ConfigOptions.LAKE_TIERING_HEARTBEAT_FAILURE_TOLERANCE)
+                        .toNanos();
         this.context = context;
         this.lakeTieringFactory = lakeTieringFactory;
         this.timerService = timerService;
@@ -206,10 +226,18 @@ public class TieringSourceEnumerator
                 new ClientMetricGroup(metricRegistry, "LakeTieringService");
         this.rpcClient = RpcClient.create(flussConf, clientMetricGroup);
         MetadataUpdater metadataUpdater = new MetadataUpdater(flussConf, rpcClient);
+        // The coordinator address is cached, so refresh it in case the coordinator moved.
+        this.coordinatorMetadataRefresh =
+                () -> metadataUpdater.updatePhysicalTableMetadata(Collections.emptySet());
         CoordinatorGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
         start(gateway, admin, new TieringSplitGenerator(admin));
+    }
+
+    @VisibleForTesting
+    void setClock(Clock clock) {
+        this.clock = clock;
     }
 
     @VisibleForTesting
@@ -465,7 +493,6 @@ public class TieringSourceEnumerator
                         currentFailedTableEpochs,
                         this.flussCoordinatorEpoch);
 
-        Tuple3<Long, Long, TablePath> lakeTieringInfo = null;
         // report heartbeat with request table to fluss coordinator
         LOG.info(
                 "currentFinishedTables: {}, currentFailedTableEpochs: {}, tieringTableEpochs: {}",
@@ -473,35 +500,90 @@ public class TieringSourceEnumerator
                 currentFailedTableEpochs,
                 tieringTableEpochs);
 
-        if (pendingSplits.isEmpty() && !readersAwaitingSplit.isEmpty()) {
-            LakeTieringHeartbeatResponse heartbeatResponse =
-                    waitHeartbeatResponse(
-                            coordinatorGateway.lakeTieringHeartbeat(
-                                    heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest)));
-            if (heartbeatResponse.hasTieringTable()) {
-                PbLakeTieringTableInfo tieringTable = heartbeatResponse.getTieringTable();
-                lakeTieringInfo =
-                        Tuple3.of(
-                                tieringTable.getTableId(),
-                                tieringTable.getTieringEpoch(),
-                                TablePath.of(
-                                        tieringTable.getTablePath().getDatabaseName(),
-                                        tieringTable.getTablePath().getTableName()));
-                tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
-                LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
-            } else {
-                LOG.info("No available Tiering table found, will poll later.");
-            }
-        } else {
-            // report heartbeat to fluss coordinator
-            waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+        boolean requestTable =
+                !drainingPreviousCoordinator
+                        && pendingSplits.isEmpty()
+                        && !readersAwaitingSplit.isEmpty();
+        if (requestTable) {
+            heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest);
         }
+        LakeTieringHeartbeatResponse heartbeatResponse;
+        try {
+            heartbeatResponse =
+                    waitHeartbeatResponse(
+                            coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+        } catch (RuntimeException e) {
+            // Finished and failed tables are kept, so the next heartbeat reports them again. A
+            // table granted by a lost response is never tracked here, and the coordinator
+            // reassigns it once its heartbeat times out.
+            tolerateHeartbeatFailure(e);
+            return null;
+        }
+        firstHeartbeatFailureNanos = null;
 
         // if come to here, we can remove currentFinishedTables/failedTableEpochs to avoid send
         // in next round
         currentFinishedTables.forEach(finishedTables::remove);
         currentFailedTableEpochs.forEach(failedTableEpochs::remove);
+        // The job may now outlive a coordinator change. Adopt the new coordinator epoch once
+        // nothing granted under the previous one is outstanding.
+        if (tieringTableEpochs.isEmpty()
+                && finishedTables.isEmpty()
+                && failedTableEpochs.isEmpty()) {
+            flussCoordinatorEpoch = heartbeatResponse.getCoordinatorEpoch();
+        }
+        // Still different: a table granted now would be reported with the old epoch and be
+        // rejected. Leave it to time out, and request no more until the old reports drain.
+        drainingPreviousCoordinator =
+                flussCoordinatorEpoch != heartbeatResponse.getCoordinatorEpoch();
+
+        if (!requestTable || drainingPreviousCoordinator) {
+            return null;
+        }
+        if (!heartbeatResponse.hasTieringTable()) {
+            LOG.info("No available Tiering table found, will poll later.");
+            return null;
+        }
+        PbLakeTieringTableInfo tieringTable = heartbeatResponse.getTieringTable();
+        Tuple3<Long, Long, TablePath> lakeTieringInfo =
+                Tuple3.of(
+                        tieringTable.getTableId(),
+                        tieringTable.getTieringEpoch(),
+                        TablePath.of(
+                                tieringTable.getTablePath().getDatabaseName(),
+                                tieringTable.getTablePath().getTableName()));
+        tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
+        LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
         return lakeTieringInfo;
+    }
+
+    /** Returns if the failed heartbeat can be left to the next poll, otherwise rethrows. */
+    private synchronized void tolerateHeartbeatFailure(RuntimeException failure) {
+        if (heartbeatFailureToleranceNanos <= 0 || !isRetriable(failure)) {
+            throw failure;
+        }
+        long now = clock.nanoseconds();
+        if (firstHeartbeatFailureNanos == null) {
+            firstHeartbeatFailureNanos = now;
+        } else if (now - firstHeartbeatFailureNanos >= heartbeatFailureToleranceNanos) {
+            throw failure;
+        }
+        LOG.warn("Heartbeat to the coordinator failed, will retry on the next poll.", failure);
+        try {
+            coordinatorMetadataRefresh.run();
+        } catch (RuntimeException e) {
+            LOG.warn("Failed to refresh the coordinator metadata.", e);
+        }
+    }
+
+    private static boolean isRetriable(Throwable failure) {
+        Throwable cause = failure;
+        while (cause instanceof FlinkRuntimeException
+                || cause instanceof ExecutionException
+                || cause instanceof CompletionException) {
+            cause = cause.getCause();
+        }
+        return cause instanceof RetriableException || cause instanceof TimeoutException;
     }
 
     private void generateTieringSplits(Tuple3<Long, Long, TablePath> tieringTable)

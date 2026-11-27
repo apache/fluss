@@ -3222,6 +3222,17 @@ public class ConfigOptions {
                                     + "Disabled by default. When enabled, mark-done uses the actual lake table's options "
                                     + "(e.g. 'partition.idle-time-to-done' on the Paimon table).");
 
+    public static final ConfigOption<Duration> LAKE_TIERING_HEARTBEAT_FAILURE_TOLERANCE =
+            key("lake.tiering.heartbeat.failure-tolerance")
+                    .durationType()
+                    .defaultValue(Duration.ZERO)
+                    .withDescription(
+                            "How long consecutive heartbeats from the tiering service to the coordinator may fail "
+                                    + "with retriable errors before the tiering job fails. Within this window a failed "
+                                    + "heartbeat is skipped, unacknowledged results are kept, and the next poll retries. "
+                                    + "The default of 0 fails the job on the first failed heartbeat. "
+                                    + "Registration at job startup is not covered.");
+
     public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
             key("lake.tiering.io.tmp.dirs")
                     .stringType()
