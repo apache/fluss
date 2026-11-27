@@ -17,9 +17,16 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.exception.InvalidServerTypeException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.rpc.RetryableGatewayClientProxy;
+import org.apache.fluss.rpc.gateway.AdminGateway;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +34,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,6 +47,23 @@ public final class ClientUtils {
             Pattern.compile(".*?\\[?([0-9a-zA-Z\\-%._:]*)\\]?:([0-9]+)");
 
     private ClientUtils() {}
+
+    /** Refreshes stale coordinator metadata and retries only known pre-execution failures. */
+    @Internal
+    public static AdminGateway withSafeCoordinatorRetries(
+            AdminGateway gateway, MetadataUpdater metadataUpdater, Executor refreshExecutor) {
+        return RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                gateway,
+                metadataUpdater::refreshClusterUntilAvailable,
+                refreshExecutor,
+                cause ->
+                        cause instanceof NotCoordinatorLeaderException
+                                || cause instanceof RetriableException,
+                cause ->
+                        cause instanceof NotCoordinatorLeaderException
+                                || cause instanceof InvalidServerTypeException,
+                AdminGateway.class);
+    }
 
     // todo: may add DnsLookup
     public static List<InetSocketAddress> parseAndValidateAddresses(List<String> urls) {

@@ -19,14 +19,18 @@ package org.apache.fluss.client;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.BulkLoadBuildContext;
 import org.apache.fluss.client.table.MultiTable;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.BulkLoadBucketWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.io.IOException;
 import java.time.Duration;
+import java.util.Optional;
 
 /**
  * A cluster connection encapsulating lower level individual connections to actual Fluss servers.
@@ -55,6 +59,26 @@ public interface Connection extends AutoCloseable {
 
     /** Retrieve a new Admin client to administer a Fluss cluster. */
     Admin getAdmin();
+
+    /**
+     * Opens a BulkLoad bucket writer using frozen target metadata or returns empty once the
+     * allocated snapshot is committed. If a previous attempt completed the upload, this method
+     * commits that snapshot before returning empty.
+     *
+     * <p>The caller owns and must close any returned writer. Invoke this blocking operation from a
+     * build worker thread. Build workers need read and write access to the remote snapshot
+     * directories and local space for a RocksDB database in the JVM temporary directory.
+     *
+     * <p>Bucket writers support primary-key tables using the plain KV value layout without
+     * row-level TTL.
+     *
+     * @throws IOException if allocation or commit fails, snapshot files cannot be accessed, or the
+     *     local database cannot be opened
+     */
+    default Optional<BulkLoadBucketWriter> tryOpenBulkLoadBucketWriter(
+            BulkLoadBuildContext.Target target, int bucketId) throws IOException {
+        throw new UnsupportedOperationException("This connection does not support BulkLoad.");
+    }
 
     /** Retrieve a new Table client to operate data in table. */
     Table getTable(TablePath tablePath);

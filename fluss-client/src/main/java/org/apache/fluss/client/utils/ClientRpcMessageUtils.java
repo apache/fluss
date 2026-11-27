@@ -28,6 +28,7 @@ import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
+import org.apache.fluss.client.metadata.BulkLoadHandle;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -58,6 +59,8 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
@@ -95,6 +98,7 @@ import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
@@ -132,6 +136,7 @@ import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableBucket;
+import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
 import org.apache.fluss.rpc.messages.PbTabletServerLoad;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -174,6 +179,29 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 public class ClientRpcMessageUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(ClientRpcMessageUtils.class);
+
+    /** Converts a table's RPC metadata into its client representation. */
+    public static TableInfo toTableInfo(TablePath tablePath, PbTableInfo table) {
+        return TableInfo.of(
+                tablePath,
+                table.getTableId(),
+                table.getSchemaId(),
+                TableDescriptor.fromJsonBytes(table.getTableJson()),
+                table.hasRemoteDataDir() ? table.getRemoteDataDir() : null,
+                table.getCreatedTime(),
+                table.getModifiedTime(),
+                table.hasBucketCountEpoch() ? table.getBucketCountEpoch() : 0L);
+    }
+
+    /** Converts the coordinator's transaction identifier to a client handle. */
+    public static BulkLoadHandle toBulkLoadHandle(PbBulkLoadHandle handle) {
+        return new BulkLoadHandle(handle.getTableId(), handle.getBulkLoadId());
+    }
+
+    /** Fills a request's transaction identifier from a client handle. */
+    public static void setBulkLoadHandle(PbBulkLoadHandle target, BulkLoadHandle handle) {
+        target.setTableId(handle.getTableId()).setBulkLoadId(handle.getBulkLoadId());
+    }
 
     public static ProduceLogRequest makeProduceLogRequest(
             long tableId, int acks, int maxRequestTimeoutMs, List<ReadyWriteBatch> readyBatches) {
