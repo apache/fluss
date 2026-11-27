@@ -93,14 +93,31 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     /** Commits the initial lake snapshot of a Fluss table without any Fluss log offsets. */
     public void commitInitialSnapshot(long tableId, TablePath tablePath, long snapshotId)
             throws IOException {
-        Map<TableBucket, Long> emptyOffsets = Collections.emptyMap();
-        String offsetsPath = prepareLakeSnapshot(tableId, tablePath, emptyOffsets);
+        commitInitialSnapshot(tableId, tablePath, snapshotId, Collections.emptyMap(), false);
+    }
+
+    /** Registers an initial lake snapshot with the fixed recovery boundaries of imported KV. */
+    public void commitInitialSnapshot(
+            long tableId, TablePath tablePath, long snapshotId, Map<TableBucket, Long> offsets)
+            throws IOException {
+        commitInitialSnapshot(tableId, tablePath, snapshotId, offsets, true);
+    }
+
+    private void commitInitialSnapshot(
+            long tableId,
+            TablePath tablePath,
+            long snapshotId,
+            Map<TableBucket, Long> offsets,
+            boolean ignorePreviousOffsets)
+            throws IOException {
+        String offsetsPath =
+                prepareLakeSnapshot(tableId, tablePath, offsets, ignorePreviousOffsets);
         commit(
                 tableId,
                 tablePath,
                 LakeCommitResult.committedIsReadable(snapshotId),
                 offsetsPath,
-                emptyOffsets,
+                offsets,
                 Collections.emptyMap());
     }
 

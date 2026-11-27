@@ -82,8 +82,14 @@ abstract class FlinkCatalogFactoryTest {
         lakeCatalogMap.put("paimon.jdbc.user", "admin");
         lakeCatalogMap.put("paimon.jdbc.password", "pass");
 
+        Map<String, String> fileSystemConfigs = new HashMap<>();
+        fileSystemConfigs.put("client.fs.oss.endpoint", "oss-cn-hangzhou.aliyuncs.com");
+        fileSystemConfigs.put("client.fs.oss.accessKeyId", "test-access-key");
+        fileSystemConfigs.put("client.fs.oss.accessKeySecret", "test-secret-key");
+
         options.putAll(securityMap);
         options.putAll(lakeCatalogMap);
+        options.putAll(fileSystemConfigs);
         FlinkCatalog actualCatalog2 =
                 (FlinkCatalog)
                         FactoryUtil.createCatalog(
@@ -94,6 +100,10 @@ abstract class FlinkCatalogFactoryTest {
 
         assertThat(actualCatalog2.getSecurityConfigs()).isEqualTo(securityMap);
         assertThat(actualCatalog2.getLakeCatalogProperties()).isEqualTo(lakeCatalogMap);
+        assertThat(actualCatalog2.getFlussConfiguration().toMap())
+                .containsAllEntriesOf(fileSystemConfigs)
+                .containsAllEntriesOf(securityMap)
+                .containsEntry(ConfigOptions.BOOTSTRAP_SERVERS.key(), BOOTSTRAP_SERVERS_NAME);
     }
 
     @Test

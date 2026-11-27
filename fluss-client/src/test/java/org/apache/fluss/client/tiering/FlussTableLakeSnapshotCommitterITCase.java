@@ -72,6 +72,26 @@ class FlussTableLakeSnapshotCommitterITCase extends ClientToServerITCaseBase {
         }
     }
 
+    @Test
+    void testInitialSnapshotOffsets() throws Exception {
+        TablePath path = tableNames.tablePath("fluss", "initial_snapshot_offsets");
+        long tableId = createTable(path, false).f0;
+        Map<TableBucket, Long> offsets = Collections.singletonMap(new TableBucket(tableId, 0), 73L);
+        flussTableLakeSnapshotCommitter.commitInitialSnapshot(tableId, path, 1L, offsets);
+        assertThat(admin.getReadableLakeSnapshot(path).get().getTableBucketsOffset())
+                .isEqualTo(offsets);
+
+        // The existing overload retains its original merge-with-previous-offsets behavior.
+        flussTableLakeSnapshotCommitter.commitInitialSnapshot(tableId, path, 2L);
+        assertThat(admin.getReadableLakeSnapshot(path).get().getTableBucketsOffset())
+                .isEqualTo(offsets);
+
+        // The explicit map describes the complete source snapshot, including an empty selection.
+        flussTableLakeSnapshotCommitter.commitInitialSnapshot(
+                tableId, path, 3L, Collections.emptyMap());
+        assertThat(admin.getReadableLakeSnapshot(path).get().getTableBucketsOffset()).isEmpty();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCommit(boolean isPartitioned) throws Exception {

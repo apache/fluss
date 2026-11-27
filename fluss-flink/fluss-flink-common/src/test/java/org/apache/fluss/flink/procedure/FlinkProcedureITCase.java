@@ -143,6 +143,36 @@ public abstract class FlinkProcedureITCase {
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"'missing'", "'missing', ''"})
+    @MultiVersionTest
+    void testEnableFlussOnLakeTableCallSignatures(String arguments) {
+        // Resolve the SQL signature before rejecting the missing source table.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "CALL "
+                                                + CATALOG_NAME
+                                                + ".sys.enable_fluss_on_lake_table("
+                                                + arguments
+                                                + ")"))
+                .hasStackTraceContaining("EnableFlussOnLakeTableProcedure.call");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testEnableFlussOnLakeTableNamedArguments() {
+        // The table name can be supplied by name while omitting optional table options.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "CALL "
+                                                + CATALOG_NAME
+                                                + ".sys.enable_fluss_on_lake_table("
+                                                + "`table` => 'missing')"))
+                .hasStackTraceContaining("EnableFlussOnLakeTableProcedure.call");
+    }
+
     @Test
     @MultiVersionTest
     void testShowProcedures() throws Exception {
