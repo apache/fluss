@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -774,6 +775,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
         }
 
+        validateBulkLoadSupport(tablePath, tableDescriptor);
         if (!databaseExists) {
             metadataManager.createDatabase(
                     databaseName, DatabaseDescriptor.builder().build(), true);
@@ -794,6 +796,28 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
         return CompletableFuture.completedFuture(
                 new CreateTableFromLakeResponse().setTableInfo(pbTableInfo));
+    }
+
+    private static void validateBulkLoadSupport(
+            TablePath tablePath, TableDescriptor tableDescriptor) {
+        if (!tableDescriptor.hasPrimaryKey()) {
+            return;
+        }
+        TableConfig tableConfig =
+                new TableConfig(Configuration.fromMap(tableDescriptor.getProperties()));
+        if (tableConfig.getMergeEngineType().isPresent()) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Cannot create primary-key table %s from Paimon: BulkLoad does not support '%s'.",
+                            tablePath, ConfigOptions.TABLE_MERGE_ENGINE.key()));
+        }
+        if (tableConfig.getKvTTL().isPresent()
+                || KvValueLayout.fromTableConfig(tableConfig).hasValueTag()) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Cannot create primary-key table %s from Paimon: BulkLoad requires plain KV values without row TTL ('%s').",
+                            tablePath, ConfigOptions.TABLE_KV_TTL.key()));
+        }
     }
 
     private void createTableInternal(
