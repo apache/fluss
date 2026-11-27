@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemPlugin;
 import org.apache.fluss.fs.cos.token.COSSecurityTokenReceiver;
+import org.apache.fluss.fs.cos.token.CosNSessionCredentialsRestorer;
 
 import org.apache.hadoop.fs.cosn.CosNFileSystem;
 import org.slf4j.Logger;
@@ -108,6 +109,9 @@ public class COSFileSystemPlugin implements FileSystemPlugin {
             URI fsUri, org.apache.hadoop.conf.Configuration hadoopConfig) throws IOException {
         CosNFileSystem fileSystem = new CosNFileSystem();
         fileSystem.initialize(fsUri, hadoopConfig);
+        // hadoop-cos 3.3.5 drops the STS session token when constructing COSClient
+        // (HADOOP-19648, fixed in 3.5.0 which requires Java 17). Restore it here.
+        CosNSessionCredentialsRestorer.restore(fileSystem);
         return fileSystem;
     }
 
