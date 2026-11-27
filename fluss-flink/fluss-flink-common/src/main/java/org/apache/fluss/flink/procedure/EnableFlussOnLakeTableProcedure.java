@@ -22,7 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
-import org.apache.fluss.flink.action.load.LoadLakeDataToFlussAction;
+import org.apache.fluss.flink.action.bulkload.LoadLakeDataToFlussAction;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
@@ -140,7 +140,6 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
                                                 DataLakeFormat.PAIMON + ".")),
                                 tableInfo.getTablePath(),
                                 snapshotId,
-                                null,
                                 UUID.randomUUID().toString(),
                                 tableInfo.getTableId())
                         .submit(context.getExecutionEnvironment());
@@ -161,8 +160,11 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
                     new FlussTableLakeSnapshotCommitter(
                             flussProcedureContext.getFlussConfiguration())) {
                 committer.open();
-                committer.commitInitialSnapshot(
-                        tableInfo.getTableId(), tableInfo.getTablePath(), snapshotId.get());
+                committer.commitLakeSnapshot(
+                        tableInfo.getTableId(),
+                        tableInfo.getTablePath(),
+                        snapshotId.get(),
+                        Collections.emptyMap());
             }
         }
         enableLake(tableInfo);

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.action.load;
+package org.apache.fluss.flink.action.bulkload;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.Configuration;
@@ -59,7 +59,6 @@ public class LoadLakeDataToFlussActionFactory implements ActionFactory {
                 "--datalake.format must be paimon.");
         Map<String, String> options = params.toMap();
         String snapshotId = params.get("source-snapshot-id");
-        String parallelism = params.get("parallelism");
         String expectedTableId = params.get("expected-table-id");
         return Optional.of(
                 new LoadLakeDataToFlussAction(
@@ -67,7 +66,6 @@ public class LoadLakeDataToFlussActionFactory implements ActionFactory {
                         Configuration.fromMap(extractAndRemovePrefix(options, "datalake.paimon.")),
                         tablePath,
                         snapshotId == null ? null : Long.valueOf(snapshotId),
-                        parallelism == null ? null : Integer.valueOf(parallelism),
                         params.get("bulk-load-id"),
                         expectedTableId == null ? null : Long.valueOf(expectedTableId)));
     }
@@ -78,18 +76,16 @@ public class LoadLakeDataToFlussActionFactory implements ActionFactory {
                 + "  --fluss.bootstrap.servers <host:port> [--fluss.<option> <value>]...\n"
                 + "  [--datalake.format paimon] [--datalake.paimon.<option> <value>]...\n"
                 + "  [--source-snapshot-id <id> --bulk-load-id <id>] [--expected-table-id <id>]\n"
-                + "  [--parallelism <n>]\n"
                 + "\n"
                 + "The Fluss primary-key table must be newly created with lake access disabled.\n"
                 + "Prevent ordinary Fluss writes until initialization completes, including"
                 + " resumptions.\n"
-                + "The source must have a readable Paimon snapshot. Without"
-                + " --source-snapshot-id,\n"
+                + "Without --source-snapshot-id,\n"
                 + "the latest snapshot is selected once when the action starts.\n"
                 + "The job selects all source partitions for regular tables, or the retention\n"
                 + "window and future source partitions for auto-partitioned tables.\n"
-                + "Load parallelism defaults to the table's bucket count; --parallelism"
-                + " overrides it.\n"
+                + "Load parallelism follows Flink's job configuration.\n"
+                + "A source without a snapshot still submits a job to enable lake access.\n"
                 + "Use --fluss.client.fs.<option> for writable remote-storage credentials.\n"
                 + "The job registers the loaded snapshot and enables lake access after commit.\n"
                 + "An omitted Bulk Load ID is generated once before Begin and carried in the"

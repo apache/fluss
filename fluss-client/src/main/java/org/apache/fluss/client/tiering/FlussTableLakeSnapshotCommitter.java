@@ -90,28 +90,14 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
     }
 
-    /** Commits the initial lake snapshot of a Fluss table without any Fluss log offsets. */
-    public void commitInitialSnapshot(long tableId, TablePath tablePath, long snapshotId)
-            throws IOException {
-        commitInitialSnapshot(tableId, tablePath, snapshotId, Collections.emptyMap(), false);
-    }
-
-    /** Registers an initial lake snapshot with the fixed recovery boundaries of imported KV. */
-    public void commitInitialSnapshot(
+    /**
+     * Registers a readable lake snapshot with its complete Fluss log offsets. Pass an empty map
+     * when the snapshot has no Fluss log offsets; previous offsets are not inherited.
+     */
+    public void commitLakeSnapshot(
             long tableId, TablePath tablePath, long snapshotId, Map<TableBucket, Long> offsets)
             throws IOException {
-        commitInitialSnapshot(tableId, tablePath, snapshotId, offsets, true);
-    }
-
-    private void commitInitialSnapshot(
-            long tableId,
-            TablePath tablePath,
-            long snapshotId,
-            Map<TableBucket, Long> offsets,
-            boolean ignorePreviousOffsets)
-            throws IOException {
-        String offsetsPath =
-                prepareLakeSnapshot(tableId, tablePath, offsets, ignorePreviousOffsets);
+        String offsetsPath = prepareLakeSnapshot(tableId, tablePath, offsets, true);
         commit(
                 tableId,
                 tablePath,

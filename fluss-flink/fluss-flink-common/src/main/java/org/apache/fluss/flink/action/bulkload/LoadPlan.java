@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.action.load;
+package org.apache.fluss.flink.action.bulkload;
 
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+
+import javax.annotation.Nullable;
 
 import java.io.Serializable;
 
@@ -30,9 +32,10 @@ final class LoadPlan implements Serializable {
     final TablePath tablePath;
     final long tableId;
     final String bulkLoadId;
-    final long sourceSnapshotId;
+    // Null for an empty source table without a committed snapshot.
+    @Nullable final Long sourceSnapshotId;
 
-    LoadPlan(TableInfo tableInfo, String bulkLoadId, long sourceSnapshotId) {
+    LoadPlan(TableInfo tableInfo, String bulkLoadId, @Nullable Long sourceSnapshotId) {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.bulkLoadId = bulkLoadId;

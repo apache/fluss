@@ -574,7 +574,7 @@
                                         <exclude>org.apache.fluss.flink.action.ActionLoader</exclude>
                                         <exclude>org.apache.fluss.flink.action.FlussActionEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.action.orphan.*</exclude>
-                                        <exclude>org.apache.fluss.flink.action.load.*</exclude>
+                                        <exclude>org.apache.fluss.flink.action.bulkload.*</exclude>
                                         <!-- end exclude for flink action -->
                                         <!-- exclude flink compatibility class for catalogs -->
                                         <exclude>org.apache.flink.table.catalog.*</exclude>

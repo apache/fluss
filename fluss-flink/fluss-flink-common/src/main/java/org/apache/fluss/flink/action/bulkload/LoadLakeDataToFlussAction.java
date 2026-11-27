@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.action.load;
+package org.apache.fluss.flink.action.bulkload;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.Connection;
@@ -31,7 +31,6 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.encode.KvValueLayout;
 
 import org.apache.flink.configuration.DeploymentOptions;
 import org.apache.flink.core.execution.JobClient;
@@ -58,7 +57,6 @@ public class LoadLakeDataToFlussAction implements Action {
     private final Configuration paimonConfig;
     private final TablePath tablePath;
     @Nullable private final Long sourceSnapshotId;
-    @Nullable private final Integer parallelism;
     @Nullable private final String bulkLoadId;
     @Nullable private final Long expectedTableId;
 
@@ -66,8 +64,9 @@ public class LoadLakeDataToFlussAction implements Action {
      * Creates a load action without creating or altering the target table. A null snapshot ID
      * selects the latest Paimon snapshot once at submission. Paimon options override catalog
      * properties stored in the Fluss table; Fluss options include writable remote-filesystem
-     * credentials. The job selects partitions using the table's load policy. A null parallelism
-     * uses the table's bucket count for the bucket-building operator.
+     * credentials. The job selects partitions using the table's load policy and uses Flink's
+     * configured parallelism for the bucket-building operator. If the source has no snapshot, the
+     * job only enables lake access.
      *
      * <p>The snapshot ID and Bulk Load ID must either both be null or both be provided. When
      * omitted, the action selects the latest snapshot and generates an ID once before Begin.
@@ -84,7 +83,6 @@ public class LoadLakeDataToFlussAction implements Action {
             Configuration paimonConfig,
             TablePath tablePath,
             @Nullable Long sourceSnapshotId,
-            @Nullable Integer parallelism,
             @Nullable String bulkLoadId,
             @Nullable Long expectedTableId) {
         this.flussConfig = new Configuration(checkNotNull(flussConfig));
@@ -95,8 +93,6 @@ public class LoadLakeDataToFlussAction implements Action {
                 sourceSnapshotId == null || sourceSnapshotId > 0,
                 "The source snapshot ID must be positive.");
         this.sourceSnapshotId = sourceSnapshotId;
-        checkArgument(parallelism == null || parallelism > 0, "The parallelism must be positive.");
-        this.parallelism = parallelism;
         checkArgument(
                 bulkLoadId == null || !bulkLoadId.trim().isEmpty(),
                 "The Bulk Load ID must not be empty.");
@@ -134,7 +130,6 @@ public class LoadLakeDataToFlussAction implements Action {
                     tableInfo.getTableConfig().getDataLakeFormat().orElse(null)
                             == DataLakeFormat.PAIMON,
                     "Loading currently supports only Paimon lake tables.");
-            validateBuildSupport(tableInfo);
             String fixedBulkLoadId = bulkLoadId == null ? UUID.randomUUID().toString() : bulkLoadId;
 
             Configuration lakeConfig =
@@ -145,18 +140,13 @@ public class LoadLakeDataToFlussAction implements Action {
                     LakeStoragePluginSetUp.fromDataLakeFormat(
                                     DataLakeFormat.PAIMON.toString(), null)
                             .createLakeStorage(lakeConfig);
-            long snapshotId;
+            Long snapshotId;
             if (sourceSnapshotId != null) {
                 snapshotId = sourceSnapshotId;
             } else {
                 try (LakeCatalog catalog = lakeStorage.createLakeCatalog()) {
                     snapshotId =
-                            catalog.getLatestSnapshotId(tableInfo.getLakeTablePath())
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "The source Paimon table has no"
-                                                                    + " snapshot to load."));
+                            catalog.getLatestSnapshotId(tableInfo.getLakeTablePath()).orElse(null);
                 }
             }
             return LoadLakeToFluss.submit(
@@ -167,21 +157,7 @@ public class LoadLakeDataToFlussAction implements Action {
                     tableInfo,
                     lakeStorage.createLakeSource(tableInfo.getLakeTablePath()),
                     snapshotId,
-                    parallelism == null ? tableInfo.getNumBuckets() : parallelism,
                     fixedBulkLoadId);
         }
-    }
-
-    static void validateBuildSupport(TableInfo table) {
-        checkArgument(
-                !table.getTableConfig().getMergeEngineType().isPresent(),
-                "Bulk Load does not support a Fluss merge engine.");
-        checkArgument(
-                !KvValueLayout.fromTableConfig(table.getTableConfig()).hasValueTag()
-                        && !table.getTableConfig().getKvTTL().isPresent(),
-                "Bulk Load does not support tagged KV values or row TTL.");
-        checkArgument(
-                table.getSchema().getAutoIncrementColumnNames().isEmpty(),
-                "Bulk Load does not support auto-increment columns.");
     }
 }

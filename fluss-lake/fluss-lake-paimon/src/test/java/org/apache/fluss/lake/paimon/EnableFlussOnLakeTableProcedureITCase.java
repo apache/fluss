@@ -33,7 +33,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.action.ActionLoader;
 import org.apache.fluss.flink.action.FlussActionEntrypoint;
-import org.apache.fluss.flink.action.load.LoadLakeDataToFlussAction;
+import org.apache.fluss.flink.action.bulkload.LoadLakeDataToFlussAction;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
@@ -96,6 +96,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -647,7 +648,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                                 .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
                                 .column("payload", org.apache.paimon.types.DataTypes.STRING())
                                 .primaryKey("id")
-                                .option(CoreOptions.BUCKET.key(), "2")
+                                .option(CoreOptions.BUCKET.key(), "4")
                                 .option(CoreOptions.BUCKET_KEY.key(), "id")
                                 .option("partition.legacy-name", "false")
                                 .build());
@@ -661,11 +662,9 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
             arguments.add(Long.toString(snapshotId));
             arguments.add("--bulk-load-id");
             arguments.add(UUID.randomUUID().toString());
-            arguments.add("--parallelism");
-            arguments.add("1");
         }
-        // Verify the default uses two table buckets and the explicit action option overrides it.
-        LocalActionEnvironment.run(arguments.toArray(new String[0]), explicitSnapshot ? 1 : 2);
+        // Four buckets must load using Flink's parallelism even when fewer slots are available.
+        LocalActionEnvironment.run(arguments.toArray(new String[0]), explicitSnapshot ? 2 : 1);
         // The finalizer must retain the client filesystem configuration supplied to the job.
         assertThat(
                         ((TestFileSystem) new FsPath("test:///").getFileSystem())
@@ -682,7 +681,9 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         assertThat(admin.getLatestLakeSnapshot(path).get().getTableBucketsOffset())
                 .containsEntry(new TableBucket(loaded.getTableId(), 0), 0L)
                 .containsEntry(new TableBucket(loaded.getTableId(), 1), 0L)
-                .hasSize(2);
+                .containsEntry(new TableBucket(loaded.getTableId(), 2), 0L)
+                .containsEntry(new TableBucket(loaded.getTableId(), 3), 0L)
+                .hasSize(4);
         try (Table table = conn.getTable(path)) {
             assertThatRow(
                             table.newLookup()
@@ -698,6 +699,39 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                         ActionLoader.createAction(arguments.toArray(new String[0])).get();
         action.submit(execEnv).getJobExecutionResult().get(2, TimeUnit.MINUTES);
         assertThat(admin.getLatestLakeSnapshot(path).get().getSnapshotId()).isEqualTo(snapshotId);
+    }
+
+    @Test
+    void testLoadEmptyTable() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "action_empty_table");
+        FileStoreTable source =
+                createPaimonTable(
+                        path,
+                        Schema.newBuilder()
+                                .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                                .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                                .primaryKey("id")
+                                .option(CoreOptions.BUCKET.key(), "2")
+                                .option("partition.legacy-name", "false")
+                                .build());
+        assertThat(source.latestSnapshot()).isEmpty();
+        TableInfo created = admin.createTableFromLake(path, Collections.emptyMap()).get();
+        LoadLakeDataToFlussAction action =
+                (LoadLakeDataToFlussAction)
+                        ActionLoader.createAction(loadActionArguments(path).toArray(new String[0]))
+                                .get();
+
+        // An empty source still submits a job whose finalizer enables the existing Fluss table.
+        action.submit(execEnv).getJobExecutionResult().get(2, TimeUnit.MINUTES);
+        TableInfo enabled = admin.getTableInfo(path).get();
+        assertThat(enabled.getTableId()).isEqualTo(created.getTableId());
+        assertThat(enabled.getTableConfig().isDataLakeEnabled()).isTrue();
+        assertThat(source.latestSnapshot()).isEmpty();
+        assertThatThrownBy(() -> admin.getLatestLakeSnapshot(path).get())
+                .cause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
+
+        action.submit(execEnv).getJobExecutionResult().get(2, TimeUnit.MINUTES);
     }
 
     @Test
@@ -975,6 +1009,100 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void testLoadMultiLevelPartitions(boolean autoPartitioned) throws Exception {
+        TablePath path = TablePath.of(DATABASE, "procedure_multi_partitions_" + autoPartitioned);
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                        .column("region", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .column("dt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .primaryKey("id", "region", "dt")
+                        .partitionKeys("region", "dt")
+                        .option(CoreOptions.BUCKET.key(), "2")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option("partition.legacy-name", "false");
+        if (autoPartitioned) {
+            // The time key is the second partition column, not the first one.
+            schema.option(CoreOptions.PARTITION_TIMESTAMP_PATTERN.key(), "$dt")
+                    .option(CoreOptions.PARTITION_TIMESTAMP_FORMATTER.key(), "yyyy-MM-dd")
+                    .option("sink.process-time-zone", "UTC");
+        }
+        FileStoreTable source = createPaimonTable(path, schema.build());
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        String expired = today.minusDays(8).toString();
+        String current = today.toString();
+        String future = today.plusDays(3).toString();
+        List<GenericRow> rows = new ArrayList<>();
+        for (String region : Arrays.asList("east", "west")) {
+            for (String date : Arrays.asList(expired, current, future)) {
+                rows.add(
+                        GenericRow.of(
+                                1L,
+                                BinaryString.fromString(region + "-" + date),
+                                BinaryString.fromString(region),
+                                BinaryString.fromString(date)));
+            }
+        }
+        long snapshotId = writePaimonRows(source, rows.toArray(new GenericRow[0]));
+
+        tableEnvironment.getConfig().set("table.dml-sync", "true");
+        tableEnvironment
+                .executeSql(
+                        procedureSql(
+                                path,
+                                autoPartitioned ? "'table.auto-partition.num-retention=7'" : null))
+                .await();
+
+        TableInfo tableInfo = admin.getTableInfo(path).get();
+        assertThat(tableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+        assertThat(tableInfo.isAutoPartitioned()).isEqualTo(autoPartitioned);
+        assertThat(tableInfo.getPartitionKeys()).containsExactly("region", "dt");
+        List<String> expectedPartitions =
+                new ArrayList<>(
+                        Arrays.asList(
+                                "east$" + current,
+                                "west$" + current,
+                                "east$" + future,
+                                "west$" + future));
+        if (!autoPartitioned) {
+            expectedPartitions.addAll(Arrays.asList("east$" + expired, "west$" + expired));
+        }
+        List<PartitionInfo> partitions = admin.listPartitionInfos(path).get();
+        assertThat(partitions)
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactlyInAnyOrderElementsOf(expectedPartitions);
+        Map<TableBucket, Long> expectedOffsets = new HashMap<>();
+        for (PartitionInfo partition : partitions) {
+            for (int bucket = 0; bucket < 2; bucket++) {
+                expectedOffsets.put(
+                        new TableBucket(tableInfo.getTableId(), partition.getPartitionId(), bucket),
+                        0L);
+            }
+        }
+        LakeSnapshot snapshot = admin.getLatestLakeSnapshot(path).get();
+        assertThat(snapshot.getSnapshotId()).isEqualTo(snapshotId);
+        assertThat(snapshot.getTableBucketsOffset()).isEqualTo(expectedOffsets);
+
+        waitUntilImportedBucketsReady(path);
+        try (Table table = conn.getTable(path)) {
+            Lookuper lookuper = table.newLookup().createLookuper();
+            for (GenericRow sourceRow : rows) {
+                String region = sourceRow.getString(2).toString();
+                String date = sourceRow.getString(3).toString();
+                if (autoPartitioned && expired.equals(date)) {
+                    continue;
+                }
+                // Reusing the same ID verifies that both partition columns identify the row.
+                assertThatRow(lookuper.lookup(row(1L, region, date)).get().getSingletonRow())
+                        .withSchema(tableInfo.getRowType())
+                        .isEqualTo(row(1L, sourceRow.getString(1).toString(), region, date));
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void testEnableWithoutLoad(boolean primaryKey) throws Exception {
         TablePath path = TablePath.of(DATABASE, "procedure_no_load_" + primaryKey);
         Schema.Builder schema =
@@ -1143,7 +1271,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                     new FlussTableLakeSnapshotCommitter(
                             FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
                 committer.open();
-                committer.commitInitialSnapshot(table.getTableId(), path, snapshot, offsets);
+                committer.commitLakeSnapshot(table.getTableId(), path, snapshot, offsets);
             }
         }
         List<String> arguments = loadActionArguments(path);
@@ -1298,6 +1426,16 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         assertThat(admin.getTableInfo(path).get().getTableConfig().isDataLakeEnabled()).isFalse();
         admin.dropPartition(path, new PartitionSpec(Collections.singletonMap("dt", old)), false)
                 .get();
+        // Drop acknowledges the registration removal before the coordinator processes deletion.
+        // Wait for the old physical partition to be removed before committing or recreating it.
+        waitUntil(
+                () ->
+                        !FLUSS_CLUSTER_EXTENSION
+                                .getZooKeeperClient()
+                                .getPartitionAssignment(oldTarget.getPartitionId())
+                                .isPresent(),
+                Duration.ofMinutes(1),
+                "The original load partition was not deleted.");
         if (committed) {
             // The deleted target has no bucket commit record, but the transaction may still finish.
             bulkLoad(path).commit(context.getHandle()).get();
@@ -1680,7 +1818,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                     config -> {
                         config.set(DeploymentOptions.TARGET, "local");
                         config.set(DeploymentOptions.ATTACHED, true);
-                        config.set(TaskManagerOptions.NUM_TASK_SLOTS, 2);
+                        config.set(TaskManagerOptions.NUM_TASK_SLOTS, expectedLoadParallelism);
                         StreamExecutionEnvironment environment =
                                 new StreamExecutionEnvironment(config) {
                                     @Override
@@ -1699,7 +1837,7 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
                                         return super.executeAsync(graph);
                                     }
                                 };
-                        environment.setParallelism(1);
+                        environment.setParallelism(expectedLoadParallelism);
                         return environment;
                     });
             try {

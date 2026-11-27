@@ -17,4 +17,4 @@
 #
 
 org.apache.fluss.flink.action.orphan.OrphanFilesCleanActionFactory
-org.apache.fluss.flink.action.load.LoadLakeDataToFlussActionFactory
+org.apache.fluss.flink.action.bulkload.LoadLakeDataToFlussActionFactory

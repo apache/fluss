@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.action.load;
+package org.apache.fluss.flink.action.bulkload;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
@@ -57,6 +57,7 @@ import org.apache.fluss.utils.TypeUtils;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.operators.MailboxExecutor;
+import org.apache.flink.api.common.time.Deadline;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.configuration.BatchExecutionOptions;
@@ -79,6 +80,7 @@ import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -109,14 +111,17 @@ final class LoadLakeToFluss {
             BulkLoad bulkLoad,
             TableInfo table,
             LakeSource<Split> source,
-            long snapshotId,
-            int parallelism,
+            @Nullable Long snapshotId,
             String bulkLoadId)
             throws Exception {
         LoadPlan plan = new LoadPlan(table, bulkLoadId, snapshotId);
         BulkLoadBuildContext context = null;
         List<LoadTask> tasks = new ArrayList<>();
-        if (!table.getTableConfig().isDataLakeEnabled()) {
+        if (snapshotId == null) {
+            LOG.info(
+                    "Source lake table {} has no snapshot; the job will only enable lake access.",
+                    table.getLakeTablePath());
+        } else if (!table.getTableConfig().isDataLakeEnabled()) {
             BulkLoadInfo previous =
                     findLoad(bulkLoad, new BulkLoadHandle(table.getTableId(), bulkLoadId), config);
             Set<String> selectedPartitions = null;
@@ -151,39 +156,36 @@ final class LoadLakeToFluss {
                 }
             }
         }
-        return submitJob(executionEnvironment, config, source, plan, context, tasks, parallelism);
+        return submitJob(executionEnvironment, config, source, plan, context, tasks);
     }
 
     private static Set<String> restorePartitions(
             Admin admin, TableInfo table, BulkLoadInfo previous, Configuration config)
             throws Exception {
-        Map<Long, String> currentNames = new LinkedHashMap<>();
+        Set<Long> existingPartitionIds = new HashSet<>();
         for (PartitionInfo partition :
                 await(admin.listPartitionInfos(table.getTablePath()), config)) {
-            currentNames.put(partition.getPartitionId(), partition.getPartitionName());
+            existingPartitionIds.add(partition.getPartitionId());
         }
         Set<String> selectedPartitions = new LinkedHashSet<>();
         for (BulkLoadInfo.TargetProgress target : previous.getTargets()) {
-            String name = target.getPartitionName();
-            if (name == null) {
-                // Older coordinators omit the frozen name. Live targets remain resumable.
-                name = currentNames.get(target.getPartitionId());
-            }
+            String originalPartitionName = target.getPartitionName();
             checkState(
-                    name != null,
-                    "The coordinator did not return the original name for deleted partition %s. "
-                            + "Upgrade the coordinator before resuming this Bulk Load.",
+                    originalPartitionName != null,
+                    "Cannot resume Bulk Load %s: the coordinator response is missing the original "
+                            + "name of target partition %s.",
+                    previous.getHandle().getBulkLoadId(),
                     target.getPartitionId());
-            if (!currentNames.containsKey(target.getPartitionId())) {
+            if (!existingPartitionIds.contains(target.getPartitionId())) {
                 LOG.warn(
                         "Bulk Load {} target {} (partition ID {}) was deleted and will be skipped.",
                         previous.getHandle().getBulkLoadId(),
-                        name,
+                        originalPartitionName,
                         target.getPartitionId());
             }
             // Replay Begin with the complete original names. The writer uses the frozen ID to
             // skip a withdrawn target, even if a new partition has since reused its name.
-            selectedPartitions.add(name);
+            selectedPartitions.add(originalPartitionName);
         }
         return selectedPartitions;
     }
@@ -203,7 +205,7 @@ final class LoadLakeToFluss {
                     split.bucket() >= 0,
                     "Lake snapshot contains unsupported bucket %s.",
                     split.bucket());
-            String partition = partitionName(table, split);
+            String partition = table.isPartitioned() ? partitionName(table, split) : null;
             grouped.computeIfAbsent(partition, ignored -> new LinkedHashMap<>())
                     .computeIfAbsent(split.bucket(), ignored -> new ArrayList<>())
                     .add(split);
@@ -211,6 +213,10 @@ final class LoadLakeToFluss {
         return grouped;
     }
 
+    /**
+     * Returns null when a partitioned table has no selected source partitions to load. A
+     * non-partitioned table always has one physical target, even without source rows.
+     */
     @Nullable
     private static BulkLoadBuildContext beginLoad(
             BulkLoad bulkLoad,
@@ -242,9 +248,9 @@ final class LoadLakeToFluss {
                 plan.tablePath,
                 plan.tableId,
                 plan.sourceSnapshotId);
-        long deadline =
-                System.nanoTime() + config.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toNanos();
-        while (true) {
+        Deadline deadline = Deadline.fromNow(Duration.ofMinutes(3));
+        ExecutionException lastFailure;
+        do {
             try {
                 return await(bulkLoad.begin(plan.bulkLoadId, partitionNames), config);
             } catch (ExecutionException e) {
@@ -252,14 +258,15 @@ final class LoadLakeToFluss {
                 // Creation can complete before the coordinator's event thread sees the metadata.
                 // Reusing the ID makes Begin safe to retry while that metadata becomes visible.
                 if (!(cause instanceof TableNotExistException
-                                || cause instanceof PartitionNotExistException)
-                        || System.nanoTime() >= deadline) {
+                        || cause instanceof PartitionNotExistException)) {
                     throw e;
                 }
+                lastFailure = e;
                 LOG.debug("Waiting for Bulk Load targets of {} to become visible.", plan.tablePath);
-                Thread.sleep(100);
+                TimeUnit.MILLISECONDS.sleep(Math.min(3000L, deadline.timeLeft().toMillis()));
             }
-        }
+        } while (deadline.hasTimeLeft());
+        throw lastFailure;
     }
 
     private static <Split extends LakeSplit> List<LoadTask> createLoadTasks(
@@ -278,20 +285,26 @@ final class LoadLakeToFluss {
                             target.getPath().getPartitionName(), Collections.emptyMap());
             for (int bucket : buckets.keySet()) {
                 for (Split split : buckets.get(bucket)) {
+                    Integer totalBuckets = split.totalBuckets();
+                    checkArgument(
+                            totalBuckets != null,
+                            "Cannot load %s: source split does not report its physical bucket count.",
+                            target.getPath());
                     // A valid bucket ID alone cannot detect old partitions with fewer buckets.
                     checkArgument(
-                            split.totalBuckets() == target.getBucketCount(),
+                            Objects.equals(totalBuckets, target.getBucketCount()),
                             "Cannot load %s: source bucket count %s differs from frozen target bucket count %s. "
                                     + "Promotion of rescaled source partitions is not supported.",
                             target.getPath(),
-                            split.totalBuckets(),
+                            totalBuckets,
                             target.getBucketCount());
                 }
                 checkArgument(
                         bucket < target.getBucketCount(),
-                        "Source bucket %s does not match frozen target %s.",
+                        "Source bucket ID %s is out of range for frozen target %s with %s buckets.",
                         bucket,
-                        target.getPath());
+                        target.getPath(),
+                        target.getBucketCount());
             }
             for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
                 List<byte[]> splits = new ArrayList<>();
@@ -316,8 +329,7 @@ final class LoadLakeToFluss {
             LakeSource<Split> source,
             LoadPlan plan,
             @Nullable BulkLoadBuildContext context,
-            List<LoadTask> tasks,
-            int parallelism)
+            List<LoadTask> tasks)
             throws Exception {
         StreamExecutionEnvironment environment = createEnvironment(executionEnvironment);
         DataStream<TableBucket> completed;
@@ -332,8 +344,7 @@ final class LoadLakeToFluss {
                             .rebalance()
                             .map(new BuildBucket<>(config, context, source))
                             .returns(TypeInformation.of(TableBucket.class))
-                            .name("Build and commit lake bucket snapshots")
-                            .setParallelism(parallelism);
+                            .name("Build and commit lake bucket snapshots");
         }
         completed
                 .sinkTo(new CommitSink(config, plan, context))
@@ -362,18 +373,9 @@ final class LoadLakeToFluss {
         }
     }
 
-    @Nullable
     private static String partitionName(TableInfo table, LakeSplit split) {
-        if (!table.isPartitioned()) {
-            return null;
-        }
         List<String> values = split.partition();
         List<String> keys = table.getPartitionKeys();
-        checkArgument(
-                values != null,
-                "Lake split for partitioned table %s has no partition values; expected values for keys %s.",
-                table.getTablePath(),
-                keys);
         checkArgument(
                 values.size() == keys.size(),
                 "Lake split for table %s has %s partition values %s, but the table has %s partition keys %s.",
@@ -384,11 +386,6 @@ final class LoadLakeToFluss {
                 keys);
         for (int i = 0; i < values.size(); i++) {
             String value = values.get(i);
-            checkArgument(
-                    value != null,
-                    "Lake split has a null value for partition key '%s' of table %s.",
-                    keys.get(i),
-                    table.getTablePath());
             checkArgument(
                     !value.contains(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR),
                     "Partition value '%s' for key '%s' of table %s contains '%s', which Fluss uses to separate partition values.",
@@ -404,10 +401,10 @@ final class LoadLakeToFluss {
             TableInfo tableInfo,
             LakeSource<Split> source,
             long snapshotId,
-            @Nullable Set<String> partitions,
+            @Nullable Set<String> selectedPartitions,
             Instant now)
             throws IOException {
-        Predicate filter = partitionFilter(tableInfo, partitions, now);
+        Predicate filter = buildPartitionFilter(tableInfo, selectedPartitions, now);
         if (filter != null) {
             // Prune partitions before planning; never silently load outside the requested scope.
             checkState(
@@ -425,6 +422,8 @@ final class LoadLakeToFluss {
         org.apache.flink.configuration.Configuration jobConfig =
                 org.apache.flink.configuration.Configuration.fromMap(
                         executionEnvironment.getConfiguration().toMap());
+        // Flink 1.18 stores programmatic execution settings separately.
+        jobConfig.addAll(executionEnvironment.getConfig().toConfiguration());
         jobConfig.set(BatchExecutionOptions.SPECULATIVE_ENABLED, false);
         if (!jobConfig.contains(RestartStrategyOptions.RESTART_STRATEGY)) {
             jobConfig.set(RestartStrategyOptions.RESTART_STRATEGY, "fixed-delay");
@@ -443,13 +442,22 @@ final class LoadLakeToFluss {
         return environment;
     }
 
+    /**
+     * Builds the source partition filter for the load.
+     *
+     * @param selectedPartitions target partition names recorded by an existing transaction; when
+     *     non-null, use this set without reapplying retention. When {@code null}, apply the table's
+     *     auto-partition retention policy, or scan all source partitions if the table is not
+     *     auto-partitioned or retention is unlimited
+     * @return a predicate matching the selected partitions or the automatic retention range, or
+     *     {@code null} to scan all partitions in the source snapshot
+     */
     @Nullable
-    static Predicate partitionFilter(
-            TableInfo tableInfo, @Nullable Set<String> partitions, Instant now) {
-        if (partitions != null) {
-            // An existing transaction keeps its original targets even when retention advances.
+    static Predicate buildPartitionFilter(
+            TableInfo tableInfo, @Nullable Set<String> selectedPartitions, Instant now) {
+        if (selectedPartitions != null) {
             List<Map<String, String>> specs = new ArrayList<>();
-            for (String partition : partitions) {
+            for (String partition : selectedPartitions) {
                 specs.add(
                         ResolvedPartitionSpec.fromPartitionName(
                                         tableInfo.getPartitionKeys(), partition)
@@ -457,29 +465,28 @@ final class LoadLakeToFluss {
                                 .getSpecMap());
             }
             return PredicateBuilder.partitions(specs, tableInfo.getRowType());
-        } else if (tableInfo.isAutoPartitioned()) {
-            AutoPartitionStrategy strategy = tableInfo.getTableConfig().getAutoPartitionStrategy();
-            if (strategy.numToRetain() >= 0) {
-                ZonedDateTime current = now.atZone(strategy.timeZone().toZoneId());
-                String earliestRetainedPartition =
-                        generateAutoPartitionTime(
-                                current, -strategy.numToRetain(), strategy.timeUnit(), strategy);
-                String key =
-                        strategy.key() == null
-                                ? tableInfo.getPartitionKeys().get(0)
-                                : strategy.key();
-                int index = tableInfo.getRowType().getFieldIndex(key);
-                // Retention includes the boundary, current and future source partitions. A range
-                // filter preserves that scope without first enumerating all source partitions.
-                return new PredicateBuilder(tableInfo.getRowType())
-                        .greaterOrEqual(
-                                index,
-                                TypeUtils.castFromString(
-                                        earliestRetainedPartition,
-                                        tableInfo.getRowType().getTypeAt(index)));
-            }
         }
-        return null;
+        if (!tableInfo.isAutoPartitioned()) {
+            return null;
+        }
+        AutoPartitionStrategy strategy = tableInfo.getTableConfig().getAutoPartitionStrategy();
+        if (strategy.numToRetain() < 0) {
+            return null;
+        }
+        ZonedDateTime current = now.atZone(strategy.timeZone().toZoneId());
+        String earliestRetainedPartition =
+                generateAutoPartitionTime(
+                        current, -strategy.numToRetain(), strategy.timeUnit(), strategy);
+        String key = strategy.key() == null ? tableInfo.getPartitionKeys().get(0) : strategy.key();
+        int index = tableInfo.getRowType().getFieldIndex(key);
+        // Retention includes the boundary, current and future source partitions. A range
+        // filter preserves that scope without first enumerating all source partitions.
+        return new PredicateBuilder(tableInfo.getRowType())
+                .greaterOrEqual(
+                        index,
+                        TypeUtils.castFromString(
+                                earliestRetainedPartition,
+                                tableInfo.getRowType().getTypeAt(index)));
     }
 
     static <T> T await(CompletableFuture<T> future, Configuration config) throws Exception {
@@ -506,7 +513,7 @@ final class LoadLakeToFluss {
             if (current.getTableConfig().isDataLakeEnabled()) {
                 return;
             }
-            registerInitialSnapshot(admin, current, plan, offsets, config);
+            registerLakeSnapshot(admin, current, plan, offsets, config);
             await(
                     admin.alterTable(
                             plan.tablePath,
@@ -518,13 +525,16 @@ final class LoadLakeToFluss {
         }
     }
 
-    private static void registerInitialSnapshot(
+    private static void registerLakeSnapshot(
             Admin admin,
             TableInfo table,
             LoadPlan plan,
             Map<TableBucket, Long> offsets,
             Configuration config)
             throws Exception {
+        if (plan.sourceSnapshotId == null) {
+            return;
+        }
         // Begin freezes the targets, but a partition may be deleted before finalization.
         // Exclude its buckets from the initial lake snapshot's offsets.
         if (table.isPartitioned()) {
@@ -540,7 +550,7 @@ final class LoadLakeToFluss {
                 new FlussTableLakeSnapshotCommitter(config)) {
             committer.open();
             // Re-register the fixed snapshot on retries, including when an earlier enable failed.
-            committer.commitInitialSnapshot(
+            committer.commitLakeSnapshot(
                     plan.tableId, plan.tablePath, plan.sourceSnapshotId, offsets);
         }
     }
