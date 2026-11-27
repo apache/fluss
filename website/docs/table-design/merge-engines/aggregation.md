@@ -1105,8 +1105,9 @@ CREATE TABLE daily_latency_metrics (
 does not build sketches from raw `DOUBLE` values by itself. Users should insert serialized sketch
 bytes, and Fluss merges those sketches internally when rows with the same primary key are updated.
 Spark `approx_percentile` returns percentile values, not serialized KLL sketch bytes, so it cannot
-feed this merge engine. Flink/Spark SQL helper functions for building sketches and reading quantiles
-can be added separately.
+feed this merge engine. Use the [Flink DataSketches functions](/engine-flink/sql-functions.md#datasketches-functions)
+to build sketches and read quantiles. The [windowed sketch example](/engine-flink/sql-functions.md#example-windowed-sketch-batches)
+shows how to write independent batches instead of repeatedly merging cumulative observations.
 :::
 
 </TabItem>
