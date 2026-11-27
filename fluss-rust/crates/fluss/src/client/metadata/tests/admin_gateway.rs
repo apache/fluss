@@ -17,6 +17,36 @@
 
 use super::*;
 use crate::client::FlussAdmin;
+use crate::proto::{DatabaseExistsResponse, DropDatabaseResponse, ListPartitionInfosResponse};
+use ApiKey::{DatabaseExists, DropDatabase, ListDatabases, ListPartitionInfos, MetaData};
+use ServerType::{CoordinatorServer, TabletServer};
+
+async fn listen() -> TcpListener {
+    TcpListener::bind("127.0.0.1:0").await.unwrap()
+}
+
+fn node(listener: &TcpListener) -> PbServerNode {
+    let addr = listener.local_addr().unwrap();
+    PbServerNode {
+        host: addr.ip().to_string(),
+        port: addr.port().into(),
+        ..Default::default()
+    }
+}
+
+fn admin(nodes: MetadataResponse, bootstrap: &str) -> FlussAdmin {
+    let cluster = Cluster::from_metadata_response(nodes, None).unwrap();
+    let metadata = Arc::new(Metadata::new_for_test(Arc::new(cluster)).with_bootstrap(bootstrap));
+    FlussAdmin::new(metadata.connections.clone(), metadata)
+}
+
+async fn exchange<T>(server: impl Future<Output = ()>, client: impl Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(server, client).1
+    })
+    .await
+    .expect("Admin RPC exchange timed out")
+}
 
 async fn reply_error(stream: &mut TcpStream, mut reply: Vec<u8>, error: FlussError) {
     reply[0] = 1;
@@ -31,239 +61,158 @@ async fn reply_error(stream: &mut TcpStream, mut reply: Vec<u8>, error: FlussErr
 
 #[tokio::test]
 async fn partition_listing_recovers_a_moved_tablet() {
-    use crate::proto::ListPartitionInfosResponse;
-
-    let bootstrap = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let tablet = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut servers = server_metadata(&[1], 0);
-    servers.coordinator_server = Some(PbServerNode {
-        host: "127.0.0.1".into(),
-        port: i32::from(bootstrap.local_addr().unwrap().port()),
-        ..Default::default()
-    });
-    let stale = Cluster::from_metadata_response(servers.clone(), None).unwrap();
-    let empty = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let metadata = Metadata::new_for_test(Arc::new(stale)).with_bootstrap(&format!(
+    let empty = listen().await;
+    let bootstrap = listen().await;
+    let tablet = listen().await;
+    let addresses = format!(
         "{},{}",
         empty.local_addr().unwrap(),
         bootstrap.local_addr().unwrap()
-    ));
-    let admin = FlussAdmin::new(metadata.connections.clone(), Arc::new(metadata));
-
-    servers.tablet_servers[0].port = i32::from(tablet.local_addr().unwrap().port());
-    let empty_task = tokio::spawn(serve_metadata_as(
-        empty,
-        ServerType::CoordinatorServer,
-        Ok(MetadataResponse {
-            coordinator_server: servers.coordinator_server.clone(),
+    );
+    let admin = admin(server_metadata(&[1], 0), &addresses);
+    let table = TablePath::new("db", "parts");
+    let server = async {
+        // Only the second bootstrap knows the tablet's new address.
+        let nodes = MetadataResponse {
+            coordinator_server: Some(node(&bootstrap)),
             ..Default::default()
-        }),
-    ));
-    let bootstrap_task = tokio::spawn(serve_metadata_as(
-        bootstrap,
-        ServerType::CoordinatorServer,
-        Ok(servers),
-    ));
-    let tablet_task = tokio::spawn(async move {
-        let mut stream = accept_handshake(
-            tablet,
-            ServerType::TabletServer,
-            &[ApiKey::ListPartitionInfos],
-        )
-        .await;
+        };
+        let moved = MetadataResponse {
+            tablet_servers: server_metadata(&[1], tablet.local_addr().unwrap().port())
+                .tablet_servers,
+            ..nodes.clone()
+        };
+        serve_metadata_as(empty, CoordinatorServer, Ok(nodes)).await;
+        serve_metadata_as(bootstrap, CoordinatorServer, Ok(moved)).await;
+        let mut ts = accept_handshake(tablet, TabletServer, &[ListPartitionInfos]).await;
         serve_success(
-            &mut stream,
-            ApiKey::ListPartitionInfos,
+            &mut ts,
+            ListPartitionInfos,
             &ListPartitionInfosResponse::default(),
         )
         .await;
-    });
-
-    let partitions = tokio::time::timeout(
-        Duration::from_secs(5),
-        admin.list_partition_infos(&TablePath::new("db", "parts")),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    };
+    let partitions = exchange(server, admin.list_partition_infos(&table))
+        .await
+        .unwrap();
     assert!(partitions.is_empty());
-    empty_task.await.unwrap();
-    bootstrap_task.await.unwrap();
-    tablet_task.await.unwrap();
 }
 
 #[tokio::test]
 async fn coordinator_only_bootstrap_allows_discovery_but_not_admin_reads() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
+    let listener = listen().await;
+    let admin = admin(
+        MetadataResponse::default(),
+        &listener.local_addr().unwrap().to_string(),
+    );
     let nodes = MetadataResponse {
-        coordinator_server: Some(PbServerNode {
-            host: "127.0.0.1".into(),
-            port: i32::from(address.port()),
-            ..Default::default()
-        }),
+        coordinator_server: Some(node(&listener)),
         ..Default::default()
     };
-    let metadata =
-        Arc::new(Metadata::new_for_test(Arc::default()).with_bootstrap(&address.to_string()));
-    let admin = FlussAdmin::new(metadata.connections.clone(), metadata);
-    let (inspection_started, inspection_pending) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        let mut stream =
-            accept_handshake(listener, ServerType::CoordinatorServer, &[ApiKey::MetaData]).await;
-        // Hold the inspection open: its coordinator-only result must not finish the read's refresh.
-        let inspection = read_request(&mut stream, ApiKey::MetaData).await;
-        inspection_started.send(()).unwrap();
-        let read = read_request(&mut stream, ApiKey::MetaData).await;
+    let (started, pending) = oneshot::channel();
+    let server = async {
+        let mut cs = accept_handshake(listener, CoordinatorServer, &[MetaData]).await;
+        // The overlapping inspection may accept this node list, but the read still needs a TS.
+        let inspection = read_request(&mut cs, MetaData).await;
+        started.send(()).unwrap();
+        let read = read_request(&mut cs, MetaData).await;
         for mut reply in [inspection, read] {
             nodes.encode(&mut reply).unwrap();
-            write_reply(&mut stream, &reply).await;
+            write_reply(&mut cs, &reply).await;
         }
         for _ in 0..MAX_BOOTSTRAP_RETRIES {
-            serve_success(&mut stream, ApiKey::MetaData, &nodes).await;
+            serve_success(&mut cs, MetaData, &nodes).await;
         }
-    });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let (discovered, read) = tokio::join!(admin.get_server_nodes(), async {
-            inspection_pending.await.unwrap();
+    };
+    let (discovered, read) = exchange(server, async {
+        tokio::join!(admin.get_server_nodes(), async {
+            pending.await.unwrap();
             let start = tokio::time::Instant::now();
             let result = admin.list_databases().await;
             assert!(start.elapsed() >= Duration::from_millis(700));
             result
-        });
-        let discovered = discovered.unwrap();
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0].server_type(), &ServerType::CoordinatorServer);
-        assert!(matches!(read, Err(Error::RpcError {
-            source: crate::rpc::RpcError::ConnectionError(message), ..
-        }) if message.contains("No available tablet server")));
-        server.await.unwrap();
+        })
     })
-    .await
-    .unwrap();
+    .await;
+    assert!(matches!(&discovered.unwrap()[..], [cs] if cs.server_type() == &CoordinatorServer));
+    assert!(
+        matches!(read, Err(Error::RpcError { source: crate::rpc::RpcError::ConnectionError(message), .. }) if message.contains("No available tablet server"))
+    );
 }
 
 #[tokio::test]
 async fn concurrent_admin_reads_refresh_once_and_retry_once() {
-    use crate::proto::ListDatabasesResponse;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = listen().await;
     let nodes = server_metadata(&[1], listener.local_addr().unwrap().port());
-    let cluster = Cluster::from_metadata_response(nodes.clone(), None).unwrap();
-    let metadata = Arc::new(Metadata::new_for_test(Arc::new(cluster)));
-    let admin = FlussAdmin::new(metadata.connections.clone(), metadata.clone());
-    let server = tokio::spawn(async move {
-        let mut stream = accept_handshake(
-            listener,
-            ServerType::TabletServer,
-            &[
-                ApiKey::ListDatabases,
-                ApiKey::DatabaseExists,
-                ApiKey::MetaData,
-            ],
-        )
-        .await;
-        let first = read_request(&mut stream, ApiKey::ListDatabases).await;
-        let second = read_request(&mut stream, ApiKey::ListDatabases).await;
+    let admin = admin(nodes.clone(), "");
+    let found = DatabaseExistsResponse { exists: true };
+    let server = async {
+        let apis = [DatabaseExists, ListDatabases, MetaData];
+        let mut ts = accept_handshake(listener, TabletServer, &apis).await;
+        // Establish one socket before racing the two requests on it.
+        serve_success(&mut ts, DatabaseExists, &found).await;
+        let first = read_request(&mut ts, DatabaseExists).await;
+        let second = read_request(&mut ts, DatabaseExists).await;
         for reply in [first, second] {
-            reply_error(&mut stream, reply, FlussError::NetworkException).await;
+            reply_error(&mut ts, reply, FlussError::NetworkException).await;
         }
-        serve_success(&mut stream, ApiKey::MetaData, &nodes).await;
-        serve_success(
-            &mut stream,
-            ApiKey::ListDatabases,
-            &ListDatabasesResponse {
-                database_name: vec!["db".into()],
-                ..Default::default()
-            },
-        )
-        .await;
-        let err = read_request(&mut stream, ApiKey::ListDatabases).await;
-        reply_error(&mut stream, err, FlussError::NetworkException).await;
-        // A failed replay and a subsequent authorization error must not start new refreshes.
-        let denied = read_request(&mut stream, ApiKey::DatabaseExists).await;
-        reply_error(&mut stream, denied, FlussError::AuthorizationException).await;
-        serve_success(
-            &mut stream,
-            ApiKey::ListDatabases,
-            &ListDatabasesResponse::default(),
-        )
-        .await;
-    });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        // Both requests must share the established socket used by the simulated TS.
-        metadata
-            .get_connection(&metadata.admin_read_server().unwrap())
-            .await
-            .unwrap();
-        let (first, second) = tokio::join!(admin.list_databases(), admin.list_databases());
+        serve_success(&mut ts, MetaData, &nodes).await;
+        serve_success(&mut ts, DatabaseExists, &found).await;
+        let retry = read_request(&mut ts, DatabaseExists).await;
+        reply_error(&mut ts, retry, FlussError::NetworkException).await;
+        let denied = read_request(&mut ts, ListDatabases).await;
+        reply_error(&mut ts, denied, FlussError::AuthorizationException).await;
+        serve_success(&mut ts, DatabaseExists, &found).await;
+    };
+    exchange(server, async {
+        let read = || admin.database_exists("db");
+        read().await.unwrap();
+        let (first, second) = tokio::join!(read(), read());
         let (ok, err) = if first.is_ok() {
             (first, second)
         } else {
             (second, first)
         };
-        assert_eq!(ok.unwrap(), ["db"]);
+        assert!(ok.unwrap());
         assert_eq!(
             err.unwrap_err().api_error(),
             Some(FlussError::NetworkException)
         );
         assert_eq!(
-            admin
-                .database_exists("private")
-                .await
-                .unwrap_err()
-                .api_error(),
+            admin.list_databases().await.unwrap_err().api_error(),
             Some(FlussError::AuthorizationException)
         );
-        assert!(admin.list_databases().await.unwrap().is_empty());
-        server.await.unwrap();
+        assert!(read().await.unwrap());
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 #[tokio::test]
 async fn coordinator_mutations_refresh_but_only_replay_a_rejected_request() {
-    use crate::proto::DropDatabaseResponse;
-
-    let tablet = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let old = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let new = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tablet = listen().await;
+    let old = listen().await;
+    let new = listen().await;
     let mut nodes = server_metadata(&[1], tablet.local_addr().unwrap().port());
-    nodes.coordinator_server = Some(PbServerNode {
-        host: "127.0.0.1".into(),
-        port: i32::from(old.local_addr().unwrap().port()),
-        ..Default::default()
-    });
-    let cluster = Cluster::from_metadata_response(nodes.clone(), None).unwrap();
-    let metadata = Arc::new(Metadata::new_for_test(Arc::new(cluster)));
-    let admin = FlussAdmin::new(metadata.connections.clone(), metadata);
-    nodes.coordinator_server.as_mut().unwrap().port = i32::from(new.local_addr().unwrap().port());
-
-    let server = tokio::spawn(async move {
+    nodes.coordinator_server = Some(node(&old));
+    let admin = admin(nodes.clone(), "");
+    nodes.coordinator_server = Some(node(&new));
+    let server = async {
         // The old coordinator takes the mutation, then loses its response.
-        let mut first =
-            accept_handshake(old, ServerType::CoordinatorServer, &[ApiKey::DropDatabase]).await;
-        read_request(&mut first, ApiKey::DropDatabase).await;
+        let mut first = accept_handshake(old, CoordinatorServer, &[DropDatabase]).await;
+        read_request(&mut first, DropDatabase).await;
         drop(first);
-        let mut ts = accept_handshake(tablet, ServerType::TabletServer, &[ApiKey::MetaData]).await;
-        serve_success(&mut ts, ApiKey::MetaData, &nodes).await;
-        let mut cs =
-            accept_handshake(new, ServerType::CoordinatorServer, &[ApiKey::DropDatabase]).await;
-        let rejected = read_request(&mut cs, ApiKey::DropDatabase).await;
+        let mut ts = accept_handshake(tablet, TabletServer, &[MetaData]).await;
+        serve_success(&mut ts, MetaData, &nodes).await;
+        let mut cs = accept_handshake(new, CoordinatorServer, &[DropDatabase]).await;
+        let rejected = read_request(&mut cs, DropDatabase).await;
         reply_error(&mut cs, rejected, FlussError::NotCoordinatorLeaderException).await;
-        serve_success(&mut ts, ApiKey::MetaData, &nodes).await;
-        serve_success(&mut cs, ApiKey::DropDatabase, &DropDatabaseResponse {}).await;
-    });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let err = admin
-            .drop_database("ambiguous", false, false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, Error::RpcError { .. }));
+        serve_success(&mut ts, MetaData, &nodes).await;
+        serve_success(&mut cs, DropDatabase, &DropDatabaseResponse {}).await;
+    };
+    exchange(server, async {
+        let lost = admin.drop_database("ambiguous", false, false).await;
+        assert!(matches!(lost, Err(Error::RpcError { .. })));
         admin.drop_database("rejected", false, false).await.unwrap();
-        server.await.unwrap();
     })
-    .await
-    .unwrap();
+    .await;
 }
