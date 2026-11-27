@@ -40,6 +40,8 @@ import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.paimon.utils.CloseableIterator;
@@ -54,10 +56,12 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsUntilEndWithTimeout;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
@@ -438,12 +442,119 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
                     .withSchema(evolvedSchema.getRowType())
                     .isEqualTo(expectedNewRow);
         }
+        assertStreamReadsExcludeExpiredPartitions(tablePath, tableId, defaultBucketKey);
         dropTable(tablePath);
     }
 
     @Override
     protected FlussClusterExtension getFlussClusterExtension() {
         return FLUSS_CLUSTER_EXTENSION;
+    }
+
+    private void assertStreamReadsExcludeExpiredPartitions(
+            TablePath tablePath, long tableId, boolean defaultBucketKey) throws Exception {
+        // Keep an untiered row in a regular partition to distinguish Fluss-only reads from an
+        // incorrectly empty result. Pick the newest partition to avoid the retention boundary.
+        PartitionInfo activePartition =
+                admin.listPartitionInfos(tablePath).get().stream()
+                        .max(Comparator.comparing(PartitionInfo::getPartitionName))
+                        .orElseThrow(() -> new AssertionError("No active Fluss partition"));
+        writeRows(
+                tablePath,
+                Collections.singletonList(
+                        evolvedDataRow(
+                                defaultBucketKey,
+                                4,
+                                "sub-4",
+                                "Dave",
+                                null,
+                                activePartition.getPartitionName())),
+                false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(
+                Collections.singletonList(
+                        new TableBucket(tableId, activePartition.getPartitionId(), 0)));
+
+        TableEnvironment tEnv = createTableEnvironment(EnvironmentSettings.inBatchMode());
+        String tableName = tablePath.getTableName();
+        try {
+            assertQueryResults(
+                    tEnv,
+                    "SELECT id, name FROM " + tableName,
+                    "+I[1, Alice]",
+                    "+I[2, Bob]",
+                    "+I[3, Carol]",
+                    "+I[4, Dave]");
+            for (String strategy : Arrays.asList("snapshot-merge", "server-scan")) {
+                assertQueryResults(
+                        tEnv,
+                        String.format(
+                                "SELECT id, name FROM `%s$stream` "
+                                        + "/*+ OPTIONS('client.scanner.kv.batch-strategy' = '%s') */",
+                                tableName, strategy),
+                        "+I[4, Dave]");
+            }
+
+            tEnv.getCatalog(CATALOG_NAME).get().close();
+            tEnv = createTableEnvironment(EnvironmentSettings.inStreamingMode());
+            assertQueryResults(
+                    tEnv,
+                    String.format(
+                            "SELECT id, name FROM `%s$stream` "
+                                    + "/*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                    + "'scan.bounded.mode' = 'latest-offset') */",
+                            tableName),
+                    "+I[4, Dave]");
+            tEnv.executeSql(
+                    String.format(
+                            "CREATE TEMPORARY VIEW lookup_keys AS "
+                                    + "SELECT *, PROCTIME() AS proc FROM (VALUES "
+                                    + "(1, 'sub-1', '%s'), (3, 'sub-3', '%s'), (4, 'sub-4', '%s')) "
+                                    + "AS keys(id, sub_id, dt)",
+                            EXPIRED_PARTITION_NAME,
+                            SECOND_EXPIRED_PARTITION_NAME,
+                            activePartition.getPartitionName()));
+            String lookupQuery =
+                    "SELECT src.id, dim.name FROM lookup_keys AS src "
+                            + "LEFT JOIN `%s` /*+ OPTIONS('lookup.async' = '%s') */ "
+                            + "FOR SYSTEM_TIME AS OF src.proc AS dim "
+                            + "ON src.id = dim.id AND src.dt = dim.dt"
+                            + (defaultBucketKey ? "" : " AND src.sub_id = dim.sub_id");
+            for (boolean async : Arrays.asList(false, true)) {
+                assertQueryResults(
+                        tEnv,
+                        String.format(lookupQuery, tableName, async),
+                        "+I[1, Alice]",
+                        "+I[3, Carol]",
+                        "+I[4, Dave]");
+                assertQueryResults(
+                        tEnv,
+                        String.format(lookupQuery, tableName + "$stream", async),
+                        "+I[1, null]",
+                        "+I[3, null]",
+                        "+I[4, Dave]");
+            }
+        } finally {
+            tEnv.getCatalog(CATALOG_NAME).get().close();
+        }
+    }
+
+    private static void assertQueryResults(
+            TableEnvironment tEnv, String query, String... expectedRows) {
+        assertThat(collectRowsUntilEndWithTimeout(tEnv.executeSql(query).collect()))
+                .as(query)
+                .containsExactlyInAnyOrder(expectedRows);
+    }
+
+    private static TableEnvironment createTableEnvironment(EnvironmentSettings settings) {
+        TableEnvironment tEnv = TableEnvironment.create(settings);
+        tEnv.getConfig().set("parallelism.default", "1");
+        tEnv.executeSql(
+                String.format(
+                        "CREATE CATALOG %s WITH ('type' = 'fluss', 'bootstrap.servers' = '%s')",
+                        CATALOG_NAME, FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
+        tEnv.useCatalog(CATALOG_NAME);
+        tEnv.useDatabase(DEFAULT_DB);
+        return tEnv;
     }
 
     private static long waitUntilHistoricalPartitionReady(TablePath tablePath, long tableId)
