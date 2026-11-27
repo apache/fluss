@@ -293,6 +293,32 @@ impl Metadata {
             })
     }
 
+    pub(super) fn admin_read_server(&self) -> Result<ServerNode> {
+        self.cluster
+            .load()
+            .get_one_available_server()
+            .cloned()
+            .ok_or_else(|| {
+                crate::rpc::RpcError::ConnectionError(
+                    "No available tablet server for a read-only Admin request".into(),
+                )
+                .into()
+            })
+    }
+
+    pub(super) async fn refresh_admin_metadata(&self, table: Option<&TablePath>) -> Result<()> {
+        let request =
+            UpdateMetadataRequest::new(&table.into_iter().collect(), &HashSet::new(), vec![]);
+        let response = Self::request_metadata(
+            &self.connections,
+            &self.admin_read_server()?,
+            request,
+            self.request_timeout,
+        )
+        .await?;
+        self.update(response).await
+    }
+
     pub(crate) async fn reinit_cluster(&self) -> Result<()> {
         let cluster = Self::init_cluster(
             &self.bootstrap,
@@ -745,7 +771,7 @@ mod tests {
         server_type: ServerType,
         response: std::result::Result<MetadataResponse, FlussError>,
     ) -> TcpStream {
-        let mut stream = accept_handshake(listener, server_type).await;
+        let mut stream = accept_handshake(listener, server_type, &[ApiKey::MetaData]).await;
         let mut reply = read_request(&mut stream, ApiKey::MetaData).await;
         match &response {
             Ok(metadata) => metadata.encode(&mut reply).unwrap(),
@@ -764,15 +790,22 @@ mod tests {
     }
 
     // Accept a connection and serve the API-version handshake.
-    async fn accept_handshake(listener: TcpListener, server_type: ServerType) -> TcpStream {
+    async fn accept_handshake(
+        listener: TcpListener,
+        server_type: ServerType,
+        apis: &[ApiKey],
+    ) -> TcpStream {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut reply = read_request(&mut stream, ApiKey::ApiVersion).await;
         ApiVersionsResponse {
-            api_versions: vec![PbApiVersion {
-                api_key: i32::from(i16::from(ApiKey::MetaData)),
-                min_version: 0,
-                max_version: 0,
-            }],
+            api_versions: apis
+                .iter()
+                .map(|api| PbApiVersion {
+                    api_key: i32::from(i16::from(*api)),
+                    min_version: 0,
+                    max_version: 0,
+                })
+                .collect(),
             server_type: Some(server_type.to_type_id()),
         }
         .encode(&mut reply)
@@ -799,6 +832,12 @@ mod tests {
     async fn write_reply(stream: &mut TcpStream, reply: &[u8]) {
         stream.write_u32(reply.len() as u32).await.unwrap();
         stream.write_all(reply).await.unwrap();
+    }
+
+    async fn serve_success(stream: &mut TcpStream, api: ApiKey, response: &impl Message) {
+        let mut reply = read_request(stream, api).await;
+        response.encode(&mut reply).unwrap();
+        write_reply(stream, &reply).await;
     }
 
     fn unavailable_ids(metadata: &Metadata) -> HashSet<i32> {
@@ -835,6 +874,65 @@ mod tests {
         })
         .await
         .unwrap_or_else(|_| panic!("the coordinator request did not reach {address}"))
+    }
+
+    #[tokio::test]
+    async fn partition_listing_uses_an_alive_tablet_even_after_a_failed_metadata_refresh() {
+        use crate::client::FlussAdmin;
+        use crate::proto::{GetTableInfoResponse, ListPartitionInfosResponse, PbPartitionInfo};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nodes = server_metadata(&[1], listener.local_addr().unwrap().port());
+        let cluster = Arc::new(Cluster::from_metadata_response(nodes, None).unwrap());
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        metadata
+            .unavailable_tablet_servers
+            .write()
+            .insert(cluster.get_tablet_server(1).unwrap().clone());
+        let admin = FlussAdmin::new(metadata.connections.clone(), metadata);
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_handshake(
+                listener,
+                ServerType::TabletServer,
+                &[ApiKey::ListPartitionInfos, ApiKey::GetTable],
+            )
+            .await;
+            // A legacy response needs a second Admin read for the table's bucket count.
+            serve_success(
+                &mut stream,
+                ApiKey::ListPartitionInfos,
+                &ListPartitionInfosResponse {
+                    partitions_info: vec![PbPartitionInfo {
+                        partition_id: 42,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await;
+            serve_success(
+                &mut stream,
+                ApiKey::GetTable,
+                &GetTableInfoResponse {
+                    table_id: 1,
+                    table_json: pb_table_metadata("parts", 1, true, vec![]).table_json,
+                    ..Default::default()
+                },
+            )
+            .await;
+        });
+
+        let partitions = tokio::time::timeout(
+            Duration::from_secs(5),
+            admin.list_partition_infos(&TablePath::new("db", "parts")),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(partitions[0].get_partition_id(), 42);
+        assert_eq!(partitions[0].get_bucket_count(), 4);
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -1209,7 +1307,8 @@ mod tests {
         let (release_tx, release_rx) = oneshot::channel::<()>();
         // The old address holds the refresh until released, then drops it.
         let server = tokio::spawn(async move {
-            let mut stream = accept_handshake(listener, ServerType::TabletServer).await;
+            let mut stream =
+                accept_handshake(listener, ServerType::TabletServer, &[ApiKey::MetaData]).await;
             read_request(&mut stream, ApiKey::MetaData).await;
             received_tx.send(()).unwrap();
             release_rx.await.unwrap();

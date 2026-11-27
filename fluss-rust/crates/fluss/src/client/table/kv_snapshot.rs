@@ -1132,16 +1132,15 @@ mod tests {
     #[tokio::test]
     async fn snapshot_schema_lookup_failure_releases_local_resources() {
         let (mut reader, path) = reader_with_schema(2);
-        // Opening local files does not resolve source schemas. The first read needs the
-        // unavailable coordinator for schema 2, then must close the database on failure.
-        assert!(
-            reader
-                .next_batch(10)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("Coordinator server not found")
-        );
+        // Schema 2 is not cached, so its first read needs a server.
+        let error = reader.next_batch(10).await.unwrap_err();
+        assert!(matches!(
+            error,
+            Error::RpcError {
+                source: crate::rpc::RpcError::ConnectionError(_),
+                ..
+            }
+        ));
         assert!(!path.exists());
         assert!(reader.next_batch(10).await.unwrap().is_none());
     }

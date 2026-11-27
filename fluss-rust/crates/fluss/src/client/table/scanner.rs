@@ -4194,8 +4194,13 @@ mod tests {
                 let error = collect_test_offsets(&fetcher, batch_mode)
                     .await
                     .unwrap_err();
-                assert!(matches!(error, Error::UnexpectedError { message, .. }
-                if message == "Coordinator server not found in cluster metadata"));
+                assert!(matches!(
+                    error,
+                    Error::RpcError {
+                        source: crate::rpc::RpcError::ConnectionError(_),
+                        ..
+                    }
+                ));
                 assert_eq!(status.get_bucket_offset(&bucket), Some(1));
             }
             fetcher
