@@ -19,9 +19,6 @@ package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
-import org.apache.fluss.client.metadata.BulkLoadBuildContext;
-import org.apache.fluss.client.metadata.BulkLoadHandle;
-import org.apache.fluss.client.metadata.BulkLoadInfo;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -39,7 +36,9 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.BucketInfo;
@@ -66,15 +65,12 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
 import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
-import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
-import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -92,7 +88,6 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
-import org.apache.fluss.rpc.messages.GetBulkLoadInfoRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -108,7 +103,6 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
-import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
@@ -119,7 +113,6 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
-import org.apache.fluss.rpc.messages.PbBulkLoadStatus;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbListedGroup;
@@ -163,10 +156,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeGetTableSt
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
-import static org.apache.fluss.client.utils.ClientRpcMessageUtils.setBulkLoadHandle;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
-import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toTableInfo;
-import static org.apache.fluss.client.utils.ClientUtils.withSafeCoordinatorRetries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -209,7 +199,22 @@ public class FlussAdmin implements Admin {
         AdminGateway rawGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        this.gateway = withSafeCoordinatorRetries(rawGateway, metadataUpdater, refreshExecutor);
+        // Refresh metadata for recoverable failures, but don't retry generic network errors because
+        // a non-idempotent write may already have succeeded. NotCoordinatorLeaderException is safe
+        // to retry because the standby rejects the request before invoking the coordinator API,
+        // and InvalidServerTypeException is raised during the handshake before sending the request.
+        this.gateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof InvalidServerTypeException,
+                        AdminGateway.class);
         AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
@@ -379,7 +384,10 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return gateway.createTableFromLake(request)
-                .thenApply(response -> toTableInfo(tablePath, response.getTableInfo()));
+                .thenApply(
+                        response ->
+                                ClientRpcMessageUtils.toTableInfo(
+                                        tablePath, response.getTableInfo()));
     }
 
     @Override
@@ -401,66 +409,6 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<BulkLoadBuildContext> beginBulkLoad(
-            TablePath tablePath, List<String> partitionNames, String bulkLoadId) {
-        checkArgument(
-                !checkNotNull(bulkLoadId, "bulkLoadId must not be null").isEmpty(),
-                "bulkLoadId must not be empty");
-        BeginBulkLoadRequest request = new BeginBulkLoadRequest().setBulkLoadId(bulkLoadId);
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
-        partitionNames.forEach(request::addPartitionName);
-        return gateway.beginBulkLoad(request)
-                .thenApply(response -> new BulkLoadBuildContext(tablePath, response));
-    }
-
-    @Override
-    public CompletableFuture<BulkLoadInfo> getBulkLoadInfo(BulkLoadHandle handle) {
-        GetBulkLoadInfoRequest request = new GetBulkLoadInfoRequest();
-        setBulkLoadHandle(request.setHandle(), handle);
-        return gateway.getBulkLoadInfo(request).thenApply(BulkLoadInfo::new);
-    }
-
-    @Override
-    public CompletableFuture<List<BulkLoadHandle>> listInProgressBulkLoads(
-            TablePath tablePath, List<String> partitionNames) {
-        ListInProgressBulkLoadsRequest request = new ListInProgressBulkLoadsRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
-        partitionNames.forEach(request::addPartitionName);
-        return gateway.listInProgressBulkLoads(request)
-                .thenApply(
-                        response -> {
-                            List<BulkLoadHandle> handles =
-                                    new ArrayList<>(response.getTransactionsCount());
-                            for (PbBulkLoadStatus status : response.getTransactionsList()) {
-                                handles.add(
-                                        ClientRpcMessageUtils.toBulkLoadHandle(status.getHandle()));
-                            }
-                            return Collections.unmodifiableList(handles);
-                        });
-    }
-
-    @Override
-    public CompletableFuture<Void> commitBulkLoad(BulkLoadHandle handle) {
-        CommitBulkLoadRequest request = new CommitBulkLoadRequest();
-        setBulkLoadHandle(request.setHandle(), handle);
-        return gateway.commitBulkLoad(request).thenApply(ignored -> null);
-    }
-
-    @Override
-    public CompletableFuture<Void> abortBulkLoad(BulkLoadHandle handle, @Nullable String reason) {
-        AbortBulkLoadRequest request = new AbortBulkLoadRequest();
-        setBulkLoadHandle(request.setHandle(), handle);
-        if (reason != null) {
-            request.setAbortMessage(reason);
-        }
-        return gateway.abortBulkLoad(request).thenApply(ignored -> null);
-    }
-
-    @Override
     public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
         request.setTablePath()
@@ -468,7 +416,19 @@ public class FlussAdmin implements Admin {
                 .setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getTableInfo(request)
-                .thenApply(response -> toTableInfo(tablePath, response));
+                .thenApply(
+                        r ->
+                                toTableInfo(
+                                        tablePath,
+                                        r.getTableId(),
+                                        r.getSchemaId(),
+                                        r.getTableJson(),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
+                                        r.getCreatedTime(),
+                                        r.getModifiedTime(),
+                                        r.hasBucketCountEpoch() ? r.getBucketCountEpoch() : 0L));
     }
 
     @Override
@@ -1447,6 +1407,26 @@ public class FlussAdmin implements Admin {
                 bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
             }
         }
+    }
+
+    private static TableInfo toTableInfo(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            byte[] tableJson,
+            @Nullable String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketCountEpoch) {
+        return TableInfo.of(
+                tablePath,
+                tableId,
+                schemaId,
+                TableDescriptor.fromJsonBytes(tableJson),
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                bucketCountEpoch);
     }
 
     @Override

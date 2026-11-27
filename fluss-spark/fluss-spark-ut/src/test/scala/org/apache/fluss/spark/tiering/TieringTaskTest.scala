@@ -23,7 +23,7 @@ import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.{Scan, ScanRecord}
 import org.apache.fluss.client.table.scanner.batch.BatchScanner
 import org.apache.fluss.client.table.scanner.log.{LogScanner, OffsetCommitCallback, ScanRecords, TypedLogScanner}
-import org.apache.fluss.client.table.writer.{Append, Upsert}
+import org.apache.fluss.client.table.writer.{Append, BulkLoad, Upsert}
 import org.apache.fluss.client.tiering.{TieringLogSplit, TieringSnapshotSplit}
 import org.apache.fluss.lake.writer.LakeWriter
 import org.apache.fluss.metadata.{TableBucket, TableInfo, TablePath}
@@ -188,6 +188,7 @@ class TieringTaskTest extends AnyFunSuite {
     override def newLookup(): Lookup = throw new UnsupportedOperationException
     override def newAppend(): Append = throw new UnsupportedOperationException
     override def newUpsert(): Upsert = throw new UnsupportedOperationException
+    override def newBulkLoad(): BulkLoad = throw new UnsupportedOperationException
     override def close(): Unit = {}
   }
 

@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.writer.Append;
+import org.apache.fluss.client.table.writer.BulkLoad;
 import org.apache.fluss.client.table.writer.Upsert;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -117,6 +118,11 @@ class TestingScanTable implements Table {
     @Override
     public Upsert newUpsert() {
         return delegate.newUpsert();
+    }
+
+    @Override
+    public BulkLoad newBulkLoad() {
+        return delegate.newBulkLoad();
     }
 
     @Override

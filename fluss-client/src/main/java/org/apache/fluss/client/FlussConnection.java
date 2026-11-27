@@ -17,18 +17,16 @@
 
 package org.apache.fluss.client;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.lookup.LookupClient;
-import org.apache.fluss.client.metadata.BulkLoadBuildContext;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.FlussTable;
 import org.apache.fluss.client.table.MultiTable;
 import org.apache.fluss.client.table.MultiTableImpl;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
-import org.apache.fluss.client.table.writer.BulkLoadBucketWriter;
-import org.apache.fluss.client.table.writer.BulkLoadBucketWriterImpl;
 import org.apache.fluss.client.token.DefaultSecurityTokenManager;
 import org.apache.fluss.client.token.DefaultSecurityTokenProvider;
 import org.apache.fluss.client.token.SecurityTokenManager;
@@ -47,18 +45,12 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-import static org.apache.fluss.client.utils.ClientUtils.withSafeCoordinatorRetries;
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
@@ -77,7 +69,6 @@ public final class FlussConnection implements Connection {
     private volatile SecurityTokenManager securityTokenManager;
     private volatile Admin admin;
     private volatile AdminGateway bulkLoadGateway;
-    private volatile ExecutorService bulkLoadMetadataRefreshExecutor;
 
     FlussConnection(Configuration conf) {
         this(conf, MetricRegistry.create(conf, null));
@@ -112,12 +103,6 @@ public final class FlussConnection implements Connection {
     @Override
     public Admin getAdmin() {
         return getOrCreateAdmin();
-    }
-
-    @Override
-    public Optional<BulkLoadBucketWriter> tryOpenBulkLoadBucketWriter(
-            BulkLoadBuildContext.Target target, int bucketId) throws IOException {
-        return BulkLoadBucketWriterImpl.tryOpen(target, bucketId, getOrCreateBulkLoadGateway());
     }
 
     @Override
@@ -246,31 +231,21 @@ public final class FlussConnection implements Connection {
         }
 
         clientMetricGroup.close();
-        try {
-            rpcClient.close();
-        } finally {
-            if (bulkLoadMetadataRefreshExecutor != null) {
-                bulkLoadMetadataRefreshExecutor.shutdown();
-            }
-        }
+        rpcClient.close();
         metricRegistry.closeAsync().get();
     }
 
-    private AdminGateway getOrCreateBulkLoadGateway() {
+    /** Returns the shared coordinator gateway for BulkLoad operations. */
+    @Internal
+    public AdminGateway getOrCreateBulkLoadGateway() {
         if (bulkLoadGateway == null) {
             synchronized (this) {
                 if (bulkLoadGateway == null) {
-                    bulkLoadMetadataRefreshExecutor =
-                            Executors.newSingleThreadExecutor(
-                                    new ExecutorThreadFactory("fluss-bulkload-metadata-refresh"));
-                    AdminGateway gateway =
+                    bulkLoadGateway =
                             GatewayClientProxy.createGatewayProxy(
                                     metadataUpdater::getCoordinatorServer,
                                     rpcClient,
                                     AdminGateway.class);
-                    bulkLoadGateway =
-                            withSafeCoordinatorRetries(
-                                    gateway, metadataUpdater, bulkLoadMetadataRefreshExecutor);
                 }
             }
         }

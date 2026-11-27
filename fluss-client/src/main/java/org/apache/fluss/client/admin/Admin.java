@@ -19,9 +19,6 @@ package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
-import org.apache.fluss.client.metadata.BulkLoadBuildContext;
-import org.apache.fluss.client.metadata.BulkLoadHandle;
-import org.apache.fluss.client.metadata.BulkLoadInfo;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -95,42 +92,6 @@ import java.util.concurrent.CompletableFuture;
  */
 @PublicEvolving
 public interface Admin extends AutoCloseable {
-
-    /**
-     * Begins a transaction for the specified targets and returns its frozen build context.
-     *
-     * <p>Use an empty partition list for a non-partitioned table. For a partitioned table, provide
-     * the partition names explicitly. Persist the caller-supplied ID with the input selection and
-     * reuse both when retrying Begin after an uncertain outcome.
-     *
-     * <p>Replay returns the original transaction while the original physical table exists and the
-     * transaction record is retained. Terminal results are subject to the server's retention
-     * period. Recreating a table under the same name gives it a new physical identity, so the same
-     * caller-supplied ID can begin a new transaction.
-     */
-    CompletableFuture<BulkLoadBuildContext> beginBulkLoad(
-            TablePath tablePath, List<String> partitionNames, String bulkLoadId);
-
-    /** Returns transaction status and bucket progress for the original targets. */
-    CompletableFuture<BulkLoadInfo> getBulkLoadInfo(BulkLoadHandle handle);
-
-    /**
-     * Lists handles of running transactions owning any selected physical target.
-     *
-     * <p>An empty partition list queries all current targets of the table.
-     */
-    CompletableFuture<List<BulkLoadHandle>> listInProgressBulkLoads(
-            TablePath tablePath, List<String> partitionNames);
-
-    /**
-     * Finalizes the transaction after all buckets of its active targets have been committed.
-     *
-     * <p>Each bucket snapshot is published when it is registered with the coordinator.
-     */
-    CompletableFuture<Void> commitBulkLoad(BulkLoadHandle handle);
-
-    /** Stops the transaction while retaining any previously committed bucket snapshots. */
-    CompletableFuture<Void> abortBulkLoad(BulkLoadHandle handle, @Nullable String reason);
 
     /**
      * Get the current server node information asynchronously: the coordinator server, followed by

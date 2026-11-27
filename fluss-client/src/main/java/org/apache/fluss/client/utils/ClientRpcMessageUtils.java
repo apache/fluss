@@ -85,7 +85,6 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
-import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
@@ -180,19 +179,6 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 public class ClientRpcMessageUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(ClientRpcMessageUtils.class);
-
-    /** Converts a GetTableInfo response, including responses from older clusters. */
-    public static TableInfo toTableInfo(TablePath tablePath, GetTableInfoResponse response) {
-        return TableInfo.of(
-                tablePath,
-                response.getTableId(),
-                response.getSchemaId(),
-                TableDescriptor.fromJsonBytes(response.getTableJson()),
-                response.hasRemoteDataDir() ? response.getRemoteDataDir() : null,
-                response.getCreatedTime(),
-                response.getModifiedTime(),
-                response.hasBucketCountEpoch() ? response.getBucketCountEpoch() : 0L);
-    }
 
     /** Converts a table's RPC metadata into its client representation. */
     public static TableInfo toTableInfo(TablePath tablePath, PbTableInfo table) {

@@ -22,6 +22,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.metadata.BulkLoadBuildContext;
+import org.apache.fluss.client.metadata.BulkLoadHandle;
 import org.apache.fluss.client.metadata.BulkLoadInfo;
 import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.table.Table;
@@ -54,6 +55,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -61,8 +65,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -93,7 +100,6 @@ class BulkLoadBucketWriterITCase {
                         .primaryKey("id", "p")
                         .build();
         List<String> partitions = Arrays.asList("old", "new");
-        String customProperty = ConfigOptions.CLIENT_SASL_JAAS_PASSWORD.key();
         String loadId = UUID.randomUUID().toString();
         int key;
         try (Connection conn = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
@@ -106,9 +112,6 @@ class BulkLoadBucketWriterITCase {
                                     .partitionedBy("p")
                                     .kvFormat(KvFormat.INDEXED)
                                     .distributedBy(2, "id")
-                                    .customProperties(
-                                            Collections.singletonMap(
-                                                    customProperty, "test-placeholder"))
                                     .build(),
                             false));
             await(admin.createPartition(path, partitionSpec("old"), false));
@@ -119,55 +122,87 @@ class BulkLoadBucketWriterITCase {
                             false));
             await(admin.createPartition(path, partitionSpec("new"), false));
             CLUSTER.waitUntilTableReady(path);
-            BulkLoadBuildContext context = await(admin.beginBulkLoad(path, partitions, loadId));
-            TableInfo tableInfo = await(admin.getTableInfo(path));
-            assertThat(tableInfo.getCustomProperties().containsKey(customProperty)).isTrue();
-            BucketCalculator calculator = BucketCalculator.forBucketKeyRow(tableInfo);
-            key =
-                    IntStream.range(0, 100)
-                            .filter(
-                                    id -> {
-                                        byte[] encoded = calculator.encodeKey(row(id));
-                                        return calculator.getBucketId(encoded, 4) >= 2;
-                                    })
-                            .findFirst()
-                            .getAsInt();
-            byte[] encoded = calculator.encodeKey(row(key));
-            int oldBucket = calculator.getBucketId(encoded, 2);
-            int newBucket = calculator.getBucketId(encoded, 4);
-            RowSerializer serializer =
-                    new RowSerializer(
-                            schema.getRowType().getChildren().toArray(new DataType[0]),
-                            BinaryRowFormat.INDEXED);
-            InternalRow oldRow = serializer.toBinaryRow(row(key, "old", "previous layout"));
-            InternalRow newRow = row(key, "new", "current layout");
+            try (Table table = conn.getTable(path)) {
+                BulkLoad bulkLoad = table.newBulkLoad();
+                BulkLoadBuildContext context = await(bulkLoad.begin(loadId, partitions));
+                TableInfo tableInfo = table.getTableInfo();
+                BucketCalculator calculator = BucketCalculator.forBucketKeyRow(tableInfo);
+                key =
+                        IntStream.range(0, 100)
+                                .filter(
+                                        id -> {
+                                            byte[] encoded = calculator.encodeKey(row(id));
+                                            return calculator.getBucketId(encoded, 4) >= 2;
+                                        })
+                                .findFirst()
+                                .getAsInt();
+                byte[] encoded = calculator.encodeKey(row(key));
+                int oldBucket = calculator.getBucketId(encoded, 2);
+                int newBucket = calculator.getBucketId(encoded, 4);
+                RowSerializer serializer =
+                        new RowSerializer(
+                                schema.getRowType().getChildren().toArray(new DataType[0]),
+                                BinaryRowFormat.INDEXED);
+                InternalRow oldRow = serializer.toBinaryRow(row(key, "old", "previous layout"));
+                InternalRow newRow = row(key, "new", "current layout");
 
-            BulkLoadBuildContext.Target old = context.getTarget(PhysicalTablePath.of(path, "old"));
-            assertThat(old.getTableInfo().getCustomProperties().keySet()).isEmpty();
-            BulkLoadBuildContext.Target current =
-                    context.getTarget(PhysicalTablePath.of(path, "new"));
-            assertThat(old.getBucketCount()).isEqualTo(2);
-            assertThat(current.getBucketCount()).isEqualTo(4);
-            assertThat(old.bucketOf(oldRow)).isEqualTo(oldBucket);
-            assertThat(current.bucketOf(newRow)).isEqualTo(newBucket);
-            try (Connection worker =
-                    ConnectionFactory.createConnection(CLUSTER.getClientConfig())) {
-                loadTarget(worker, old, oldBucket, oldRow);
-                loadTarget(worker, current, newBucket, newRow);
-            }
-            await(admin.commitBulkLoad(context.getHandle()));
-            await(admin.commitBulkLoad(context.getHandle()));
-            assertThat(await(admin.getBulkLoadInfo(context.getHandle())).getState())
-                    .isEqualTo(BulkLoadInfo.State.COMMITTED);
-            assertThat(conn.tryOpenBulkLoadBucketWriter(old, oldBucket)).isEmpty();
+                PhysicalTablePath oldPath = PhysicalTablePath.of(path, "old");
+                BulkLoadBuildContext.Target old = context.getTarget(oldPath);
+                BulkLoadBuildContext.Target current =
+                        context.getTarget(PhysicalTablePath.of(path, "new"));
+                assertThat(old.getBucketCount()).isEqualTo(2);
+                assertThat(current.getBucketCount()).isEqualTo(4);
+                assertThat(old.bucketOf(oldRow)).isEqualTo(oldBucket);
+                assertThat(current.bucketOf(newRow)).isEqualTo(newBucket);
+                try (Connection worker =
+                                ConnectionFactory.createConnection(
+                                        new Configuration(CLUSTER.getClientConfig())
+                                                .set(
+                                                        ConfigOptions.KV_COMPRESSION_PER_LEVEL,
+                                                        Collections.singletonList(
+                                                                ConfigOptions.KvCompressionType
+                                                                        .NO)));
+                        Table workerTable = worker.getTable(path)) {
+                    BulkLoad workerBulkLoad = workerTable.newBulkLoad();
+                    loadTarget(workerBulkLoad, old, oldBucket, oldRow);
+                    loadTarget(workerBulkLoad, current, newBucket, newRow);
+                }
+                FsPath tabletDir =
+                        FlussPaths.remoteKvTabletDir(
+                                FlussPaths.remoteKvDir(old.getRemoteDataDir()),
+                                old.getPath(),
+                                new TableBucket(
+                                        context.getHandle().getTableId(),
+                                        old.getPartitionId(),
+                                        oldBucket));
+                try (Stream<Path> files = Files.walk(Paths.get(tabletDir.toUri()))) {
+                    List<Path> optionsFiles =
+                            files.filter(
+                                            file ->
+                                                    file.getFileName()
+                                                            .toString()
+                                                            .contains("-OPTIONS-"))
+                                    .collect(Collectors.toList());
+                    assertThat(optionsFiles).isNotEmpty();
+                    for (Path optionsFile : optionsFiles) {
+                        assertThat(new String(Files.readAllBytes(optionsFile), UTF_8))
+                                .contains("compression_per_level=kNoCompression");
+                    }
+                }
+                await(bulkLoad.commit(context.getHandle()));
+                await(bulkLoad.commit(context.getHandle()));
+                assertThat(await(bulkLoad.getInfo(context.getHandle())).getState())
+                        .isEqualTo(BulkLoadInfo.State.COMMITTED);
+                assertThat(bulkLoad.tryOpenBucketWriter(old, oldBucket)).isEmpty();
 
-            CLUSTER.stopTabletServer(0);
-            CLUSTER.startTabletServer(0);
-            for (BulkLoadBuildContext.Target target : context.getTargets()) {
-                for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
-                    CLUSTER.waitUntilAllReplicaReady(
-                            new TableBucket(
-                                    tableInfo.getTableId(), target.getPartitionId(), bucket));
+                CLUSTER.stopTabletServer(0);
+                CLUSTER.startTabletServer(0);
+                for (BulkLoadBuildContext.Target target : context.getTargets()) {
+                    for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
+                        CLUSTER.waitUntilAllReplicaReady(
+                                new TableBucket(
+                                        tableInfo.getTableId(), target.getPartitionId(), bucket));
+                    }
                 }
             }
         }
@@ -186,39 +221,57 @@ class BulkLoadBucketWriterITCase {
     @Test
     void testAbortPreservesPublishedBucket() throws Exception {
         TablePath path = TablePath.of(BUILTIN_DATABASE, "bulkload_partial");
+        TablePath otherPath = TablePath.of(BUILTIN_DATABASE, "bulkload_other");
         InternalRow imported = row(7, "published before abort");
         try (Connection conn = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = conn.getAdmin()) {
             await(admin.createTable(path, descriptor(2), false));
+            await(admin.createTable(otherPath, descriptor(1), false));
             CLUSTER.waitUntilTableReady(path);
-            BulkLoadBuildContext context =
-                    await(
-                            admin.beginBulkLoad(
-                                    path, Collections.emptyList(), UUID.randomUUID().toString()));
-            BulkLoadBuildContext.Target target = context.getTarget(PhysicalTablePath.of(path));
-            int bucket = target.bucketOf(imported);
-            try (BulkLoadBucketWriter writer =
-                    conn.tryOpenBulkLoadBucketWriter(target, bucket).get()) {
-                writer.write(row(7, "superseded payload"));
-                writer.write(imported);
-                writer.commit();
+            CLUSTER.waitUntilTableReady(otherPath);
+            try (Table table = conn.getTable(path);
+                    Table otherTable = conn.getTable(otherPath)) {
+                BulkLoad bulkLoad = table.newBulkLoad();
+                BulkLoadBuildContext context =
+                        await(
+                                bulkLoad.begin(
+                                        UUID.randomUUID().toString(), Collections.emptyList()));
+                BulkLoadHandle handle = context.getHandle();
+                BulkLoadBuildContext.Target target = context.getTarget(PhysicalTablePath.of(path));
+                int bucket = target.bucketOf(imported);
+                try (BulkLoadBucketWriter writer =
+                        bulkLoad.tryOpenBucketWriter(target, bucket).get()) {
+                    writer.write(row(7, "superseded payload"));
+                    writer.write(imported);
+                    writer.commit();
+                }
+                BulkLoad otherLoad = otherTable.newBulkLoad();
+                assertThatThrownBy(() -> otherLoad.tryOpenBucketWriter(target, bucket))
+                        .isInstanceOf(IllegalArgumentException.class);
+                assertThatThrownBy(() -> otherLoad.getInfo(handle))
+                        .isInstanceOf(IllegalArgumentException.class);
+                assertThatThrownBy(() -> otherLoad.commit(handle))
+                        .isInstanceOf(IllegalArgumentException.class);
+                assertThatThrownBy(() -> otherLoad.abort(handle, null))
+                        .isInstanceOf(IllegalArgumentException.class);
+
+                assertThatThrownBy(() -> await(bulkLoad.commit(handle)))
+                        .hasRootCauseInstanceOf(BulkLoadIncompleteException.class);
+                assertThat(await(bulkLoad.listInProgress(Collections.emptyList())))
+                        .containsExactly(handle);
+                await(bulkLoad.abort(handle, "cancelled"));
+                BulkLoadInfo info = await(bulkLoad.getInfo(handle));
+                assertThat(info.getState()).isEqualTo(BulkLoadInfo.State.ABORTED);
+                assertThat(info.getAbortMessage()).isEqualTo("cancelled");
+                assertThat(info.getTargets())
+                        .singleElement()
+                        .satisfies(
+                                progress ->
+                                        assertThat(progress.getCommittedBucketCount())
+                                                .isEqualTo(1L));
+                assertThat(await(bulkLoad.listInProgress(Collections.emptyList()))).isEmpty();
+                restartTabletAndWait(new TableBucket(handle.getTableId(), bucket));
             }
-            assertThatThrownBy(() -> await(admin.commitBulkLoad(context.getHandle())))
-                    .hasRootCauseInstanceOf(BulkLoadIncompleteException.class);
-            assertThat(await(admin.listInProgressBulkLoads(path, Collections.emptyList())))
-                    .containsExactly(context.getHandle());
-            await(admin.abortBulkLoad(context.getHandle(), "cancelled"));
-            BulkLoadInfo info = await(admin.getBulkLoadInfo(context.getHandle()));
-            assertThat(info.getState()).isEqualTo(BulkLoadInfo.State.ABORTED);
-            assertThat(info.getAbortMessage()).isEqualTo("cancelled");
-            assertThat(info.getTargets())
-                    .singleElement()
-                    .satisfies(
-                            progress ->
-                                    assertThat(progress.getCommittedBucketCount()).isEqualTo(1L));
-            assertThat(await(admin.listInProgressBulkLoads(path, Collections.emptyList())))
-                    .isEmpty();
-            restartTabletAndWait(new TableBucket(context.getHandle().getTableId(), bucket));
         }
         assertImportedRow(path, 7, imported);
     }
@@ -232,31 +285,34 @@ class BulkLoadBucketWriterITCase {
                 Admin admin = conn.getAdmin()) {
             await(admin.createTable(path, descriptor(1), false));
             CLUSTER.waitUntilTableReady(path);
-            BulkLoadBuildContext context =
-                    await(admin.beginBulkLoad(path, Collections.emptyList(), loadId));
-            try (BulkLoadBucketWriter writer =
-                    conn.tryOpenBulkLoadBucketWriter(
-                                    context.getTarget(PhysicalTablePath.of(path)), 0)
-                            .get()) {
-                writer.write(imported);
-                CLUSTER.stopCoordinatorServer();
-                try {
-                    for (int attempt = 0; attempt < 2; attempt++) {
-                        assertThatThrownBy(writer::commit)
-                                .isInstanceOf(IOException.class)
-                                .hasMessageContaining("Failed to commit the BulkLoad snapshot")
-                                .hasCauseInstanceOf(NetworkException.class);
+            try (Table table = conn.getTable(path)) {
+                BulkLoad bulkLoad = table.newBulkLoad();
+                BulkLoadBuildContext context =
+                        await(bulkLoad.begin(loadId, Collections.emptyList()));
+                try (BulkLoadBucketWriter writer =
+                        bulkLoad.tryOpenBucketWriter(
+                                        context.getTarget(PhysicalTablePath.of(path)), 0)
+                                .get()) {
+                    writer.write(imported);
+                    CLUSTER.stopCoordinatorServer();
+                    try {
+                        for (int attempt = 0; attempt < 2; attempt++) {
+                            assertThatThrownBy(writer::commit)
+                                    .isInstanceOf(IOException.class)
+                                    .hasMessageContaining("Failed to commit the BulkLoad snapshot")
+                                    .hasCauseInstanceOf(NetworkException.class);
+                        }
+                    } finally {
+                        CLUSTER.startCoordinatorServer();
                     }
-                } finally {
-                    CLUSTER.startCoordinatorServer();
                 }
             }
         }
         try (Connection conn = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
-                Admin admin = conn.getAdmin()) {
-            BulkLoadBuildContext context =
-                    await(admin.beginBulkLoad(path, Collections.emptyList(), loadId));
-            assertThat(await(admin.getBulkLoadInfo(context.getHandle())).getTargets())
+                Table table = conn.getTable(path)) {
+            BulkLoad bulkLoad = table.newBulkLoad();
+            BulkLoadBuildContext context = await(bulkLoad.begin(loadId, Collections.emptyList()));
+            assertThat(await(bulkLoad.getInfo(context.getHandle())).getTargets())
                     .singleElement()
                     .satisfies(
                             progress -> {
@@ -264,10 +320,10 @@ class BulkLoadBucketWriterITCase {
                                 assertThat(progress.getCommittedBucketCount()).isZero();
                             });
             assertThat(
-                            conn.tryOpenBulkLoadBucketWriter(
+                            bulkLoad.tryOpenBucketWriter(
                                     context.getTarget(PhysicalTablePath.of(path)), 0))
                     .isEmpty();
-            await(admin.commitBulkLoad(context.getHandle()));
+            await(bulkLoad.commit(context.getHandle()));
             restartTabletAndWait(new TableBucket(context.getHandle().getTableId(), 0));
         }
         assertImportedRow(path, 11, imported);
@@ -288,40 +344,44 @@ class BulkLoadBucketWriterITCase {
                                                     ConfigOptions.TABLE_KV_TTL.key(), "1 h")),
                             false));
             CLUSTER.waitUntilTableReady(path);
-            BulkLoadBuildContext context =
-                    await(admin.beginBulkLoad(path, Collections.emptyList(), loadId));
-            BulkLoadBuildContext.Target target = context.getTarget(PhysicalTablePath.of(path));
-            assertThatThrownBy(() -> conn.tryOpenBulkLoadBucketWriter(target, 0))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("tagged KV values or row TTL");
-            assertThat(await(admin.getBulkLoadInfo(context.getHandle())).getTargets())
-                    .singleElement()
-                    .satisfies(progress -> assertThat(progress.getCommittedBucketCount()).isZero());
+            try (Table table = conn.getTable(path)) {
+                BulkLoad bulkLoad = table.newBulkLoad();
+                BulkLoadBuildContext context =
+                        await(bulkLoad.begin(loadId, Collections.emptyList()));
+                BulkLoadBuildContext.Target target = context.getTarget(PhysicalTablePath.of(path));
+                assertThatThrownBy(() -> bulkLoad.tryOpenBucketWriter(target, 0))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("tagged KV values or row TTL");
+                assertThat(await(bulkLoad.getInfo(context.getHandle())).getTargets())
+                        .singleElement()
+                        .satisfies(
+                                progress ->
+                                        assertThat(progress.getCommittedBucketCount()).isZero());
 
-            ZooKeeperClient zk = CLUSTER.getZooKeeperClient();
-            long tableId = context.getHandle().getTableId();
-            TableBucket bucket = new TableBucket(tableId, 0);
-            BulkLoadTransaction transaction =
-                    zk.getBulkLoadTransaction(tableId, loadId).get().data();
-            long snapshotId = zk.getBulkLoadBucket(transaction, bucket).get().snapshotId;
-            FsPath tabletDir =
-                    FlussPaths.remoteKvTabletDir(
-                            FlussPaths.remoteKvDir(target.getRemoteDataDir()),
-                            target.getPath(),
-                            bucket);
-            FsPath metadataPath =
-                    CompletedSnapshot.getMetadataFilePath(
-                            FlussPaths.remoteKvSnapshotDir(tabletDir, snapshotId));
-            assertThat(metadataPath.getFileSystem().exists(metadataPath)).isFalse();
+                ZooKeeperClient zk = CLUSTER.getZooKeeperClient();
+                long tableId = context.getHandle().getTableId();
+                TableBucket bucket = new TableBucket(tableId, 0);
+                BulkLoadTransaction transaction =
+                        zk.getBulkLoadTransaction(tableId, loadId).get().data();
+                long snapshotId = zk.getBulkLoadBucket(transaction, bucket).get().snapshotId;
+                FsPath tabletDir =
+                        FlussPaths.remoteKvTabletDir(
+                                FlussPaths.remoteKvDir(target.getRemoteDataDir()),
+                                target.getPath(),
+                                bucket);
+                FsPath metadataPath =
+                        CompletedSnapshot.getMetadataFilePath(
+                                FlussPaths.remoteKvSnapshotDir(tabletDir, snapshotId));
+                assertThat(metadataPath.getFileSystem().exists(metadataPath)).isFalse();
+            }
         }
     }
 
     private static void loadTarget(
-            Connection conn, BulkLoadBuildContext.Target target, int dataBucket, InternalRow row)
+            BulkLoad bulkLoad, BulkLoadBuildContext.Target target, int dataBucket, InternalRow row)
             throws Exception {
         for (int bucket = 0; bucket < target.getBucketCount(); bucket++) {
-            try (BulkLoadBucketWriter writer =
-                    conn.tryOpenBulkLoadBucketWriter(target, bucket).get()) {
+            try (BulkLoadBucketWriter writer = bulkLoad.tryOpenBucketWriter(target, bucket).get()) {
                 if (bucket == dataBucket) {
                     writer.write(row);
                 }

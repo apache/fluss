@@ -251,6 +251,107 @@ For a Log table you can use the `AppendWriter` API to write data.
 table.newAppend().createWriter().append(row);
 ```
 
+### BulkLoad
+
+Use `Table.newBulkLoad()` to import complete bucket snapshots into a primary key table.
+BulkLoad supports plain KV values without row-level TTL. Tables with tagged KV values,
+merge engines, or auto-increment columns are unsupported.
+
+Call `begin(bulkLoadId, partitionNames)` with an ID chosen by the caller. Keep the ID
+with the input selection and reuse both when resuming the same import. `begin` returns
+a handle and the frozen build targets. For a non-partitioned table, pass an empty
+partition list. For a partitioned table, explicitly list the existing user partitions
+to load. The system partition `__historical__` is unsupported. Each target has its
+own physical bucket layout and remote data directory. Use the frozen schema and
+bucket count on the target for routing and writing. An incompatible schema or
+physical target change can cause operations on unfinished buckets to fail.
+
+Each input row must match the full schema, including partition columns. Select the
+target for the row's partition, then use `target.bucketOf(row)` to route it within that
+target. Coordinate at most one active writer for each bucket of the transaction, even
+when workers run in separate processes. Within a bucket, later rows with the same
+primary key replace earlier rows.
+
+The following example imports into an existing non-partitioned primary key table.
+The caller supplies the complete input for all target buckets in `inputRows`. Each
+writer builds a new snapshot using those rows without merging the existing KV
+snapshot. The example groups rows in memory. Distributed workers can use the same
+bucket writer API.
+
+An empty result from `tryOpenBucketWriter` confirms that the bucket snapshot is
+already committed. Allocation, file access, or publication failures throw exceptions;
+the example stops on those failures.
+
+```java
+static void loadRows(
+        Connection connection,
+        TablePath tablePath,
+        String bulkLoadId,
+        List<InternalRow> inputRows) throws Exception {
+    try (Table table = connection.getTable(tablePath)) {
+        BulkLoad bulkLoad = table.newBulkLoad();
+        BulkLoadBuildContext context = bulkLoad.begin(bulkLoadId, Collections.emptyList()).get();
+        BulkLoadBuildContext.Target target = context.getTargets().get(0);
+
+        Map<Integer, List<InternalRow>> rowsByBucket = new HashMap<>();
+        for (InternalRow row : inputRows) {
+            int bucketId = target.bucketOf(row);
+            rowsByBucket.computeIfAbsent(bucketId, ignored -> new ArrayList<>()).add(row);
+        }
+
+        // Every bucket needs a snapshot, including buckets with no rows.
+        for (int bucketId = 0; bucketId < target.getBucketCount(); bucketId++) {
+            Optional<BulkLoadBucketWriter> opened = bulkLoad.tryOpenBucketWriter(target, bucketId);
+            if (!opened.isPresent()) {
+                System.out.println("Bucket " + bucketId + " is already committed");
+                continue;
+            }
+            try (BulkLoadBucketWriter writer = opened.get()) {
+                for (InternalRow row : rowsByBucket.getOrDefault(bucketId, Collections.emptyList())) {
+                    writer.write(row);
+                }
+                writer.commit();
+            }
+        }
+
+        BulkLoadInfo info = bulkLoad.getInfo(context.getHandle()).get();
+        System.out.println(info.getState());
+        bulkLoad.commit(context.getHandle()).get();
+    }
+}
+```
+
+Opening a bucket writer, writing rows, and committing the bucket are blocking
+operations. Build workers need local space for RocksDB in the JVM temporary directory
+and read and write access to the remote snapshot directories. Bucket writers use
+`kv.rocksdb.compression.per.level` from the connection's
+[configuration](../../maintenance/configuration.md). Closing a bucket writer releases
+its local resources.
+
+Each bucket commit durably publishes that bucket independently. Transaction
+`commit(handle)` verifies that every bucket of the active targets has been committed
+and releases ownership of those targets. It provides no table-wide atomic visibility
+and does not wait for TabletServers to recover the published snapshots.
+
+Use `listInProgress(partitionNames)` to find running transaction handles, or pass
+an empty list to search all current targets. Use `getInfo(handle)` to inspect
+transaction status and per-target bucket progress.
+Replaying `begin` with the same ID and selection returns the original transaction
+while the original physical table exists and its transaction record is retained.
+If a table has been recreated under the same name, obtain a new `Table` and `BulkLoad`
+instance for that physical table.
+
+The SDK propagates failures without retrying the operation or aborting the transaction.
+The caller decides whether to resume or call `abort(handle, reason)`. Aborting leaves
+published buckets in place. When resuming, `tryOpenBucketWriter` returns empty for a
+committed bucket. If snapshot creation or upload fails, close the writer and handle
+the failure in the application. If the upload completed but publication throws an
+exception, the outcome may be unknown: the snapshot may already be committed. Retry
+`commit()` on the same writer, or call `tryOpenBucketWriter` with the same target and
+bucket to confirm the result. When reopening a fully uploaded snapshot,
+`tryOpenBucketWriter` attempts publication and returns empty only after publication
+is confirmed.
+
 ### Scanner
 In order to read data from Fluss tables, first you need to create a Scanner instance. Then users can subscribe to the table buckets and 
 start polling for records.

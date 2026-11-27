@@ -44,9 +44,9 @@ public interface BulkLoadBucketWriter extends Closeable {
      * Uploads and commits this bucket's snapshot on the calling thread. The writer stops accepting
      * new rows when commit begins.
      *
-     * <p>If snapshot creation or upload fails, close the writer. If the upload completes and the
-     * coordinator commit fails, call this method on the same writer to retry the coordinator
-     * commit.
+     * <p>If snapshot creation or upload fails, close the writer. If the upload completes but
+     * publication throws an exception, the snapshot may already be committed. Call this method
+     * again on the same writer to retry the coordinator commit and confirm the result.
      */
     void commit() throws IOException;
 

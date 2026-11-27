@@ -25,7 +25,9 @@ import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.TableScan;
 import org.apache.fluss.client.table.writer.Append;
+import org.apache.fluss.client.table.writer.BulkLoad;
 import org.apache.fluss.client.table.writer.TableAppend;
+import org.apache.fluss.client.table.writer.TableBulkLoad;
 import org.apache.fluss.client.table.writer.TableUpsert;
 import org.apache.fluss.client.table.writer.Upsert;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -89,6 +91,15 @@ public class FlussTable implements Table {
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
         return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
+    }
+
+    @Override
+    public BulkLoad newBulkLoad() {
+        return new TableBulkLoad(
+                tablePath,
+                tableInfo.getTableId(),
+                conn.getOrCreateBulkLoadGateway(),
+                conn.getConfiguration());
     }
 
     @Override

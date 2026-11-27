@@ -20,6 +20,8 @@ package org.apache.fluss.client.table.writer;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.BulkLoadBuildContext;
 import org.apache.fluss.client.metadata.BulkLoadHandle;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.ReadableConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
@@ -75,7 +77,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 /** Builds and registers the checkpoint for one allocated bucket. */
 @Internal
 @NotThreadSafe
-public final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
+final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
 
     private static final int BUCKET_ALLOCATED = 0;
     private static final int BUCKET_COMMITTED = 1;
@@ -106,7 +108,8 @@ public final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
             BulkLoadBuildContext.Target target,
             TableBucket bucket,
             AllocateBulkLoadBucketSnapshotResponse allocation,
-            FsPath snapshotDirectory)
+            FsPath snapshotDirectory,
+            ReadableConfig configuration)
             throws IOException {
         this.gateway = gateway;
         this.handle = target.getHandle();
@@ -143,7 +146,12 @@ public final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
         Options options = null;
         try {
             options = new Options();
-            options.setCreateIfMissing(true).setCompressionType(CompressionType.LZ4_COMPRESSION);
+            List<CompressionType> compressionPerLevel = new ArrayList<>();
+            for (ConfigOptions.KvCompressionType compression :
+                    configuration.get(ConfigOptions.KV_COMPRESSION_PER_LEVEL)) {
+                compressionPerLevel.add(toRocksDbCompressionType(compression));
+            }
+            options.setCreateIfMissing(true).setCompressionPerLevel(compressionPerLevel);
             this.db = RocksDB.open(options, localWorkDir.resolve("db").toString());
             this.rocksDbOptions = options;
         } catch (RocksDBException | RuntimeException e) {
@@ -154,8 +162,11 @@ public final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
     }
 
     /** Allocates a snapshot and opens a writer if the bucket still needs to be built. */
-    public static Optional<BulkLoadBucketWriter> tryOpen(
-            BulkLoadBuildContext.Target target, int bucketId, AdminGateway gateway)
+    static Optional<BulkLoadBucketWriter> tryOpen(
+            BulkLoadBuildContext.Target target,
+            int bucketId,
+            AdminGateway gateway,
+            ReadableConfig configuration)
             throws IOException {
         checkArgument(
                 bucketId >= 0 && bucketId < target.getBucketCount(),
@@ -193,7 +204,8 @@ public final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
             return Optional.empty();
         }
         return Optional.of(
-                new BulkLoadBucketWriterImpl(gateway, target, bucket, allocation, directory));
+                new BulkLoadBucketWriterImpl(
+                        gateway, target, bucket, allocation, directory, configuration));
     }
 
     @Override
@@ -350,5 +362,21 @@ public final class BulkLoadBucketWriterImpl implements BulkLoadBucketWriter {
 
     private static FsPath metadataPath(FsPath directory) {
         return new FsPath(directory, METADATA_FILE_NAME);
+    }
+
+    private static CompressionType toRocksDbCompressionType(
+            ConfigOptions.KvCompressionType compression) {
+        switch (compression) {
+            case NO:
+                return CompressionType.NO_COMPRESSION;
+            case SNAPPY:
+                return CompressionType.SNAPPY_COMPRESSION;
+            case LZ4:
+                return CompressionType.LZ4_COMPRESSION;
+            case ZSTD:
+                return CompressionType.ZSTD_COMPRESSION;
+            default:
+                throw new IllegalArgumentException("Unsupported compression type: " + compression);
+        }
     }
 }

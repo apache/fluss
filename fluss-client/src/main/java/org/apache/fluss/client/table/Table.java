@@ -24,6 +24,7 @@ import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.writer.Append;
 import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.BulkLoad;
 import org.apache.fluss.client.table.writer.Upsert;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.metadata.TableInfo;
@@ -72,4 +73,7 @@ public interface Table extends AutoCloseable {
      * this table (requires to be a Primary Key Table).
      */
     Upsert newUpsert();
+
+    /** Creates a new {@link BulkLoad} for this table. */
+    BulkLoad newBulkLoad();
 }
