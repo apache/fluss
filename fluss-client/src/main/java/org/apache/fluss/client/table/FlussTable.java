@@ -98,7 +98,7 @@ public class FlussTable implements Table {
         return new TableBulkLoad(
                 tablePath,
                 tableInfo.getTableId(),
-                conn.getOrCreateBulkLoadGateway(),
+                conn.getMetadataUpdater(),
                 conn.getConfiguration());
     }
 
