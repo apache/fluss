@@ -219,6 +219,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                                 sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                         .get();
                 admin.createTable(sinkTablePath, TABLE_DESCRIPTOR, true).get();
+                flussClusterExtension.waitUntilTableReady(sinkTablePath);
             }
 
             MockWriterInitContext mockWriterInitContext =
@@ -282,6 +283,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                                 sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                         .get();
                 admin.createTable(sinkTablePath, TABLE_DESCRIPTOR, true).get();
+                flussClusterExtension.waitUntilTableReady(sinkTablePath);
             }
 
             MockWriterInitContext mockWriterInitContext =
