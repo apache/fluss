@@ -179,6 +179,10 @@ impl ScanRecords {
         self.consumed_up_to_offsets.get(bucket).copied()
     }
 
+    pub(crate) fn consumed_up_to_offsets(&self) -> &HashMap<TableBucket, i64> {
+        &self.consumed_up_to_offsets
+    }
+
     pub fn records(&self, scan_bucket: &TableBucket) -> &[ScanRecord] {
         self.records.get(scan_bucket).map_or(&[], |records| records)
     }

@@ -63,10 +63,16 @@ use std::{
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+use crate::client::consumer_offsets::ConsumerGroup;
+use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
+
+mod consumer_group;
+
 pub(super) const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
+    consumer_group: Option<ConsumerGroupOptions>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
     /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
@@ -84,6 +90,7 @@ impl<'a> TableScan<'a> {
     pub fn new(conn: &'a FlussConnection, table_info: TableInfo, metadata: Arc<Metadata>) -> Self {
         Self {
             conn,
+            consumer_group: None,
             table_info,
             metadata,
             projected_fields: None,
@@ -91,6 +98,15 @@ impl<'a> TableScan<'a> {
             limit: None,
             filter: None,
         }
+    }
+
+    /// Enables persisted offsets for a manually assigned consumer group.
+    /// Existing subscriptions still use their explicit starting offsets; use
+    /// `subscribe_from_committed` to restore them. No background commits are made.
+    pub fn with_consumer_group(mut self, options: ConsumerGroupOptions) -> Result<Self> {
+        options.validate()?;
+        self.consumer_group = Some(options);
+        Ok(self)
     }
 
     /// Controls how log scanners handle schema evolution.
@@ -175,6 +191,11 @@ impl<'a> TableScan<'a> {
         self,
         table_bucket: TableBucket,
     ) -> Result<LimitBatchScanner> {
+        if self.consumer_group.is_some() {
+            return Err(Error::UnsupportedOperation {
+                message: "Consumer offsets require a log scanner".into(),
+            });
+        }
         self.reject_filter("BatchScanner")?;
         let limit = self.limit.ok_or_else(|| Error::IllegalArgument {
             message: "create_bucket_batch_scanner requires a limit configured via .limit(n)"
@@ -410,7 +431,7 @@ impl<'a> TableScan<'a> {
         self.reject_limit("LogScanner")?;
         validate_scan_support_inner(&self.table_info.table_path, &self.table_info, true)?;
         let admin = self.conn.get_admin()?;
-        let inner = LogScannerInner::new(
+        let mut inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
@@ -420,6 +441,14 @@ impl<'a> TableScan<'a> {
             self.filter,
             admin,
         )?;
+        inner.consumer_group = self.consumer_group.map(|options| {
+            Arc::new(ConsumerGroup::new(
+                self.table_info.table_id,
+                options,
+                self.conn.get_connections(),
+                self.metadata.clone(),
+            ))
+        });
         Ok(LogScanner {
             inner: Arc::new(inner),
         })
@@ -450,7 +479,7 @@ impl<'a> TableScan<'a> {
             allow_primary_key,
         )?;
         let admin = self.conn.get_admin()?;
-        let inner = LogScannerInner::new(
+        let mut inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
@@ -460,6 +489,14 @@ impl<'a> TableScan<'a> {
             self.filter,
             admin,
         )?;
+        inner.consumer_group = self.consumer_group.map(|options| {
+            Arc::new(ConsumerGroup::new(
+                self.table_info.table_id,
+                options,
+                self.conn.get_connections(),
+                self.metadata.clone(),
+            ))
+        });
         Ok(RecordBatchLogScanner {
             inner: Arc::new(inner),
         })
@@ -500,6 +537,8 @@ impl PolledBatches {
 
 /// Private shared implementation for both scanner types
 struct LogScannerInner {
+    consumer_group: Option<Arc<ConsumerGroup>>,
+    pending_offset_restore: Mutex<consumer_group::PendingOffsetRestore>,
     table_path: TablePath,
     table_id: TableId,
     table_info: TableInfo,
@@ -698,6 +737,8 @@ impl LogScannerInner {
             Arc::clone(&metrics),
         );
         Ok(Self {
+            consumer_group: None,
+            pending_offset_restore: Default::default(),
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
             table_info: table_info.clone(),
@@ -740,13 +781,18 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+    async fn poll_records(self: &Arc<Self>, timeout: Duration) -> Result<ScanRecords> {
         // Pairs record_poll_start (now) with record_poll_end
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
         let _poll_guard = PollGuard::new(self);
-        let start = Instant::now();
-        let deadline = start + timeout;
+        let deadline = tokio::time::Instant::now() + timeout;
+        if !self.restore_committed_offsets(deadline).await? {
+            return Ok(ScanRecords::empty());
+        }
+        if let Some(group) = &self.consumer_group {
+            group.invoke_callbacks(false);
+        }
 
         loop {
             // Try to collect fetches
@@ -757,11 +803,12 @@ impl LogScannerInner {
                 // This enables pipelining while user processes the data
                 self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
+                self.record_poll_progress(fetch_result.consumed_up_to_offsets());
                 return Ok(fetch_result);
             }
 
             // No data available, check if we should wait
-            let now = Instant::now();
+            let now = tokio::time::Instant::now();
             if now >= deadline {
                 // Timeout reached, return empty result
                 return Ok(ScanRecords::empty());
@@ -898,8 +945,7 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
-        self.log_scanner_status
-            .assign_scan_bucket(table_bucket, offset);
+        self.assign_buckets_at_offsets(HashMap::from([(table_bucket, offset)]));
         Ok(())
     }
 
@@ -960,8 +1006,7 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
-        self.log_scanner_status
-            .assign_scan_bucket(table_bucket, offset);
+        self.assign_buckets_at_offsets(HashMap::from([(table_bucket, offset)]));
         Ok(())
     }
 
@@ -1010,18 +1055,10 @@ impl LogScannerInner {
             .await
     }
 
-    async fn do_subscribe_buckets(
+    async fn prepare_bucket_metadata(
         &self,
-        bucket_offsets: HashMap<TableBucket, i64>,
-        reader_is_active: bool,
+        bucket_offsets: &HashMap<TableBucket, i64>,
     ) -> Result<()> {
-        if bucket_offsets.is_empty() {
-            return Err(Error::UnexpectedError {
-                message: "Bucket offsets are empty.".to_string(),
-                source: None,
-            });
-        }
-
         if self.is_partitioned_table {
             let partition_ids: Vec<PartitionId> = bucket_offsets
                 .keys()
@@ -1036,6 +1073,23 @@ impl LogScannerInner {
                 .await?;
         }
 
+        Ok(())
+    }
+
+    async fn do_subscribe_buckets(
+        &self,
+        bucket_offsets: HashMap<TableBucket, i64>,
+        reader_is_active: bool,
+    ) -> Result<()> {
+        if bucket_offsets.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Bucket offsets are empty.".to_string(),
+                source: None,
+            });
+        }
+
+        self.prepare_bucket_metadata(&bucket_offsets).await?;
+
         let _subscription_guard = self.subscription_lock.lock();
         if reader_is_active {
             debug_assert!(
@@ -1046,8 +1100,43 @@ impl LogScannerInner {
         } else {
             self.check_no_active_reader()?;
         }
-        self.log_scanner_status.assign_scan_buckets(bucket_offsets);
+        self.assign_buckets_at_offsets(bucket_offsets);
         Ok(())
+    }
+
+    fn assign_buckets_at_offsets(&self, bucket_offsets: HashMap<TableBucket, i64>) {
+        let mut assignment_version = self.log_scanner_status.assignment_version.write();
+        *assignment_version += 1;
+        if let Some(group) = &self.consumer_group {
+            let mut delivered = group.delivered.lock();
+            let mut pending = self.pending_offset_restore.lock();
+            for bucket in bucket_offsets.keys() {
+                pending.remove_bucket(bucket);
+                delivered.remove(bucket);
+            }
+        }
+        self.log_scanner_status
+            .assign_at(bucket_offsets, *assignment_version);
+    }
+
+    fn unassign_bucket(&self, bucket: &TableBucket) {
+        let _assignment = self.log_scanner_status.assignment_version.write();
+        self.log_scanner_status
+            .unassign_scan_buckets(from_ref(bucket));
+        if let Some(group) = &self.consumer_group {
+            group.delivered.lock().remove(bucket);
+            self.pending_offset_restore.lock().remove_bucket(bucket);
+        }
+    }
+
+    fn record_poll_progress(&self, offsets: &HashMap<TableBucket, i64>) {
+        if let Some(group) = &self.consumer_group {
+            group.delivered.lock().extend(
+                offsets
+                    .iter()
+                    .map(|(bucket, &end)| (bucket.clone(), OffsetAndMetadata::new(end))),
+            );
+        }
     }
 
     async fn unsubscribe(&self, bucket: i32) -> Result<()> {
@@ -1062,8 +1151,7 @@ impl LogScannerInner {
             });
         }
         let table_bucket = TableBucket::new(self.table_id, bucket);
-        self.log_scanner_status
-            .unassign_scan_buckets(from_ref(&table_bucket));
+        self.unassign_bucket(&table_bucket);
         Ok(())
     }
 
@@ -1077,8 +1165,7 @@ impl LogScannerInner {
         }
         let table_bucket =
             TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket);
-        self.log_scanner_status
-            .unassign_scan_buckets(from_ref(&table_bucket));
+        self.unassign_bucket(&table_bucket);
         Ok(())
     }
 
@@ -1095,10 +1182,15 @@ impl LogScannerInner {
         self.log_fetcher.collect_fetches().await
     }
 
-    async fn poll_batches(&self, timeout: Duration) -> Result<PolledBatches> {
+    async fn poll_batches(self: &Arc<Self>, timeout: Duration) -> Result<PolledBatches> {
         let _poll_guard = PollGuard::new(self);
-        let start = Instant::now();
-        let deadline = start + timeout;
+        let deadline = tokio::time::Instant::now() + timeout;
+        if !self.restore_committed_offsets(deadline).await? {
+            return Ok(PolledBatches::default());
+        }
+        if let Some(group) = &self.consumer_group {
+            group.invoke_callbacks(false);
+        }
 
         loop {
             let batches = self.poll_for_batches().await?;
@@ -1107,10 +1199,11 @@ impl LogScannerInner {
                 // Pipeline known leaders without awaiting metadata after advancing offsets.
                 self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
+                self.record_poll_progress(&batches.consumed_up_to_offsets);
                 return Ok(batches);
             }
 
-            let now = Instant::now();
+            let now = tokio::time::Instant::now();
             if now >= deadline {
                 return Ok(PolledBatches::default());
             }
@@ -1352,6 +1445,12 @@ impl RecordBatchLogScanner {
     /// iterate per scanner at a time. This mirrors Java's
     /// `LogScannerImpl.acquire()` single-consumer guard.
     pub(crate) fn try_set_reader_active(&self) -> Result<()> {
+        // A bounded reader can trim a polled batch; its scanner position is not a delivery receipt.
+        if self.inner.consumer_group.is_some() {
+            return Err(crate::client::consumer_offsets::invalid(
+                "Use a separate scanner without a consumer group for bounded reads",
+            ));
+        }
         use std::sync::atomic::Ordering;
         let _subscription_guard = self.inner.subscription_lock.lock();
         self.inner
@@ -1390,9 +1489,7 @@ impl RecordBatchLogScanner {
             return;
         }
         let table_bucket = TableBucket::new(self.inner.table_id, bucket);
-        self.inner
-            .log_scanner_status
-            .unassign_scan_buckets(from_ref(&table_bucket));
+        self.inner.unassign_bucket(&table_bucket);
     }
 
     /// Synchronous, infallible counterpart to
@@ -1405,9 +1502,7 @@ impl RecordBatchLogScanner {
         }
         let table_bucket =
             TableBucket::new_with_partition(self.inner.table_id, Some(partition_id), bucket);
-        self.inner
-            .log_scanner_status
-            .unassign_scan_buckets(from_ref(&table_bucket));
+        self.inner.unassign_bucket(&table_bucket);
     }
 }
 
@@ -1440,6 +1535,7 @@ struct LogFetcher {
 }
 
 struct FetchResponseContext {
+    assignment_version: u64,
     metadata: Arc<Metadata>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     log_scanner_status: Arc<LogScannerStatus>,
@@ -1768,7 +1864,10 @@ impl LogFetcher {
 
     // Scheduling with cached metadata cannot suspend or fail after data has been collected.
     fn send_fetches_without_metadata_refresh(&self) {
-        let fetch_request = self.prepare_fetch_log_requests();
+        let (assignment_version, fetch_request) = {
+            let assignment_version = self.log_scanner_status.assignment_version.read();
+            (*assignment_version, self.prepare_fetch_log_requests())
+        };
 
         for (leader, fetch_request) in fetch_request {
             debug!("Adding pending request for node id {leader}");
@@ -1841,6 +1940,7 @@ impl LogFetcher {
                 // — not tablet-server lookup or connection acquisition, which is matching Java's bebaviour
                 // Building it here also skips the allocation on the early-return error paths above.
                 let response_context = FetchResponseContext {
+                    assignment_version,
                     metadata: metadata.clone(),
                     log_fetch_buffer,
                     log_scanner_status,
@@ -1869,6 +1969,7 @@ impl LogFetcher {
         context: FetchResponseContext,
     ) {
         let FetchResponseContext {
+            assignment_version,
             metadata,
             log_fetch_buffer,
             log_scanner_status,
@@ -1897,14 +1998,19 @@ impl LogFetcher {
                     bucket,
                 );
 
-                // todo: check fetch result code for per-bucket
-                let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
+                // Keep validation and enqueue atomic with a seek that clears the old buffer.
+                let _assignment = log_scanner_status.assignment_version.read();
+                let Some(status) = log_scanner_status
+                    .get_status(&table_bucket)
+                    .filter(|s| s.assignment_version <= assignment_version)
+                else {
                     debug!(
                         "Ignoring fetch log response for bucket {table_bucket} because the bucket has been unsubscribed."
                     );
                     continue;
                 };
 
+                let fetch_offset = status.offset();
                 if let Some(error_code) = fetch_log_for_bucket.error_code
                     && error_code != FlussError::None.code()
                 {
@@ -2647,6 +2753,7 @@ impl LogFetcher {
 }
 
 pub struct LogScannerStatus {
+    assignment_version: RwLock<u64>,
     bucket_status_map: Arc<RwLock<FairBucketStatusMap<BucketScanStatus>>>,
 }
 
@@ -2655,6 +2762,7 @@ impl LogScannerStatus {
     pub fn new() -> Self {
         Self {
             bucket_status_map: Arc::new(RwLock::new(FairBucketStatusMap::new())),
+            assignment_version: Default::default(),
         }
     }
 
@@ -2687,20 +2795,23 @@ impl LogScannerStatus {
     }
 
     pub fn assign_scan_buckets(&self, scan_bucket_offsets: HashMap<TableBucket, i64>) {
+        let mut assignment_version = self.assignment_version.write();
+        *assignment_version += 1;
+        self.assign_at(scan_bucket_offsets, *assignment_version);
+    }
+
+    fn assign_at(&self, offsets: HashMap<TableBucket, i64>, assignment_version: u64) {
         let mut map = self.bucket_status_map.write();
-        for (bucket, offset) in scan_bucket_offsets {
-            let status = map
-                .status_value(&bucket)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(BucketScanStatus::new(offset)));
-            status.set_offset(offset);
-            map.update(bucket, status);
+        for (bucket, offset) in offsets {
+            map.update(
+                bucket,
+                Arc::new(BucketScanStatus::new(offset, assignment_version)),
+            );
         }
     }
 
     pub fn assign_scan_bucket(&self, table_bucket: TableBucket, offset: i64) {
-        let status = Arc::new(BucketScanStatus::new(offset));
-        self.bucket_status_map.write().update(table_bucket, status);
+        self.assign_scan_buckets(HashMap::from([(table_bucket, offset)]));
     }
 
     /// Unassigns scan buckets
@@ -2752,14 +2863,16 @@ impl Default for LogScannerStatus {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct BucketScanStatus {
+    assignment_version: u64,
     offset: RwLock<i64>,
     high_watermark: RwLock<i64>,
 }
 
 #[allow(dead_code)]
 impl BucketScanStatus {
-    pub fn new(offset: i64) -> Self {
+    fn new(offset: i64, assignment_version: u64) -> Self {
         Self {
+            assignment_version,
             offset: RwLock::new(offset),
             high_watermark: RwLock::new(0),
         }
@@ -3274,7 +3387,9 @@ mod tests {
         Ok(())
     }
 
-    fn scanner_fixture(known_leader: bool) -> Result<(Arc<LogScannerInner>, TableInfo, Vec<u8>)> {
+    pub(super) fn scanner_fixture(
+        known_leader: bool,
+    ) -> Result<(Arc<LogScannerInner>, TableInfo, Vec<u8>)> {
         let path = TablePath::new("db", "tbl");
         let info = build_table_info(path.clone(), 1, 1);
         let cluster = if known_leader {
@@ -4638,6 +4753,19 @@ mod tests {
         assert!(matches!(result.err(), Some(Error::IllegalArgument { .. })));
     }
 
+    #[tokio::test]
+    async fn late_filtered_response_does_not_advance_a_new_assignment() -> Result<()> {
+        let (inner, _, _) = scanner_fixture(false)?;
+        let bucket = TableBucket::new(1, 0);
+        inner.assign_buckets_at_offsets(HashMap::from([(bucket.clone(), 8)]));
+        let old = test_response_context(&inner.log_fetcher, &inner.metadata);
+        inner.assign_buckets_at_offsets(HashMap::from([(bucket.clone(), 2)]));
+        LogFetcher::handle_fetch_response(filtered_response(Some(11), Some(11)), old).await;
+        assert!(inner.log_fetcher.log_fetch_buffer.is_empty());
+        assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));
+        Ok(())
+    }
+
     /// Without this the bucket offset never advances and the scanner re-requests
     /// the same range forever whenever a filter prunes a whole fetch.
     #[tokio::test]
@@ -4645,7 +4773,14 @@ mod tests {
         let bucket = TableBucket::new(1, 0);
         for batch_mode in [false, true] {
             // Without bootstrap servers an unnecessary metadata fetch fails deterministically.
-            let (inner, _, _) = scanner_fixture(false)?;
+            let (mut inner, _, _) = scanner_fixture(false)?;
+            let group = Arc::new(ConsumerGroup::new(
+                1,
+                ConsumerGroupOptions::new("filtered"),
+                inner.log_fetcher.conns.clone(),
+                inner.metadata.clone(),
+            ));
+            Arc::get_mut(&mut inner).unwrap().consumer_group = Some(group.clone());
             inner
                 .log_scanner_status
                 .assign_scan_bucket(bucket.clone(), 2);
@@ -4667,6 +4802,9 @@ mod tests {
                 inner.log_scanner_status.get_bucket_offset(&bucket),
                 Some(11)
             );
+            assert_eq!(group.delivered.lock()[&bucket].offset, 11);
+            inner.unsubscribe(0).await?;
+            assert!(!group.delivered.lock().contains_key(&bucket));
         }
         Ok(())
     }
@@ -4768,6 +4906,7 @@ mod tests {
         metadata: &Arc<Metadata>,
     ) -> FetchResponseContext {
         FetchResponseContext {
+            assignment_version: *fetcher.log_scanner_status.assignment_version.read(),
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -4818,6 +4957,7 @@ mod tests {
         };
 
         let response_context = FetchResponseContext {
+            assignment_version: *fetcher.log_scanner_status.assignment_version.read(),
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -4878,6 +5018,7 @@ mod tests {
         };
 
         let response_context = FetchResponseContext {
+            assignment_version: *fetcher.log_scanner_status.assignment_version.read(),
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -5228,6 +5369,7 @@ mod tests {
                 };
                 let expected_bytes = response.encoded_len() as f64;
                 let response_context = FetchResponseContext {
+                    assignment_version: *fetcher.log_scanner_status.assignment_version.read(),
                     metadata: metadata.clone(),
                     log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
                     log_scanner_status: fetcher.log_scanner_status.clone(),

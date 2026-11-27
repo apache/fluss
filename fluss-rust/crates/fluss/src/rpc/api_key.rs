@@ -72,6 +72,9 @@ pub enum ApiKey {
     GetClusterHealth,           // 1062
     ListRemoteLogManifests,     // 1063
     ListKvSnapshots,            // 1064
+    FindConsumerGroupOwner,     // 1068
+    CommitConsumerOffsets,      // 1069
+    GetConsumerOffsets,         // 1070
     Unknown(i16),
 }
 
@@ -81,6 +84,9 @@ impl ApiKey {
         match self {
             // Most APIs only support v0.
             ApiKey::ApiVersion
+            | ApiKey::FindConsumerGroupOwner
+            | ApiKey::CommitConsumerOffsets
+            | ApiKey::GetConsumerOffsets
             | ApiKey::CreateDatabase
             | ApiKey::DropDatabase
             | ApiKey::ListDatabases
@@ -205,6 +211,9 @@ impl From<i16> for ApiKey {
             1063 => ApiKey::ListRemoteLogManifests,
             1064 => ApiKey::ListKvSnapshots,
 
+            1068 => ApiKey::FindConsumerGroupOwner,
+            1069 => ApiKey::CommitConsumerOffsets,
+            1070 => ApiKey::GetConsumerOffsets,
             _ => Unknown(key),
         }
     }
@@ -265,6 +274,9 @@ impl From<ApiKey> for i16 {
             ApiKey::GetClusterHealth => 1062,
             ApiKey::ListRemoteLogManifests => 1063,
             ApiKey::ListKvSnapshots => 1064,
+            ApiKey::FindConsumerGroupOwner => 1068,
+            ApiKey::CommitConsumerOffsets => 1069,
+            ApiKey::GetConsumerOffsets => 1070,
             Unknown(x) => x,
         }
     }
@@ -329,6 +341,9 @@ mod tests {
             (1062, ApiKey::GetClusterHealth),
             (1063, ApiKey::ListRemoteLogManifests),
             (1064, ApiKey::ListKvSnapshots),
+            (1068, ApiKey::FindConsumerGroupOwner),
+            (1069, ApiKey::CommitConsumerOffsets),
+            (1070, ApiKey::GetConsumerOffsets),
         ];
 
         for (raw, key) in cases {
