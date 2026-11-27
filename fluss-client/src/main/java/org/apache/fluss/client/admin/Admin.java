@@ -77,7 +77,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -109,44 +108,29 @@ public interface Admin extends AutoCloseable {
      * period. Recreating a table under the same name gives it a new physical identity, so the same
      * caller-supplied ID can begin a new transaction.
      */
-    default CompletableFuture<BulkLoadBuildContext> beginBulkLoad(
-            TablePath tablePath, List<String> partitionNames, String bulkLoadId) {
-        return FutureUtils.completedExceptionally(
-                new UnsupportedOperationException("This admin does not support BulkLoad."));
-    }
+    CompletableFuture<BulkLoadBuildContext> beginBulkLoad(
+            TablePath tablePath, List<String> partitionNames, String bulkLoadId);
 
     /** Returns transaction status and bucket progress for the original targets. */
-    default CompletableFuture<BulkLoadInfo> getBulkLoadInfo(BulkLoadHandle handle) {
-        return FutureUtils.completedExceptionally(
-                new UnsupportedOperationException("This admin does not support BulkLoad."));
-    }
+    CompletableFuture<BulkLoadInfo> getBulkLoadInfo(BulkLoadHandle handle);
 
     /**
      * Lists handles of running transactions owning any selected physical target.
      *
      * <p>An empty partition list queries all current targets of the table.
      */
-    default CompletableFuture<List<BulkLoadHandle>> listInProgressBulkLoads(
-            TablePath tablePath, List<String> partitionNames) {
-        return FutureUtils.completedExceptionally(
-                new UnsupportedOperationException("This admin does not support BulkLoad."));
-    }
+    CompletableFuture<List<BulkLoadHandle>> listInProgressBulkLoads(
+            TablePath tablePath, List<String> partitionNames);
 
     /**
      * Finalizes the transaction after all buckets of its active targets have been committed.
      *
      * <p>Each bucket snapshot is published when it is registered with the coordinator.
      */
-    default CompletableFuture<Void> commitBulkLoad(BulkLoadHandle handle) {
-        return FutureUtils.completedExceptionally(
-                new UnsupportedOperationException("This admin does not support BulkLoad."));
-    }
+    CompletableFuture<Void> commitBulkLoad(BulkLoadHandle handle);
 
     /** Stops the transaction while retaining any previously committed bucket snapshots. */
-    default CompletableFuture<Void> abortBulkLoad(BulkLoadHandle handle, @Nullable String reason) {
-        return FutureUtils.completedExceptionally(
-                new UnsupportedOperationException("This admin does not support BulkLoad."));
-    }
+    CompletableFuture<Void> abortBulkLoad(BulkLoadHandle handle, @Nullable String reason);
 
     /**
      * Get the current server node information asynchronously: the coordinator server, followed by

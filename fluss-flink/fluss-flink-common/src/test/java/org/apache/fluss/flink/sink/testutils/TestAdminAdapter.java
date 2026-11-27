@@ -32,6 +32,9 @@ import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.admin.RegisterResult;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
+import org.apache.fluss.client.metadata.BulkLoadBuildContext;
+import org.apache.fluss.client.metadata.BulkLoadHandle;
+import org.apache.fluss.client.metadata.BulkLoadInfo;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -89,6 +92,33 @@ import java.util.concurrent.CompletableFuture;
  * }</pre>
  */
 public class TestAdminAdapter implements Admin {
+
+    @Override
+    public CompletableFuture<BulkLoadBuildContext> beginBulkLoad(
+            TablePath tablePath, List<String> partitionNames, String bulkLoadId) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<BulkLoadInfo> getBulkLoadInfo(BulkLoadHandle handle) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<BulkLoadHandle>> listInProgressBulkLoads(
+            TablePath tablePath, List<String> partitionNames) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<Void> commitBulkLoad(BulkLoadHandle handle) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<Void> abortBulkLoad(BulkLoadHandle handle, @Nullable String reason) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
