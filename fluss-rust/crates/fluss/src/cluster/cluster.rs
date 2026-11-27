@@ -331,7 +331,15 @@ impl Cluster {
             table_info_by_path.extend(origin.get_table_info_by_path().clone());
             table_id_by_path.extend(origin.get_table_id_by_path().clone());
             partitions_id_by_path.extend(origin.partitions_id_by_path.clone());
-            tmp_available_locations_by_path.extend(origin.available_locations_by_path.clone());
+            tmp_available_locations_by_path = origin.available_locations_by_path.clone();
+            if servers != origin.alive_tablet_servers_by_id {
+                // A node list gives new endpoints but doesn't confirm bucket leadership there.
+                for location in tmp_available_locations_by_path.values_mut().flatten() {
+                    location
+                        .leader
+                        .take_if(|leader| servers.get(&leader.id()) != Some(leader));
+                }
+            }
             bucket_count_by_table_or_partition
                 .extend(origin.bucket_count_by_table_or_partition.clone());
         }

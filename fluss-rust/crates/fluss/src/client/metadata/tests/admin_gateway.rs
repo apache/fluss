@@ -65,11 +65,14 @@ async fn partition_listing_recovers_a_moved_tablet() {
     let bootstrap = listen().await;
     let tablet = listen().await;
     let addresses = format!(
-        "{},{}",
+        "missing-port,{},{}",
         empty.local_addr().unwrap(),
         bootstrap.local_addr().unwrap()
     );
-    let admin = admin(server_metadata(&[1], 0), &addresses);
+    let cached = TablePath::new("db", "cached");
+    let cluster = build_cluster_with_tables(&[(&cached, 42, 1)], 0);
+    let metadata = Arc::new(Metadata::new_for_test(Arc::new(cluster)).with_bootstrap(&addresses));
+    let admin = FlussAdmin::new(metadata.connections.clone(), metadata.clone());
     let table = TablePath::new("db", "parts");
     let server = async {
         // Only the second bootstrap knows the tablet's new address.
@@ -96,6 +99,9 @@ async fn partition_listing_recovers_a_moved_tablet() {
         .await
         .unwrap();
     assert!(partitions.is_empty());
+    let cluster = metadata.get_cluster();
+    assert_eq!(cluster.get_table_path_by_id(42), Some(&cached));
+    assert!(cluster.leader_for(&TableBucket::new(42, 0)).is_none());
 }
 
 #[tokio::test]

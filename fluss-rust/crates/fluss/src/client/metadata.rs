@@ -30,7 +30,7 @@ use parking_lot::{Mutex, MutexGuard, RwLock};
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::future::Future;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -52,16 +52,12 @@ pub struct Metadata {
     request_timeout: Duration,
 }
 
-#[derive(Debug)]
-struct BootstrapServer {
-    raw: String,
-    address: Result<SocketAddr>,
-}
-
 impl Metadata {
     pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
-        let cluster =
-            Self::init_cluster(bootstrap, &connections, METADATA_REQUEST_TIMEOUT, None).await?;
+        let nodes =
+            Self::bootstrap_metadata(bootstrap, &connections, METADATA_REQUEST_TIMEOUT, None)
+                .await?;
+        let cluster = Cluster::from_metadata_response(nodes, None)?;
         let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
             cluster: ArcSwap::from_pointee(cluster),
@@ -83,52 +79,40 @@ impl Metadata {
             .send_modify(|v| *v = v.wrapping_add(1));
     }
 
-    fn parse_bootstrap(bootstrap: &str) -> Result<SocketAddr> {
-        // Resolve all socket addresses and deterministically choose one.
-        let addrs = bootstrap
-            .to_socket_addrs()
-            .map_err(|e| Error::IllegalArgument {
-                message: format!("Invalid bootstrap address '{bootstrap}': {e}"),
-            })?;
+    async fn resolve_bootstrap(bootstrap: &str) -> Result<ServerNode> {
+        let addrs =
+            tokio::net::lookup_host(bootstrap)
+                .await
+                .map_err(|e| Error::IllegalArgument {
+                    message: format!("Invalid bootstrap address '{bootstrap}': {e}"),
+                })?;
 
         // Prefer IPv4 addresses; if none are available, fall back to the first IPv6.
-        let mut ipv6_candidate: Option<SocketAddr> = None;
-        for addr in addrs {
-            if addr.is_ipv4() {
-                return Ok(addr);
-            }
-            if ipv6_candidate.is_none() {
-                ipv6_candidate = Some(addr);
-            }
-        }
-
-        let addr = ipv6_candidate.ok_or_else(|| Error::IllegalArgument {
-            message: format!("Unable to resolve bootstrap address '{bootstrap}'"),
-        })?;
-        Ok(addr)
+        let addr = addrs
+            .min_by_key(SocketAddr::is_ipv6)
+            .ok_or_else(|| Error::IllegalArgument {
+                message: format!("Unable to resolve bootstrap address '{bootstrap}'"),
+            })?;
+        Ok(ServerNode::new(
+            -1,
+            addr.ip().to_string(),
+            addr.port().into(),
+            ServerType::Unknown,
+        ))
     }
 
-    fn parse_bootstrap_servers(bootstrap_servers: &str) -> Result<Vec<BootstrapServer>> {
-        let mut bootstraps = Vec::new();
-
-        for bootstrap in bootstrap_servers.split(',') {
-            let bootstrap = bootstrap.trim();
-            if bootstrap.is_empty() {
-                continue;
-            }
-            bootstraps.push(BootstrapServer {
-                raw: bootstrap.to_string(),
-                address: Self::parse_bootstrap(bootstrap),
-            });
-        }
-
-        if bootstraps.is_empty() {
+    fn bootstrap_addresses(bootstrap: &str) -> Result<Vec<&str>> {
+        let addresses: Vec<_> = bootstrap
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if addresses.is_empty() {
             return Err(Error::IllegalArgument {
-                message: "No bootstrap servers configured".to_string(),
+                message: "No bootstrap servers configured".into(),
             });
         }
-
-        Ok(bootstraps)
+        Ok(addresses)
     }
 
     async fn retry_bootstrap<T, Operation, OperationFuture, Disconnect>(
@@ -162,78 +146,61 @@ impl Metadata {
         }
     }
 
-    async fn init_cluster(
-        bootstrap_servers: &str,
+    async fn bootstrap_metadata(
+        bootstrap: &str,
         connections: &RpcClient,
-        request_timeout: Duration,
+        timeout: Duration,
         target: Option<GatewayTarget>,
-    ) -> Result<Cluster> {
-        let bootstraps = Self::parse_bootstrap_servers(bootstrap_servers)?;
-        let bootstrap_count = bootstraps.len();
-        let mut errors = Vec::new();
-        let mut last_connection_error = None;
-
-        for (index, bootstrap) in bootstraps.into_iter().enumerate() {
-            let socket_address = match bootstrap.address {
-                Ok(socket_address) => socket_address,
-                Err(err) => {
-                    if index + 1 < bootstrap_count {
-                        warn!(
-                            "Failed to resolve bootstrap server '{}', trying the next server: {err}",
-                            bootstrap.raw
-                        );
-                    }
-                    errors.push(format!("{}: {err}", bootstrap.raw));
-                    continue;
-                }
-            };
-            let server_node = ServerNode::new(
-                -1,
-                socket_address.ip().to_string(),
-                socket_address.port() as u32,
-                ServerType::Unknown,
-            );
-
-            let fetch = || {
-                Self::fetch_cluster_from_bootstrap(
-                    &server_node,
-                    connections,
-                    request_timeout,
-                    target,
-                )
-            };
-            let cluster_result = if target.is_none() && bootstrap_count == 1 {
-                Self::retry_bootstrap(&bootstrap.raw, fetch, || {
-                    connections.disconnect_endpoint(&server_node)
-                })
-                .await
-            } else {
-                fetch().await
-            };
-
-            match cluster_result {
-                Ok(cluster) => return Ok(cluster),
-                Err(err) if target.is_some() && !GatewayTarget::needs_refresh(&err) => {
-                    return Err(err);
-                }
-                Err(err) => {
-                    if index + 1 < bootstrap_count {
-                        warn!(
-                            "Failed to initialize cluster from bootstrap server '{}', trying the next server: {err}",
-                            bootstrap.raw
-                        );
-                    }
-                    errors.push(format!("{}: {err}", bootstrap.raw));
-                    last_connection_error = Some(err);
-                }
-            }
+    ) -> Result<MetadataResponse> {
+        let addresses = Self::bootstrap_addresses(bootstrap)?;
+        if target.is_none()
+            && let [address] = addresses.as_slice()
+        {
+            let server = Self::resolve_bootstrap(address).await?;
+            return Self::retry_bootstrap(
+                address,
+                || Self::request_server_nodes(connections, &server, timeout, None),
+                || connections.disconnect_endpoint(&server),
+            )
+            .await;
         }
 
-        Err(Self::bootstrap_initialization_error(
-            bootstrap_servers,
-            errors,
-            last_connection_error,
-        ))
+        let round = || async {
+            let mut errors = Vec::new();
+            let mut last_connection_error = None;
+            for &address in &addresses {
+                let server = match Self::resolve_bootstrap(address).await {
+                    Ok(server) => server,
+                    Err(error) => {
+                        errors.push(format!("{address}: {error}"));
+                        continue;
+                    }
+                };
+                match Self::request_server_nodes(connections, &server, timeout, target).await {
+                    Ok(nodes) => return Ok(nodes),
+                    Err(error) if target.is_some() && !GatewayTarget::needs_refresh(&error) => {
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        errors.push(format!("{address}: {error}"));
+                        last_connection_error = Some(error);
+                    }
+                }
+            }
+            Err(Self::bootstrap_initialization_error(
+                bootstrap,
+                errors,
+                last_connection_error,
+            ))
+        };
+
+        // Multi-address startup tries one round. Recovery repeats whole rounds so a
+        // responsive bootstrap with a stale node list doesn't delay the next address.
+        if target.is_some() {
+            Self::retry_bootstrap(bootstrap, round, || {}).await
+        } else {
+            round().await
+        }
     }
 
     fn bootstrap_initialization_error(
@@ -256,12 +223,12 @@ impl Metadata {
         Error::IllegalArgument { message }
     }
 
-    async fn fetch_cluster_from_bootstrap(
-        server_node: &ServerNode,
+    async fn request_server_nodes(
         connections: &RpcClient,
+        server_node: &ServerNode,
         request_timeout: Duration,
         target: Option<GatewayTarget>,
-    ) -> Result<Cluster> {
+    ) -> Result<MetadataResponse> {
         let response = Self::request_metadata(
             connections,
             server_node,
@@ -271,11 +238,11 @@ impl Metadata {
         .await?;
         if let Some(target) = target.filter(|target| !target.is_available(&response)) {
             return Err(crate::rpc::RpcError::ConnectionError(format!(
-                "Bootstrap metadata contains no {target:?}"
+                "Cluster metadata contains no {target:?}"
             ))
             .into());
         }
-        Cluster::from_metadata_response(response, None)
+        Ok(response)
     }
 
     /// Fails as retriable if `server` does not answer within `timeout`, so the caller can ask
@@ -301,19 +268,6 @@ impl Metadata {
             })
     }
 
-    pub(super) fn admin_read_server(&self) -> Result<ServerNode> {
-        self.cluster
-            .load()
-            .get_one_available_server()
-            .cloned()
-            .ok_or_else(|| {
-                crate::rpc::RpcError::ConnectionError(
-                    "No available tablet server for a read-only Admin request".into(),
-                )
-                .into()
-            })
-    }
-
     pub(super) async fn refresh_table_routing(
         &self,
         server: ServerNode,
@@ -324,19 +278,6 @@ impl Metadata {
             Self::request_metadata(&self.connections, &server, request, self.request_timeout)
                 .await?;
         self.update(response).await
-    }
-
-    async fn reinit_cluster(&self, target: Option<GatewayTarget>) -> Result<()> {
-        let cluster = Self::init_cluster(
-            &self.bootstrap,
-            &self.connections,
-            self.request_timeout,
-            target,
-        )
-        .await?;
-        let changing = self.changing.lock();
-        self.replace_cluster(&changing, cluster);
-        Ok(())
     }
 
     fn replace_cluster(&self, changing: &MutexGuard<'_, ()>, cluster: Cluster) {
@@ -474,31 +415,30 @@ impl Metadata {
         tablets.retain(|s| s.server_type() == &ServerType::TabletServer);
         tablets.shuffle(&mut rand::rng());
         for tablet in tablets {
-            match Self::request_metadata(
+            match Self::request_server_nodes(
                 &self.connections,
                 &tablet,
-                UpdateMetadataRequest::new(&HashSet::new(), &HashSet::new(), vec![]),
                 self.request_timeout,
+                target,
             )
             .await
             {
-                Ok(response) if target.is_none_or(|target| target.is_available(&response)) => {
+                Ok(response) => {
                     self.update(response).await?;
                     return Ok(Some(tablet));
                 }
-                Ok(_) => continue,
                 Err(error) if GatewayTarget::needs_refresh(&error) => continue,
                 Err(error) => return Err(error),
             }
         }
-        if target.is_some() {
-            // Back off between complete discovery rounds, not between addresses: a second
-            // bootstrap may already know the new endpoint. An empty node list is a valid
-            // reply on a healthy connection, so keep that connection for the next round.
-            Self::retry_bootstrap(&self.bootstrap, || self.reinit_cluster(target), || {}).await?;
-        } else {
-            self.reinit_cluster(None).await?;
-        }
+        let response = Self::bootstrap_metadata(
+            &self.bootstrap,
+            &self.connections,
+            self.request_timeout,
+            target,
+        )
+        .await?;
+        self.update(response).await?;
         Ok(None)
     }
 
@@ -557,7 +497,15 @@ impl Metadata {
                 info!(
                     "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
                 );
-                self.reinit_cluster(None).await?;
+                let nodes = Self::bootstrap_metadata(
+                    &self.bootstrap,
+                    &self.connections,
+                    self.request_timeout,
+                    None,
+                )
+                .await?;
+                let cluster = Cluster::from_metadata_response(nodes, None)?;
+                self.replace_cluster(&self.changing.lock(), cluster);
                 return Ok(None);
             }
         };
@@ -1437,84 +1385,30 @@ mod tests {
         assert_eq!(error.api_error(), Some(FlussError::AuthenticateException));
     }
 
-    #[test]
-    fn parse_bootstrap_variants() {
-        // valid IP
-        let bootstraps = Metadata::parse_bootstrap_servers("127.0.0.1:8080").unwrap();
-        let addr = bootstraps[0].address.as_ref().unwrap();
-        assert_eq!(addr.ip().to_string(), "127.0.0.1");
-        assert_eq!(addr.port(), 8080);
-
-        // valid hostname
-        let bootstraps = Metadata::parse_bootstrap_servers("localhost:9090").unwrap();
-        let addr = bootstraps[0].address.as_ref().unwrap();
-        assert_eq!(addr.ip().to_string(), "127.0.0.1");
-        assert_eq!(addr.port(), 9090);
-
-        // valid IPv6 address
-        let bootstraps = Metadata::parse_bootstrap_servers("[::1]:8080").unwrap();
-        let addr = bootstraps[0].address.as_ref().unwrap();
-        assert_eq!(addr.ip().to_string(), "::1");
-        assert_eq!(addr.port(), 8080);
-
-        // invalid input: missing port is preserved as an entry-level parse error
-        let bootstraps = Metadata::parse_bootstrap_servers("localhost").unwrap();
-        assert!(bootstraps[0].address.is_err());
-
-        // invalid input: out-of-range port is preserved as an entry-level parse error
-        let bootstraps = Metadata::parse_bootstrap_servers("localhost:99999").unwrap();
-        assert!(bootstraps[0].address.is_err());
-
-        // invalid input: empty string
-        assert!(Metadata::parse_bootstrap_servers("").is_err());
-
-        // invalid input: nonsensical address is preserved as an entry-level parse error
-        let bootstraps = Metadata::parse_bootstrap_servers("invalid_address").unwrap();
-        assert!(bootstraps[0].address.is_err());
+    #[tokio::test]
+    async fn resolves_bootstrap_hostnames_and_prefers_ipv4() {
+        for (address, host) in [
+            ("127.0.0.1:8080", "127.0.0.1"),
+            ("localhost:8080", "127.0.0.1"),
+            ("[::1]:8080", "::1"),
+        ] {
+            let node = Metadata::resolve_bootstrap(address).await.unwrap();
+            assert_eq!((node.host(), node.port()), (host, 8080));
+        }
+        assert!(Metadata::resolve_bootstrap("localhost").await.is_err());
+        assert!(
+            Metadata::resolve_bootstrap("localhost:99999")
+                .await
+                .is_err()
+        );
     }
 
     #[test]
-    fn parse_bootstrap_accepts_comma_separated_servers() {
-        let bootstraps =
-            Metadata::parse_bootstrap_servers("127.0.0.1:8080, localhost:9090, [::1]:7070")
-                .unwrap();
-
-        assert_eq!(bootstraps.len(), 3);
-        let first = bootstraps[0].address.as_ref().unwrap();
-        assert_eq!(first.ip().to_string(), "127.0.0.1");
-        assert_eq!(first.port(), 8080);
-        let second = bootstraps[1].address.as_ref().unwrap();
-        assert_eq!(second.ip().to_string(), "127.0.0.1");
-        assert_eq!(second.port(), 9090);
-        let third = bootstraps[2].address.as_ref().unwrap();
-        assert_eq!(third.ip().to_string(), "::1");
-        assert_eq!(third.port(), 7070);
-    }
-
-    #[test]
-    fn parse_bootstrap_preserves_later_entries_when_one_entry_is_unresolvable() {
-        let bootstraps =
-            Metadata::parse_bootstrap_servers("invalid.invalid:8080, 127.0.0.1:9090").unwrap();
-
-        assert_eq!(bootstraps.len(), 2);
-        assert!(bootstraps[0].address.is_err());
-        let addr = bootstraps[1].address.as_ref().unwrap();
-        assert_eq!(addr.ip().to_string(), "127.0.0.1");
-        assert_eq!(addr.port(), 9090);
-    }
-
-    #[test]
-    fn parse_bootstrap_ignores_empty_comma_separated_entries() {
-        let bootstraps =
-            Metadata::parse_bootstrap_servers("127.0.0.1:8080, , localhost:9090,").unwrap();
-
-        assert_eq!(bootstraps.len(), 2);
-        assert_eq!(bootstraps[0].raw, "127.0.0.1:8080");
-        assert_eq!(bootstraps[1].raw, "localhost:9090");
-    }
-
-    #[test]
-    fn parse_bootstrap_rejects_config_without_servers() {
-        assert!(Metadata::parse_bootstrap_servers(" , ").is_err());
+    fn bootstrap_list_ignores_empty_entries_and_rejects_an_empty_list() {
+        assert_eq!(
+            Metadata::bootstrap_addresses("127.0.0.1:8080, ,localhost:9090,").unwrap(),
+            ["127.0.0.1:8080", "localhost:9090"]
+        );
+        assert!(Metadata::bootstrap_addresses(" , ").is_err());
     }
 }

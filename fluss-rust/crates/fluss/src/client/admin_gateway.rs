@@ -79,23 +79,23 @@ impl RetryableGateway {
 
     fn select(&self, responding_tablet: Option<&ServerNode>) -> Result<ServerNode> {
         let cluster = self.metadata.get_cluster();
-        match self.target {
-            GatewayTarget::TabletServer => {
-                // A restarted peer may still be advertised. Prefer the tablet that answered
-                // discovery if it is still present at that address.
-                if let Some(tablet) =
-                    responding_tablet.filter(|t| cluster.get_tablet_server(t.id()) == Some(*t))
-                {
-                    return Ok(tablet.clone());
-                }
-                self.metadata.admin_read_server()
-            }
-            GatewayTarget::Coordinator => {
-                cluster.get_coordinator_server().cloned().ok_or_else(|| {
-                    RpcError::ConnectionError("No coordinator in cluster metadata".into()).into()
-                })
-            }
-        }
+        let (server, missing) = match self.target {
+            // A recovered peer may still advertise stale addresses. Prefer the tablet that
+            // answered discovery only while its endpoint still matches this snapshot.
+            GatewayTarget::TabletServer => (
+                responding_tablet
+                    .filter(|t| cluster.get_tablet_server(t.id()) == Some(*t))
+                    .or_else(|| cluster.get_one_available_server()),
+                "No available tablet server for a read-only Admin request",
+            ),
+            GatewayTarget::Coordinator => (
+                cluster.get_coordinator_server(),
+                "No coordinator in cluster metadata",
+            ),
+        };
+        server
+            .cloned()
+            .ok_or_else(|| RpcError::ConnectionError(missing.into()).into())
     }
 
     pub(super) async fn request<R>(&self, request: R) -> Result<R::ResponseBody>
