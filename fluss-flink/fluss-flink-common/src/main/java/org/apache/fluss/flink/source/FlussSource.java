@@ -18,14 +18,11 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.LeaseContext;
-import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
@@ -66,102 +63,6 @@ import javax.annotation.Nullable;
  */
 public class FlussSource<OUT> extends FlinkSource<OUT> {
     private static final long serialVersionUID = 1L;
-
-    FlussSource(
-            Configuration flussConf,
-            TablePath tablePath,
-            boolean hasPrimaryKey,
-            boolean isPartitioned,
-            RowType sourceOutputType,
-            @Nullable int[] projectedFields,
-            @Nullable Predicate logRecordBatchFilter,
-            OffsetsInitializer offsetsInitializer,
-            long scanPartitionDiscoveryIntervalMs,
-            FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
-        this(
-                flussConf,
-                tablePath,
-                hasPrimaryKey,
-                isPartitioned,
-                sourceOutputType,
-                projectedFields,
-                logRecordBatchFilter,
-                offsetsInitializer,
-                scanPartitionDiscoveryIntervalMs,
-                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
-                deserializationSchema,
-                streaming,
-                lakeSource);
-    }
-
-    FlussSource(
-            Configuration flussConf,
-            TablePath tablePath,
-            boolean hasPrimaryKey,
-            boolean isPartitioned,
-            RowType sourceOutputType,
-            @Nullable int[] projectedFields,
-            @Nullable Predicate logRecordBatchFilter,
-            OffsetsInitializer offsetsInitializer,
-            long scanPartitionDiscoveryIntervalMs,
-            int splitPerAssignmentBatchSize,
-            FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
-        this(
-                flussConf,
-                tablePath,
-                hasPrimaryKey,
-                isPartitioned,
-                sourceOutputType,
-                projectedFields,
-                logRecordBatchFilter,
-                offsetsInitializer,
-                streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest(),
-                streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED,
-                scanPartitionDiscoveryIntervalMs,
-                splitPerAssignmentBatchSize,
-                deserializationSchema,
-                streaming,
-                lakeSource);
-    }
-
-    FlussSource(
-            Configuration flussConf,
-            TablePath tablePath,
-            boolean hasPrimaryKey,
-            boolean isPartitioned,
-            RowType sourceOutputType,
-            @Nullable int[] projectedFields,
-            @Nullable Predicate logRecordBatchFilter,
-            OffsetsInitializer offsetsInitializer,
-            OffsetsInitializer stoppingOffsetsInitializer,
-            Boundedness boundedness,
-            long scanPartitionDiscoveryIntervalMs,
-            int splitPerAssignmentBatchSize,
-            FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
-        this(
-                flussConf,
-                tablePath,
-                hasPrimaryKey,
-                isPartitioned,
-                sourceOutputType,
-                projectedFields,
-                logRecordBatchFilter,
-                offsetsInitializer,
-                stoppingOffsetsInitializer,
-                boundedness,
-                scanPartitionDiscoveryIntervalMs,
-                splitPerAssignmentBatchSize,
-                deserializationSchema,
-                streaming,
-                lakeSource,
-                FlinkConnectorOptionsUtils.commitOffsetsOnCheckpoint(flussConf));
-    }
 
     FlussSource(
             Configuration flussConf,
