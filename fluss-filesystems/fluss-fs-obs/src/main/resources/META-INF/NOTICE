@@ -39,7 +39,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.apache.kerby:kerby-pkix:2.0.3
 - org.apache.kerby:kerby-util:2.0.3
 - org.bouncycastle:bcprov-jdk15on:1.70
-- org.checkerframework:checker-qual:3.19.0
+- org.checkerframework:checker-qual:3.33.0
 - org.codehaus.woodstox:stax2-api:4.2.1
 - org.codehaus.mojo:animal-sniffer-annotations:1.17
 - com.fasterxml.jackson.core:jackson-annotations:2.15.3

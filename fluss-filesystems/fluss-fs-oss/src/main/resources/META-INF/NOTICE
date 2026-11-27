@@ -53,7 +53,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.apache.hadoop:hadoop-annotations:3.4.3
 - org.apache.hadoop:hadoop-auth:3.4.3
 - org.apache.hadoop:hadoop-common:3.4.3
-- org.checkerframework:checker-qual:3.19.0
+- org.checkerframework:checker-qual:3.33.0
 - org.codehaus.mojo:animal-sniffer-annotations:1.17
 - org.codehaus.woodstox:stax2-api:4.2.1
 - org.xerial.snappy:snappy-java:1.1.10.4

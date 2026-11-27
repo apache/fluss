@@ -47,7 +47,7 @@ This project bundles the following dependencies under the MIT (https://opensourc
 See bundled license files for details.
 
 - org.slf4j:slf4j-api:1.7.36
-- org.checkerframework:checker-qual:3.19.0 MIT
+- org.checkerframework:checker-qual:3.33.0 MIT
 
 This project bundles the following dependencies under BSD License (https://opensource.org/licenses/bsd-license.php).
 See bundled license files for details.

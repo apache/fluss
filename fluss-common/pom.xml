@@ -105,19 +105,28 @@
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
-            <version>2.9.3</version>
+            <version>${caffeine.version}</version>
         </dependency>
 
+        <!-- Export the selected annotation API version to consumers without the Fluss parent. -->
+        <dependency>
+            <groupId>org.checkerframework</groupId>
+            <artifactId>checker-qual</artifactId>
+        </dependency>
+
+        <!-- Bundled and relocated below; downstream modules must not bundle the raw libraries. -->
         <dependency>
             <groupId>org.roaringbitmap</groupId>
             <artifactId>RoaringBitmap</artifactId>
             <version>${roaringbitmap.version}</version>
+            <optional>true</optional>
         </dependency>
 
         <dependency>
             <groupId>org.apache.datasketches</groupId>
             <artifactId>datasketches-java</artifactId>
             <version>${datasketches-java.version}</version>
+            <optional>true</optional>
         </dependency>
 
         <!-- test dependencies -->
@@ -212,6 +221,21 @@
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
                                 </relocation>
                             </relocations>
+                            <filters combine.children="append">
+                                <!-- Keep Java 8 implementations; versioned classes retain raw package names. -->
+                                <filter>
+                                    <artifact>org.roaringbitmap:RoaringBitmap</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>org.apache.datasketches:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/versions/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>

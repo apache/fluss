@@ -127,7 +127,7 @@ See bundled license files for details.
 This project bundles the following dependencies under the MIT License.
 See bundled license files for details.
 
-- org.checkerframework:checker-qual:3.19.0
+- org.checkerframework:checker-qual:3.33.0
 - org.codehaus.mojo:animal-sniffer-annotations:1.23
 
 This project bundles the following dependencies under the CDDL 1.1 license.
