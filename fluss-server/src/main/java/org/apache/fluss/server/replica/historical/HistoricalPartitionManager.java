@@ -24,6 +24,7 @@ import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.plugin.PluginManager;
@@ -43,13 +44,17 @@ import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -59,6 +64,11 @@ public final class HistoricalPartitionManager implements AutoCloseable {
 
     private final HistoricalPartitionTaskExecutor taskExecutor;
     private final HistoricalLakeLookupManager lakeLookupManager;
+    private final Object shutdownLock = new Object();
+    private volatile boolean closed;
+
+    @GuardedBy("shutdownLock")
+    private final Set<Thread> lakeLookupThreads = new HashSet<>();
 
     /** Creates a historical partition manager from the tablet server dependencies. */
     public HistoricalPartitionManager(
@@ -239,7 +249,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                 mergeMode,
                 originalPartitionName,
                 lakeLookupKeys ->
-                        lakeLookupManager.lookup(
+                        lookupFromLake(
                                 new LookupDataForBucket(
                                         putData.tableBucket(),
                                         lakeLookupKeys,
@@ -268,6 +278,12 @@ public final class HistoricalPartitionManager implements AutoCloseable {
 
     @Override
     public void close() {
+        synchronized (shutdownLock) {
+            closed = true;
+            for (Thread thread : lakeLookupThreads) {
+                thread.interrupt();
+            }
+        }
         taskExecutor.close();
         lakeLookupManager.close();
     }
@@ -304,7 +320,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
             if (!missingKeys.isEmpty()) {
                 // Look up all local misses together. Results preserve the order of missingKeys.
                 lakeValues =
-                        lakeLookupManager.lookup(
+                        lookupFromLake(
                                 new LookupDataForBucket(
                                         tableBucket, missingKeys, originalPartitionName),
                                 tableInfo,
@@ -328,6 +344,58 @@ public final class HistoricalPartitionManager implements AutoCloseable {
         } catch (Exception e) {
             return new LookupResultForBucket(
                     tableBucket, originalPartitionName, ApiError.fromThrowable(e));
+        }
+    }
+
+    /**
+     * Runs lake I/O on the current thread, registering only this phase for shutdown interruption.
+     *
+     * <p>Ordered writes retain their bucket's ordering slot across this call. If shutdown
+     * interrupts the lookup, its result is rejected before the caller can proceed to WAL I/O, even
+     * when the underlying lookup returns normally.
+     */
+    private List<byte[]> lookupFromLake(
+            LookupDataForBucket lookupData,
+            TableInfo tableInfo,
+            SchemaInfo schemaInfo,
+            ResolvedPartitionSpec originalPartitionSpec,
+            LakeTableLookuper.LookupMetricRecorder lookupMetricRecorder)
+            throws Exception {
+        Thread thread = Thread.currentThread();
+        synchronized (shutdownLock) {
+            checkOpen();
+            lakeLookupThreads.add(thread);
+        }
+        List<byte[]> values;
+        try {
+            values =
+                    lakeLookupManager.lookup(
+                            lookupData,
+                            tableInfo,
+                            schemaInfo,
+                            originalPartitionSpec,
+                            lookupMetricRecorder);
+        } finally {
+            synchronized (shutdownLock) {
+                // Removing the thread and interrupting it must be mutually exclusive: an interrupt
+                // arriving after lookup returns could close the shared WAL during the next phase.
+                lakeLookupThreads.remove(thread);
+                if (closed) {
+                    // The lookup may restore the interrupt; do not leak it into task completion.
+                    //noinspection ResultOfMethodCallIgnored
+                    Thread.interrupted();
+                }
+            }
+        }
+        // A lake implementation may swallow an interrupt and return normally. It must still never
+        // apply the cancelled write to local state, regardless of the thread's interrupt flag.
+        checkOpen();
+        return values;
+    }
+
+    private void checkOpen() {
+        if (closed) {
+            throw new RejectedExecutionException("Historical partition manager is shut down.");
         }
     }
 }
