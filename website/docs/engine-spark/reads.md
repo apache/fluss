@@ -342,6 +342,57 @@ When the window starts before the table is guaranteed to retain, planning logs a
 Malformed window specifications are rejected instead of silently changing semantics: a blank or unparseable start timestamp, an end timestamp set without a start timestamp (it cannot truncate a plain batch read on its own), and a window whose start is not strictly before its end — whether given through the table-valued function (rejected while the statement is analyzed) or through DataFrame options. A bucket that has no data inside a valid window yields an empty result.
 :::
 
+## Snapshot at a Commit Timestamp
+
+With `org.apache.fluss.spark.FlussSparkSessionExtensions` enabled, use
+`fluss_snapshot_at_timestamp(table, timestamp)` to read the complete table state after applying
+all changes whose Fluss commit timestamp is **strictly less than** the requested time. Changes
+at exactly that timestamp are excluded. This function returns an ordinary relation supporting
+filters, projections, joins, aggregates and limits.
+
+```sql title="Spark SQL"
+SELECT order_id, amount
+FROM fluss_snapshot_at_timestamp('fluss_catalog.fluss.orders', DATE '2026-10-20')
+WHERE amount > 100;
+
+SELECT * FROM fluss_snapshot_at_timestamp('orders', now());
+```
+
+The two arguments are required. The timestamp accepts an integer epoch millisecond value,
+a datetime string, `DATE`, `TIMESTAMP`, `TIMESTAMP_NTZ`, or a constant datetime expression.
+Strings, dates and timestamp-without-time-zone values use the Spark session time zone.
+The timestamp is fixed during analysis; `now()` and `current_timestamp()` share the clock
+used for future-time validation. Future timestamps fail during analysis.
+
+This mode requires a complete retained Paimon snapshot and all Fluss logs needed to replay
+from that snapshot to the requested boundary. Paimon snapshot retention alone is insufficient: the `fluss-offsets` file referenced by the
+snapshot must also remain available. Currently ordinary non-DV tiering discards the previous
+Fluss offset files when it registers a newer base, even when Paimon retains those snapshots.
+Consequently such older snapshots cannot be used by this function under the default lifecycle;
+this feature does not change that lifecycle or introduce offset archival.
+If a candidate snapshot references a `fluss-offsets` file that is missing, the query immediately
+fails with the table, snapshot ID and path; it does not fall back to an older snapshot. Maintenance
+snapshots without a `fluss-offsets` property can still be skipped because they provide no offset mapping.
+Missing history fails the query; it never
+recovers a full primary key table by replaying only the retained tail of the log. The selected
+snapshot and offset bounds stay fixed across task retries. Concurrent snapshot or log cleanup
+can cause the query to fail. Each bucket buffers the final change per distinct replayed key
+in memory before merging it with the base.
+
+The initial supported scope is non-partitioned tables with stable schema and bucket mappings,
+maintained exclusively by Fluss tiering. Primary key tables require the deduplicate merge engine
+and complete row after-images (both `FULL` and `WAL` changelogs provide these); implicit KV TTL expiration is unsupported. Deletion-vector snapshots
+are eligible only when they have exact offsets for every bucket and no L0 files. Legacy Paimon
+tables whose schema includes extra system columns are unsupported. The covered history must not
+contain truncate, overwrite, external data writes or other structural changes that cannot be
+replayed from row changelogs. Retained metadata is validated, but it cannot prove the absence
+of such operations before metadata retention began.
+
+The function cannot be combined with streaming, incremental scan options or `read.optimized`.
+Filters and limits run on the restored state in Spark. The query-local `scan.as-of.timestamp`
+option is internal transport for the TVF and does not enable snapshot reads through session
+configuration.
+
 ## All Data Types
 
 Fluss Spark connector supports reading all Fluss data types including nested types:

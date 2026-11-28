@@ -22,7 +22,7 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.row.InternalRow
-import org.apache.fluss.spark.read.FlussPartitionReader
+import org.apache.fluss.spark.read.{FlussPartitionReader, HistoricalReadMetadata}
 import org.apache.fluss.types.RowType
 import org.apache.fluss.utils.IOUtils
 
@@ -42,8 +42,9 @@ class FlussLakeUpsertPartitionReader(
     projection: Array[Int],
     limit: Option[Int],
     flussPartition: FlussLakeUpsertInputPartition,
-    flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig, limit)
+    flussConfig: Configuration,
+    expectedTableInfo: Option[HistoricalReadMetadata] = None)
+  extends FlussPartitionReader(tablePath, flussConfig, limit, expectedTableInfo)
   with Logging {
 
   private val lakeSplits = flussPartition.lakeSplits
