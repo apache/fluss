@@ -165,6 +165,9 @@ public final class ArrayUtils {
 
     /** Check if the second array is a prefix of the first array. */
     public static boolean isPrefix(int[] a, int[] b) {
+        if (b.length > a.length) {
+            return false;
+        }
         // Iterate over each element in the second array
         for (int i = 0; i < b.length; i++) {
             // Check if the element exists in the first array
