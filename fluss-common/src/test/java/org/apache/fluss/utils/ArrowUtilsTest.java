@@ -58,6 +58,7 @@ import java.util.List;
 
 import static org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link org.apache.fluss.utils.ArrowUtils}. */
 class ArrowUtilsTest {
@@ -76,6 +77,14 @@ class ArrowUtilsTest {
                     DataTypes.DATE(),
                     DataTypes.TIME(),
                     DataTypes.TIMESTAMP());
+
+    @Test
+    void testVariantMappingIsUnsupported() {
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("payload", DataTypes.VARIANT()));
+        assertThatThrownBy(() -> ArrowUtils.toArrowSchema(rowType))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("VARIANT");
+    }
 
     @Test
     void testEstimateArrowMetadataSizeInBytes() throws IOException {

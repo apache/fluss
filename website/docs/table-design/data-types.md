@@ -32,3 +32,19 @@ Fluss has a rich set of native data types available to users. All the data types
 | MAP\<kt, vt\>                                                   | An associative array that maps keys to values. A map cannot contain duplicate keys; each key can map to at most one value. Map keys are always non-nullable and will be automatically converted to non-nullable types if a nullable key type is provided. There is no restriction of key types; it is the responsibility of the user to ensure uniqueness. The map type is an extension to the SQL standard.<br/>The type can be declared using MAP\<kt, vt\> where kt is the data type of the key elements and vt is the data type of the value elements.                                        |
 | ROW\<n0 t0, n1 t1, ...\><br/>ROW\<n0 t0 'd0', n1 t1 'd1', ...\> | A sequence of fields. <br/>A field consists of a field name, field type, and an optional description. The most specific type of a row of a table is a row type. In this case, each column of the row corresponds to the field of the row type that has the same ordinal position as the column. <br/>Compared to the SQL standard, an optional field description simplifies the handling with complex structures. <br/>A row type is similar to the STRUCT type known from other non-standard-compliant frameworks. <br/>The type can be declared using ROW\<n0 t0 'd0', n1 t1 'd1', ...\> where n is the unique name of a field, t is the logical type of a field, d is the description of a field. |
 
+## VARIANT
+
+`VARIANT` stores a semi-structured value as an `org.apache.fluss.types.variant.Variant`.
+Declare it with `DataTypes.VARIANT()` in a Java schema and access it with
+`InternalRow.getVariant(pos)` or `InternalArray.getVariant(pos)`.
+It supports primitives, arrays, and objects, including nested values.
+
+SQL `NULL` and a Variant containing JSON `null` are distinct: check `isNullAt(pos)`
+for SQL `NULL`, and `getVariant(pos).isNull()` for JSON `null` in a non-null field.
+Variant columns can be regular value columns in log and primary-key table schemas,
+but cannot be primary keys, bucket keys, or partition keys.
+
+The logical type, schema serialization, and COMPACTED, ALIGNED, and INDEXED row
+formats support Variant. Arrow storage and native Flink, Spark, and lake format
+mappings are not supported yet; this does not enable Variant in the default
+Arrow log format or through those connectors.

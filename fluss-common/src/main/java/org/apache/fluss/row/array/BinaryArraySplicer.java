@@ -396,6 +396,7 @@ public final class BinaryArraySplicer {
             case STRING:
             case BINARY:
             case BYTES:
+            case VARIANT:
                 return DataLayout.INLINE_OR_VARIABLE;
             case ARRAY:
             case MAP:

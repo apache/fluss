@@ -19,6 +19,7 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.variant.Variant;
 
 /**
  * Getters to get data.
@@ -100,4 +101,15 @@ public interface DataGetters {
 
     /** Returns the row value at the given position. */
     InternalRow getRow(int pos, int numFields);
+
+    /**
+     * Returns the Variant value at the given position. Call {@link #isNullAt(int)} first to check
+     * for SQL null; a non-null Variant can itself contain JSON null.
+     *
+     * @throws UnsupportedOperationException if this implementation does not support Variant
+     */
+    default Variant getVariant(int pos) {
+        throw new UnsupportedOperationException(
+                "VARIANT is not supported by " + getClass().getName());
+    }
 }

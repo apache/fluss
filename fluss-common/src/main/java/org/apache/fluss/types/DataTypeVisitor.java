@@ -66,4 +66,10 @@ public interface DataTypeVisitor<R> {
     R visit(MapType mapType);
 
     R visit(RowType rowType);
+
+    /** Visits a Variant type; existing visitors may reject it until they add support. */
+    default R visit(VariantType variantType) {
+        throw new UnsupportedOperationException(
+                "VARIANT is not supported by " + getClass().getName());
+    }
 }

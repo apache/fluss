@@ -36,6 +36,7 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -74,6 +75,7 @@ class BinaryArraySplicerTest {
         DataTypes.STRING(),
         DataTypes.BINARY(3),
         DataTypes.BYTES(),
+        DataTypes.VARIANT(),
         DataTypes.DECIMAL(5, 2),
         DataTypes.DECIMAL(20, 2),
         DataTypes.TIMESTAMP(3),
@@ -364,6 +366,10 @@ class BinaryArraySplicerTest {
                 return randomBytes(random, getLength(type));
             case BYTES:
                 return randomBytes(random, random.nextInt(20));
+            case VARIANT:
+                return random.nextBoolean()
+                        ? Variant.ofNull()
+                        : Variant.ofString(randomString(random, random.nextInt(20)).toString());
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) type;
                 BigInteger unscaled =

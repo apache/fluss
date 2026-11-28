@@ -141,6 +141,9 @@ public interface InternalArray extends DataGetters {
                 final int rowFieldCount = ((RowType) fieldType).getFieldCount();
                 elementGetter = (array, pos) -> array.getRow(pos, rowFieldCount);
                 break;
+            case VARIANT:
+                elementGetter = InternalArray::getVariant;
+                break;
             default:
                 String msg =
                         String.format(
@@ -163,6 +166,9 @@ public interface InternalArray extends DataGetters {
     static ElementGetter createDeepElementGetter(DataType fieldType, boolean copyStrings) {
         final ElementGetter elementGetter;
         switch (fieldType.getTypeRoot()) {
+            case VARIANT:
+                elementGetter = (array, pos) -> array.getVariant(pos).copy();
+                break;
             case CHAR:
                 final int charLen = getLength(fieldType);
                 elementGetter =

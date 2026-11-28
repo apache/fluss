@@ -28,6 +28,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.DateTimeUtils;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -60,6 +61,29 @@ public class IndexedRowReaderTest {
         writer = genRecordForAllTypes(dataTypes);
         reader = new IndexedRowReader(dataTypes);
         reader.pointTo(writer.segment(), 0);
+    }
+
+    @Test
+    void testVariantFieldReader() {
+        DataType[] types = {
+            DataTypes.VARIANT(), DataTypes.VARIANT(), DataTypes.VARIANT(), DataTypes.INT()
+        };
+        IndexedRowWriter writer = new IndexedRowWriter(types);
+        Variant value = Variant.fromJson("{\"x\":[1,2]}");
+        writer.reset();
+        writer.writeBytes(0, value.toBytes());
+        writer.writeBytes(1, Variant.ofNull().toBytes());
+        writer.setNullAt(2);
+        writer.writeInt(3, 42);
+        writer.complete();
+        IndexedRowReader reader = new IndexedRowReader(types);
+        reader.pointTo(writer.segment(), 0);
+        assertThat(IndexedRowReader.createFieldReader(types[0]).readField(reader, 0))
+                .isEqualTo(value);
+        assertThat(IndexedRowReader.createFieldReader(types[1]).readField(reader, 1))
+                .isEqualTo(Variant.ofNull());
+        assertThat(IndexedRowReader.createFieldReader(types[2]).readField(reader, 2)).isNull();
+        assertThat(IndexedRowReader.createFieldReader(types[3]).readField(reader, 3)).isEqualTo(42);
     }
 
     @Test

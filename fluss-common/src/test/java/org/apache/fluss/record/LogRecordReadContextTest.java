@@ -59,6 +59,7 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.Projection;
 
@@ -107,6 +108,7 @@ class LogRecordReadContextTest {
         DataTypes.STRING(),
         DataTypes.BINARY(3),
         DataTypes.BYTES(),
+        DataTypes.VARIANT(),
         DataTypes.DECIMAL(5, 2),
         DataTypes.DECIMAL(20, 2),
         DataTypes.TIMESTAMP(3),
@@ -115,7 +117,7 @@ class LogRecordReadContextTest {
         DataTypes.TIMESTAMP_LTZ(9)
     };
 
-    private static final RowType ROW_TYPE = allTypesRowType();
+    private static final RowType ROW_TYPE = allTypesRowType(true);
 
     @TempDir private File tempDir;
     private final List<FileLogRecords> files = new ArrayList<>();
@@ -187,14 +189,16 @@ class LogRecordReadContextTest {
     @MethodSource("nestedReadModes")
     void testArrowProjectionWithNestedColumns(ArrowCompressionType compression, boolean fromFile)
             throws Exception {
-        Schema schema = Schema.newBuilder().fromRowType(ROW_TYPE).build();
-        GenericRow expected = (GenericRow) sampleValue(ROW_TYPE);
-        int count = ROW_TYPE.getFieldCount();
+        // Arrow mapping for Variant is introduced separately from row-oriented support.
+        RowType rowType = allTypesRowType(false);
+        Schema schema = Schema.newBuilder().fromRowType(rowType).build();
+        GenericRow expected = (GenericRow) sampleValue(rowType);
+        int count = rowType.getFieldCount();
         int[] selected = {count - 1, count - 2, count - 3, 2, 1, 0};
         LogRecordBatch batch =
                 readBatch(
                         buildArrowBatch(
-                                ROW_TYPE,
+                                rowType,
                                 DEFAULT_SCHEMA_ID,
                                 compression,
                                 true,
@@ -215,7 +219,7 @@ class LogRecordReadContextTest {
                     FieldGetter[] getters = context.getSelectedFieldGetters(DEFAULT_SCHEMA_ID);
                     InternalRow first = records.next().getRow();
                     for (int i = 0; i < selected.length; i++) {
-                        DataType type = ROW_TYPE.getTypeAt(selected[i]);
+                        DataType type = rowType.getTypeAt(selected[i]);
                         assertThat(toJava(getters[i].getFieldOrNull(first), type))
                                 .isEqualTo(toJava(expected.getField(selected[i]), type));
                     }
@@ -505,11 +509,14 @@ class LogRecordReadContextTest {
                                         Arguments.of(resolution, true)));
     }
 
-    private static RowType allTypesRowType() {
+    private static RowType allTypesRowType(boolean includeVariant) {
         List<DataField> leafFields = new ArrayList<>();
         List<DataField> fields = new ArrayList<>();
         for (int i = 0; i < LEAF_TYPES.length; i++) {
             DataType leaf = LEAF_TYPES[i];
+            if (!includeVariant && leaf.getTypeRoot() == DataTypeRoot.VARIANT) {
+                continue;
+            }
             leafFields.add(new DataField("n" + i, leaf));
             fields.add(new DataField("f" + i, leaf));
             fields.add(new DataField("array_f" + i, DataTypes.ARRAY(leaf)));
@@ -560,6 +567,8 @@ class LogRecordReadContextTest {
                 return new byte[] {1, 2, 3};
             case BYTES:
                 return new byte[] {4, 5, 6, 7};
+            case VARIANT:
+                return Variant.fromJson("{\"items\":[1,null,\"value\"]}");
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) type;
                 return Decimal.fromBigDecimal(

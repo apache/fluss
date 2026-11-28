@@ -29,10 +29,12 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.Bool
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.NullNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.util.RawValue;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.DateTimeUtils;
 
 import java.io.Serializable;
@@ -113,6 +115,8 @@ final class FieldToStringConverters {
                 // Callers pass non-null values only: null fields are handled by the wrapper
                 // lambda in createFieldToString before this point.
                 return Object::toString;
+            case VARIANT:
+                return value -> ((Variant) value).toJson();
             case BINARY:
             case BYTES:
                 return value -> Base64.getEncoder().encodeToString((byte[]) value);
@@ -166,6 +170,11 @@ final class FieldToStringConverters {
                 return textNodeOf(fieldType);
             case BOOLEAN:
                 return value -> BooleanNode.valueOf((Boolean) value);
+            case VARIANT:
+                // Keep Variant's JSON representation without reparsing decimals as doubles.
+                return value ->
+                        JsonNodeFactory.instance.rawValueNode(
+                                new RawValue(((Variant) value).toJson()));
             case BINARY:
             case BYTES:
                 return textNodeOf(fieldType);
