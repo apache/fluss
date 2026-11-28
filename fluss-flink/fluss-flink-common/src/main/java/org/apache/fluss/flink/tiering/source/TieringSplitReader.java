@@ -73,6 +73,7 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.ToLongFunction;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -126,6 +127,8 @@ public class TieringSplitReader<WriteResult>
     private final Map<Long, Integer> currentTablePartitionBucketCounts = new HashMap<>();
 
     private final Map<TableBucket, LogOffsetAndTimestamp> currentTableTieredOffsetAndTimestamp;
+    // the next offset to consume per log bucket, absent while the log start offset is unknown
+    private final Map<TableBucket, Long> currentTableNextOffsets;
 
     private final Set<TieringSplit> currentEmptySplits;
 
@@ -172,6 +175,7 @@ public class TieringSplitReader<WriteResult>
         this.pendingTieringSplits = new HashMap<>();
         this.currentTableStoppingOffsets = new HashMap<>();
         this.currentTableTieredOffsetAndTimestamp = new HashMap<>();
+        this.currentTableNextOffsets = new HashMap<>();
         this.currentEmptySplits = new HashSet<>();
         this.currentTableSplitsByBucket = new HashMap<>();
         this.lakeWriters = new HashMap<>();
@@ -222,6 +226,7 @@ public class TieringSplitReader<WriteResult>
                         return processLogRecords(
                                 arrowScanRecords.buckets(),
                                 arrowScanRecords::records,
+                                ArrowBatchData::getBaseLogOffset,
                                 this::handleArrowBatchRecords,
                                 arrowScanRecords::consumedUpToOffset);
                     }
@@ -230,6 +235,7 @@ public class TieringSplitReader<WriteResult>
                     return processLogRecords(
                             scanRecords.buckets(),
                             scanRecords::records,
+                            ScanRecord::logOffset,
                             this::handleLogRecords,
                             scanRecords::consumedUpToOffset);
                 }
@@ -454,6 +460,7 @@ public class TieringSplitReader<WriteResult>
      *
      * @param buckets the set of buckets that have records
      * @param recordsExtractor function to extract records for a given bucket
+     * @param firstOffsetExtractor function to extract the log offset a record starts at
      * @param handler callback for processing records within a single bucket
      * @param consumedUpToOffsetExtractor function to extract the consumed-up-to offset for a given
      *     bucket. The offset is used for progress tracking and split completion even when records
@@ -465,6 +472,7 @@ public class TieringSplitReader<WriteResult>
     private <R> RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> processLogRecords(
             Set<TableBucket> buckets,
             Function<TableBucket, List<R>> recordsExtractor,
+            ToLongFunction<R> firstOffsetExtractor,
             BucketRecordsHandler<R> handler,
             Function<TableBucket, Long> consumedUpToOffsetExtractor)
             throws IOException {
@@ -479,6 +487,12 @@ public class TieringSplitReader<WriteResult>
             }
 
             List<R> records = recordsExtractor.apply(bucket);
+            if (!records.isEmpty() && !currentTableNextOffsets.containsKey(bucket)) {
+                // reading from the earliest offset, which the first records reveal; taken before
+                // the handler, which may release the records
+                currentTableNextOffsets.put(
+                        bucket, firstOffsetExtractor.applyAsLong(records.get(0)));
+            }
 
             // consumedUpToOffset is an exclusive upper bound: all offsets before it have been
             // consumed by the scanner in this poll round. It may advance even when records is
@@ -509,6 +523,7 @@ public class TieringSplitReader<WriteResult>
             // the split boundary, cap the tiered progress at stoppingOffset so the next split
             // still owns later data.
             long tieredLogEndOffset = Math.min(consumedUpToOffset, stoppingOffset);
+            recordConsumedUpTo(bucket, tieredLogEndOffset);
             long tieredTimestamp;
             if (lastWrittenTimestamp >= 0) {
                 tieredTimestamp = lastWrittenTimestamp;
@@ -527,6 +542,7 @@ public class TieringSplitReader<WriteResult>
 
             // Split completion: unsubscribe, remove split, complete lake writer.
             currentTableStoppingOffsets.remove(bucket);
+            currentTableNextOffsets.remove(bucket);
             if (bucket.getPartitionId() != null) {
                 currentLogScanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
             } else {
@@ -555,6 +571,20 @@ public class TieringSplitReader<WriteResult>
         }
 
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
+    }
+
+    /**
+     * Counts the offsets consumed since the last poll, the same unit as the lake lag the tablet
+     * servers report. A first poll of an unknown start position only establishes it.
+     */
+    private void recordConsumedUpTo(TableBucket bucket, long consumedUpToOffset) {
+        Long nextOffset = currentTableNextOffsets.get(bucket);
+        if (nextOffset == null) {
+            currentTableNextOffsets.put(bucket, consumedUpToOffset);
+        } else if (consumedUpToOffset > nextOffset) {
+            tieringMetrics.recordsConsumed(consumedUpToOffset - nextOffset);
+            currentTableNextOffsets.put(bucket, consumedUpToOffset);
+        }
     }
 
     /**
@@ -747,6 +777,7 @@ public class TieringSplitReader<WriteResult>
     private TableBucketWriteResultWithSplitIds forSnapshotSplitRecords(
             TableBucket bucket, CloseableIterator<RecordAndPos> recordIterator) throws IOException {
         LakeWriter<WriteResult> lakeWriter = null;
+        long recordsRead = 0L;
         while (recordIterator.hasNext()) {
             ScanRecord scanRecord = recordIterator.next().record();
             if (lakeWriter == null) {
@@ -761,8 +792,10 @@ public class TieringSplitReader<WriteResult>
             if (scanRecord.getSizeInBytes() > 0) {
                 tieringMetrics.recordBytesRead(scanRecord.getSizeInBytes());
             }
+            recordsRead++;
         }
         recordIterator.close();
+        tieringMetrics.recordsConsumed(recordsRead);
         return emptyTableBucketWriteResultWithSplitIds();
     }
 
@@ -812,6 +845,7 @@ public class TieringSplitReader<WriteResult>
         currentPendingSnapshotSplits.clear();
         currentTableStoppingOffsets.clear();
         currentTableTieredOffsetAndTimestamp.clear();
+        currentTableNextOffsets.clear();
         currentTableSplitsByBucket.clear();
         currentTablePartitionBucketCounts.clear();
     }
@@ -884,6 +918,9 @@ public class TieringSplitReader<WriteResult>
             return;
         } else {
             currentTableStoppingOffsets.put(tableBucket, stoppingOffset);
+            if (startingOffset >= 0) {
+                currentTableNextOffsets.put(tableBucket, startingOffset);
+            }
         }
 
         mayCreateLogScanner();

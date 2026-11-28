@@ -23,6 +23,7 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.testutils.MetricListener;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -49,5 +50,28 @@ class TieringMetricsTest {
                         MetricNames.TIERING_SERVICE_READ_BYTES);
         assertThat(counter).isPresent();
         assertThat(counter.get().getCount()).isEqualTo(300);
+    }
+
+    @Test
+    void testRecordsConsumedAreCountedOnlyWhenFlushed() {
+        InternalSourceReaderMetricGroup metricGroup =
+                InternalSourceReaderMetricGroup.wrap(
+                        UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup());
+        TieringMetrics tieringMetrics = new TieringMetrics(metricGroup);
+        Counter numRecordsIn = metricGroup.getIOMetricGroup().getNumRecordsInCounter();
+
+        tieringMetrics.recordsConsumed(40);
+        tieringMetrics.recordsConsumed(2);
+        tieringMetrics.recordsConsumed(0);
+        assertThat(numRecordsIn.getCount()).isEqualTo(0L);
+
+        tieringMetrics.flushRecordsConsumed();
+        assertThat(numRecordsIn.getCount()).isEqualTo(42L);
+        tieringMetrics.flushRecordsConsumed();
+        assertThat(numRecordsIn.getCount()).isEqualTo(42L);
+
+        tieringMetrics.recordsConsumed(8);
+        tieringMetrics.flushRecordsConsumed();
+        assertThat(numRecordsIn.getCount()).isEqualTo(50L);
     }
 }

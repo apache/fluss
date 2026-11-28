@@ -1374,6 +1374,27 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
     </tbody>
 </table>
 
+The tiering source also reports Flink's standard source metric `numRecordsIn`, which counts log offsets rather than rows:
+
+<table class="table table-bordered">
+    <thead>
+    <tr>
+      <th class="text-left" style={{width: '225pt'}}>Metrics Name</th>
+      <th class="text-left" style={{width: '165pt'}}>Level</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '70pt'}}>Type</th>
+    </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>numRecordsIn</td>
+            <td>Flink Source Operator</td>
+            <td>The log offsets the reader has tiered, the same unit as the tablet servers' <code>pendingRecords</code> lake lag. It is not a row count, as an offset range can include gaps such as expired log segments. Snapshot splits, the first round of a primary key bucket, count the rows read. The write results the reader emits to the committer are not counted.</td>
+            <td>Counter</td>
+        </tr>
+    </tbody>
+</table>
+
 :::tip
 A tiering round that fails to commit is retried in the next round without failing the tiering job, so a table whose commits keep failing stops advancing in the lake while the job looks healthy.
 To alert on it, use the `lakeTiering_table` metrics of the [Coordinator Server](#coordinator-server): `tierLag` keeps growing while a table cannot complete a round, for example beyond a multiple of its `freshness`, and `failuresTotal` counts its failed rounds.
