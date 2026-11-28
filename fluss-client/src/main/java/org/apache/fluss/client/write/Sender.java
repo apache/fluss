@@ -105,6 +105,9 @@ public class Sender implements Runnable {
     private final Object wakeupLock = new Object();
     private boolean wakeup;
 
+    /** Whether the sender found ready buckets and has not drained a batch from them yet. */
+    private volatile boolean awaitingDrainableBatch;
+
     /**
      * A per-bucket queue of batches ordered by creation time for tracking the in-flight batches.
      */
@@ -288,10 +291,13 @@ public class Sender implements Runnable {
             awaitNextReadyCheck(readyCheckResult.nextReadyCheckDelayMs);
         }
 
-        // get the list of batches prepare to send.
+        // get the list of batches prepare to send. A batch that completes from here on may free
+        // the bucket a ready batch is waiting for, so it must wake the sender.
+        awaitingDrainableBatch = !readyNodes.isEmpty();
         Map<Integer, List<ReadyWriteBatch>> batches =
                 accumulator.drain(clusterSnapshot, readyNodes, maxRequestSize);
         if (!batches.isEmpty()) {
+            awaitingDrainableBatch = false;
             addToInflightBatches(batches);
             // TODO add logic for batch expire.
 
@@ -303,6 +309,16 @@ public class Sender implements Runnable {
 
             // move metrics update to the end to make sure the batches has been built.
             updateWriterMetrics(batches);
+        } else if (!readyNodes.isEmpty()) {
+            // Buckets were ready but none could be drained: each is at its in-flight limit, gated
+            // by write throttling, or waiting for a writer id. Checking again at once would find
+            // the same state, so wait for a completed batch or a new append to wake the sender,
+            // and at most until the next ready check is due.
+            try {
+                awaitNextReadyCheck(Math.max(readyCheckResult.nextReadyCheckDelayMs, 1L));
+            } finally {
+                awaitingDrainableBatch = false;
+            }
         }
     }
 
@@ -401,9 +417,11 @@ public class Sender implements Runnable {
     private void maybeRemoveAndDeallocateBatch(ReadyWriteBatch readyWriteBatch) {
         maybeRemoveFromInflightBatches(readyWriteBatch);
         accumulator.deallocate(readyWriteBatch.writeBatch());
-        // The shutdown loop may be waiting for the next ready check with nothing left to send, so
-        // wake it up to exit once the last batch completes instead of after the batch timeout.
-        if (!running && !accumulator.hasIncomplete()) {
+        // A completed batch frees an in-flight slot of its bucket, which can make a queued batch
+        // drainable; wake the sender if it found ready buckets it could not drain. The shutdown
+        // loop may also be waiting for the next ready check with nothing left to send, so wake it
+        // up to exit once the last batch completes instead of after the batch timeout.
+        if (awaitingDrainableBatch || (!running && !accumulator.hasIncomplete())) {
             wakeup();
         }
     }
