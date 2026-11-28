@@ -37,6 +37,7 @@ class RuntimeClosureTest(unittest.TestCase):
                 "derive",
                 "windows_only",
                 "sibling",
+                "optional_dep",
             ]
             (root / "Cargo.toml").write_text(
                 '[workspace]\nresolver = "2"\nmembers = ['
@@ -50,6 +51,10 @@ class RuntimeClosureTest(unittest.TestCase):
                 manifest = '[package]\nname = "' + name + '"\nversion = "0.1.0"\n'
                 if name == "derive":
                     manifest += "[lib]\nproc-macro = true\n"
+                if name == "runtime":
+                    manifest += '[dependencies]\noptional_dep = { path = "../optional_dep", optional = true }\n'
+                if name == "sibling":
+                    manifest += '[dependencies]\nruntime = { path = "../runtime", features = ["optional_dep"] }\n'
                 if name == "binding":
                     manifest += (
                         "[dependencies]\n"

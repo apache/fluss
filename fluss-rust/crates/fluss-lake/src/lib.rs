@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Source boundaries and format-extensible bounded UnionRead.
+//! Source boundaries and bounded and streaming UnionRead.
 
 #![doc = include_str!("../README.md")]
 
@@ -33,6 +33,7 @@ mod reader;
 mod source;
 mod split;
 mod split_descriptor;
+mod streaming;
 mod table;
 
 pub use error::{FlussLakeError, Result};
@@ -45,6 +46,10 @@ pub use reader::FlussLakeReader;
 pub use source::{LakePlannerContext, LakeReadSemantics, LakeReaderContext, LakeSource, LakeSplit};
 pub use split::FlussLakeReadSplit;
 pub use split_descriptor::FlussLakeSplitDescriptor;
+pub use streaming::{
+    FlussLakeStreamReader, UnionReadChangeBatch, UnionReadCheckpoint, UnionReadEvent,
+    UnionReadStream,
+};
 pub use table::{FlussLakeScan, FlussLakeTable};
 
 /// A finite stream of Arrow record batches returned by a lake source.

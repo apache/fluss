@@ -4,10 +4,10 @@ C++ bindings for Fluss, built on top of the [fluss-rust](../../crates/fluss) cli
 
 ## Requirements
 
-- Rust (see [rust-toolchain.toml](../../rust-toolchain.toml) at repo root)
+- Rust 1.95+
 - C++17-capable compiler
-- CMake 3.18+ and/or Bazel
-- Apache Arrow (for Arrow-based APIs)
+- CMake 3.22+ and/or Bazel
+- Apache Arrow C++; UnionRead also requires libclang and, on Linux, the OpenSSL development package
 
 ## Build
 
@@ -229,6 +229,67 @@ completion before reporting a timeout. This means an already-complete reader ret
 with a non-positive timeout. The reader remains valid after timeout if a caller has an explicit
 resume policy, but unconditional retry is not the intended usage. `NextBatch()` remains the
 per-poll API for engines that need to check cancellation between batches.
+
+### Bounded and streaming UnionRead
+
+UnionRead is enabled by default. To build without its Paimon and RocksDB dependencies,
+use `-DFLUSS_ENABLE_UNION_READ=OFF` with CMake or `--define fluss_union_read=false` with Bazel.
+The SDK target exports `FLUSS_ENABLE_UNION_READ` to C++ consumers when enabled.
+If you link the archives manually, define this macro only for a UnionRead-enabled build.
+
+To override lake catalog properties on a worker, pass `UnionReadOptions` when
+opening the reader. The optional PK memory budget applies during bootstrap.
+
+Capture the boundary once and persist the returned bytes. They contain the same
+`PbUnionReadContext` as the Java and Rust SDKs. Open the reader on the same table.
+For a bounded read use `CreateBoundedUnionReader`: successive `Next` calls
+return Arrow snapshot batches followed by `Finished`. For a continuous import:
+
+```cpp
+std::vector<uint8_t> context;
+Check(table.CaptureUnionReadContext(context));
+auto scan = table.NewScan();
+scan.ProjectByName({"id", "price"}).Filter(fluss::Col("price").GreaterThan(100));
+fluss::UnionReadReader reader;
+Check(scan.CreateStreamingUnionReader(context, reader));
+fluss::UnionReadEvent event;
+for (;;) {
+    Check(reader.Next(1000, event));
+    switch (event.kind) {
+        case fluss::UnionReadKind::Snapshot: Stage(event.snapshot); break;
+        case fluss::UnionReadKind::SnapshotFinished:
+            CommitBootstrap(context, *event.checkpoint); break;
+        case fluss::UnionReadKind::Changes:
+            ApplyAndCheckpoint(event.changes, event.next_offsets); break;
+        case fluss::UnionReadKind::PartitionsDropped:
+            RemoveBucketsFromCheckpoint(event.next_offsets); break;
+        case fluss::UnionReadKind::TimedOut: continue;
+        case fluss::UnionReadKind::Finished: return;
+    }
+}
+```
+
+Here the capitalized helpers are application code. Commit output and next unread
+offsets together. At the marker the offsets cover each selected bucket;
+afterwards merge each poll's advances into that checkpoint, including buckets
+with no visible rows. Resume with `scan.ResumeStreamingUnionReader(context,
+checkpoint, reader)` using the same filter and projection. If bootstrap was
+not committed, discard staged rows and start again from the saved boundary.
+
+Streaming follows only the partitions and buckets in the captured boundary. A partition created
+later needs a new capture. On `PartitionsDropped`, remove the retired buckets from the
+checkpoint; their last consumed offsets do not guarantee that the reader reached the end.
+
+For each PK bucket, bounded reads and streaming bootstrap use the baseline captured in
+the context: a readable Paimon snapshot, a Fluss KV snapshot, or the complete log.
+A KV snapshot must remain available until the reader downloads it.
+
+PK streaming requires FULL images. Both phases return exactly the requested columns.
+Request key columns explicitly for a keyed sink. FULL preserves matching change images, including
+retractions. A `TimedOut` event indicates no event was ready before the deadline;
+keep the same reader. Call `Next` from one thread at a time and destroy the reader
+after the call returns. Returned Arrow batches remain
+valid independently of the reader.
 
 ## TODO
 

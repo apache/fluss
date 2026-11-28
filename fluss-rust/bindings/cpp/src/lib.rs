@@ -17,6 +17,10 @@
 
 mod lookup;
 mod types;
+#[cfg(feature = "union_read")]
+mod union_read;
+#[cfg(feature = "union_read")]
+use union_read::{UnionArrowBatch, UnionReader};
 mod write_callback;
 use lookup::{
     LookupCompletion, PendingLookup, PendingPrefixLookup, PrefixLookupCompletion,
@@ -276,6 +280,55 @@ mod ffi {
         arrow_batches: FfiArrowRecordBatches,
     }
 
+    #[cfg(feature = "union_read")]
+    enum FfiUnionMode {
+        Bounded,
+        Streaming,
+        Resume,
+    }
+
+    #[cfg(feature = "union_read")]
+    enum FfiUnionKind {
+        PartitionsDropped,
+        Snapshot,
+        SnapshotFinished,
+        Changes,
+        TimedOut,
+        Finished,
+    }
+
+    #[cfg(feature = "union_read")]
+    struct FfiUnionOptions {
+        mode: FfiUnionMode,
+        view_digest: [u8; 32],
+        has_projection: bool,
+        projection: Vec<usize>,
+        names: Vec<String>,
+        predicate: Vec<FfiPredicateNode>,
+        offsets: Vec<FfiReaderStopOffset>,
+        properties: Vec<HashMapValue>,
+        budget: usize,
+        has_budget: bool,
+    }
+
+    #[cfg(feature = "union_read")]
+    struct FfiUnionBatch {
+        table_id: i64,
+        partition_id: i64,
+        has_partition_id: bool,
+        bucket_id: i32,
+        changes: Vec<u8>,
+        data: Box<UnionArrowBatch>,
+    }
+    #[cfg(feature = "union_read")]
+    struct FfiUnionEvent {
+        result: FfiResult,
+        kind: FfiUnionKind,
+        offsets: Vec<FfiReaderStopOffset>,
+        changes: Vec<FfiUnionBatch>,
+        view_digest: [u8; 32],
+    }
+
     struct FfiBoundedReadResult {
         result: FfiResult,
         arrow_batches: FfiArrowRecordBatches,
@@ -424,6 +477,22 @@ mod ffi {
     struct FfiPtrResult {
         result: FfiResult,
         ptr: usize,
+    }
+
+    #[cfg(feature = "union_read")]
+    extern "Rust" {
+        type UnionArrowBatch;
+        fn export_union_batch(self: &UnionArrowBatch, array: usize, schema: usize) -> FfiResult;
+        type UnionReader;
+        unsafe fn delete_union_reader(reader: *mut UnionReader);
+        fn capture_union_context(self: &Table, bytes: &mut Vec<u8>) -> FfiResult;
+        fn open_union(self: &Table, context: &[u8], options: FfiUnionOptions) -> FfiPtrResult;
+        fn union_next(
+            self: &mut UnionReader,
+            timeout_ms: u64,
+            array: usize,
+            schema: usize,
+        ) -> FfiUnionEvent;
     }
 
     extern "Rust" {
@@ -2796,6 +2865,11 @@ fn reader_bucket_to_core(
 const BATCH_AVAILABLE: i32 = 0;
 const TIMED_OUT: i32 = 1;
 const FINISHED: i32 = 2;
+
+#[cfg(feature = "union_read")]
+unsafe fn delete_union_reader(reader: *mut UnionReader) {
+    unsafe { drop(Box::from_raw(reader)) };
+}
 
 unsafe fn delete_record_batch_log_reader(reader: *mut RecordBatchLogReader) {
     if !reader.is_null() {

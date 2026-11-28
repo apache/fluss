@@ -116,7 +116,9 @@ fn concatenate_split_streams(streams: Vec<RecordBatchStream>) -> RecordBatchStre
 /// Makes the first stream error terminal and immediately drops the source.
 ///
 /// For `read_splits`, this also drops all remaining unpolled task streams.
-fn stop_after_first_error(stream: RecordBatchStream) -> RecordBatchStream {
+pub(crate) fn stop_after_first_error<T: Send + 'static>(
+    stream: futures::stream::BoxStream<'static, Result<T>>,
+) -> futures::stream::BoxStream<'static, Result<T>> {
     Box::pin(futures::stream::unfold(Some(stream), |stream| async move {
         let mut stream = stream?;
         match stream.next().await {

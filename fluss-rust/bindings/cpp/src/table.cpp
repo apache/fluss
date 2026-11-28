@@ -1427,12 +1427,14 @@ Result TableLookup::CreateLookuper(Lookuper& out) {
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
 
 TableScan& TableScan::ProjectByIndex(std::vector<size_t> column_indices) {
+    has_projection_ = true;
     projection_ = std::move(column_indices);
     name_projection_.clear();
     return *this;
 }
 
 TableScan& TableScan::ProjectByName(std::vector<std::string> column_names) {
+    has_projection_ = true;
     name_projection_ = std::move(column_names);
     projection_.clear();
     return *this;
@@ -1480,6 +1482,48 @@ Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
     return DoCreateScanner(out, true);
 }
 
+struct TableScan::EncodedPredicate {
+    rust::Vec<ffi::FfiPredicateNode> nodes;
+};
+
+TableScan::EncodedPredicate TableScan::EncodePredicate() const {
+    EncodedPredicate encoded;
+    if (predicate_.has_value()) {
+        std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
+        append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
+            ffi::FfiPredicateNode ffi_node;
+            ffi_node.node_type = node->node_type;
+            ffi_node.leaf_function = node->leaf_function;
+            ffi_node.compound_function = node->compound_function;
+            ffi_node.field = rust::String(node->field);
+            ffi_node.child_count = static_cast<uint32_t>(node->children.size());
+
+            for (const auto& literal : node->literals) {
+                ffi::FfiPredicateLiteral ffi_literal;
+                ffi_literal.literal_type = literal.literal_type_;
+                ffi_literal.boolean_value = literal.boolean_value_;
+                ffi_literal.integer_value = literal.integer_value_;
+                ffi_literal.floating_value = literal.floating_value_;
+                ffi_literal.string_value = rust::String(literal.string_value_);
+                for (uint8_t value : literal.bytes_value_) {
+                    ffi_literal.bytes_value.push_back(value);
+                }
+                ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
+                ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
+                ffi_node.literals.push_back(std::move(ffi_literal));
+            }
+
+            encoded.nodes.push_back(std::move(ffi_node));
+            for (const auto& child : node->children) {
+                append_node(child);
+            }
+        };
+        append_node(predicate_->root_);
+    }
+
+    return encoded;
+}
+
 Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
@@ -1496,41 +1540,7 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
             rust_indices.push_back(idx);
         }
 
-        rust::Vec<ffi::FfiPredicateNode> rust_predicate;
-        if (predicate_.has_value()) {
-            std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
-            append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
-                ffi::FfiPredicateNode ffi_node;
-                ffi_node.node_type = node->node_type;
-                ffi_node.leaf_function = node->leaf_function;
-                ffi_node.compound_function = node->compound_function;
-                ffi_node.field = rust::String(node->field);
-                ffi_node.child_count = static_cast<uint32_t>(node->children.size());
-
-                for (const auto& literal : node->literals) {
-                    ffi::FfiPredicateLiteral ffi_literal;
-                    ffi_literal.literal_type = literal.literal_type_;
-                    ffi_literal.boolean_value = literal.boolean_value_;
-                    ffi_literal.integer_value = literal.integer_value_;
-                    ffi_literal.floating_value = literal.floating_value_;
-                    ffi_literal.string_value = rust::String(literal.string_value_);
-                    for (uint8_t value : literal.bytes_value_) {
-                        ffi_literal.bytes_value.push_back(value);
-                    }
-                    ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
-                    ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
-                    ffi_node.literals.push_back(std::move(ffi_literal));
-                }
-
-                rust_predicate.push_back(std::move(ffi_node));
-                for (const auto& child : node->children) {
-                    append_node(child);
-                }
-            };
-            append_node(predicate_->root_);
-        }
-
-        auto ffi_result = table_->create_scanner(std::move(rust_indices), std::move(rust_predicate),
+        auto ffi_result = table_->create_scanner(std::move(rust_indices), EncodePredicate().nodes,
                                                  is_record_batch);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
@@ -2416,6 +2426,135 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     out.data_ = std::move(data);
     return utils::make_ok();
 }
+
+#ifdef FLUSS_ENABLE_UNION_READ
+Result Table::CaptureUnionReadContext(std::vector<uint8_t>& out) const {
+    if (!table_) return utils::make_client_error("Table not available");
+    rust::Vec<uint8_t> bytes;
+    auto status = utils::from_ffi_result(table_->capture_union_context(bytes));
+    if (status.Ok()) out.assign(bytes.begin(), bytes.end());
+    return status;
+}
+
+Result TableScan::CreateBoundedUnionReader(const std::vector<uint8_t>& ctx, UnionReadReader& out,
+                                           const UnionReadOptions& options) const {
+    return OpenUnionReader(ctx, false, nullptr, out, options);
+}
+
+Result TableScan::CreateStreamingUnionReader(const std::vector<uint8_t>& ctx, UnionReadReader& out,
+                                             const UnionReadOptions& options) const {
+    return OpenUnionReader(ctx, true, nullptr, out, options);
+}
+
+Result TableScan::ResumeStreamingUnionReader(const std::vector<uint8_t>& ctx,
+                                             const UnionReadCheckpoint& checkpoint,
+                                             UnionReadReader& out,
+                                             const UnionReadOptions& options) const {
+    return OpenUnionReader(ctx, true, &checkpoint, out, options);
+}
+
+Result TableScan::OpenUnionReader(const std::vector<uint8_t>& ctx, bool streaming,
+                                  const UnionReadCheckpoint* checkpoint, UnionReadReader& out,
+                                  const UnionReadOptions& options) const {
+    if (!table_) return utils::make_client_error("Table not available");
+    if (limit_) return utils::make_client_error("UnionRead does not support Limit");
+    ffi::FfiUnionOptions opts{};
+    opts.mode = checkpoint  ? ffi::FfiUnionMode::Resume
+                : streaming ? ffi::FfiUnionMode::Streaming
+                            : ffi::FfiUnionMode::Bounded;
+    opts.has_projection = has_projection_;
+    try {
+        opts.predicate = EncodePredicate().nodes;
+        for (auto index : projection_) opts.projection.push_back(index);
+        for (const auto& name : name_projection_) opts.names.push_back(rust::String(name));
+        for (const auto& [k, v] : options.catalog_properties)
+            opts.properties.push_back({rust::String(k), rust::String(v)});
+    } catch (const std::invalid_argument& e) {
+        return utils::make_client_error(e.what());
+    }
+    opts.has_budget = options.pk_memory_budget_bytes.has_value();
+    opts.budget = options.pk_memory_budget_bytes.value_or(0);
+    if (checkpoint) {
+        opts.view_digest = checkpoint->view_digest;
+        for (const auto& o : checkpoint->next_offsets) {
+            opts.offsets.push_back({o.bucket.table_id, o.bucket.partition_id.has_value(),
+                                    o.bucket.partition_id.value_or(0), o.bucket.bucket_id,
+                                    o.offset});
+        }
+    }
+    auto opened = table_->open_union({ctx.data(), ctx.size()}, std::move(opts));
+    auto result = utils::from_ffi_result(opened.result);
+    if (result.Ok()) out.reader_.reset(utils::ptr_from_ffi<ffi::UnionReader>(opened));
+    return result;
+}
+
+void UnionReadReader::Deleter::operator()(ffi::UnionReader* ptr) const noexcept {
+    ffi::delete_union_reader(ptr);
+}
+
+Result UnionReadReader::Next(int64_t timeout_ms, UnionReadEvent& out) {
+    if (!reader_) return utils::make_client_error("UnionRead reader not available");
+    if (timeout_ms < 0) return utils::make_client_error("Negative UnionRead timeout");
+    ArrowArray array{};
+    ArrowSchema schema{};
+    auto event = reader_->union_next(timeout_ms, reinterpret_cast<size_t>(&array),
+                                     reinterpret_cast<size_t>(&schema));
+    auto result = utils::from_ffi_result(event.result);
+    if (!result.Ok()) return result;
+    UnionReadEvent next;
+    switch (event.kind) {
+        case ffi::FfiUnionKind::Snapshot: {
+            auto imported = arrow::ImportRecordBatch(&array, &schema);
+            if (!imported.ok()) return utils::make_client_error(imported.status().ToString());
+            next.snapshot = std::move(imported).ValueOrDie();
+            next.kind = UnionReadKind::Snapshot;
+            break;
+        }
+        case ffi::FfiUnionKind::SnapshotFinished:
+            next.kind = UnionReadKind::SnapshotFinished;
+            break;
+        case ffi::FfiUnionKind::Changes:
+            next.kind = UnionReadKind::Changes;
+            for (const auto& b : event.changes) {
+                ArrowArray data{};
+                ArrowSchema type{};
+                auto status = utils::from_ffi_result(b.data->export_union_batch(
+                    reinterpret_cast<size_t>(&data), reinterpret_cast<size_t>(&type)));
+                if (!status.Ok()) return status;
+                auto batch = arrow::ImportRecordBatch(&data, &type);
+                if (!batch.ok()) return utils::make_client_error(batch.status().ToString());
+                UnionReadChangeBatch change{
+                    {b.table_id, b.bucket_id,
+                     b.has_partition_id ? std::optional<int64_t>(b.partition_id) : std::nullopt},
+                    std::move(batch).ValueOrDie(),
+                    {}};
+                for (auto kind : b.changes)
+                    change.change_types.push_back(static_cast<ChangeType>(kind));
+                next.changes.push_back(std::move(change));
+            }
+            break;
+        case ffi::FfiUnionKind::PartitionsDropped:
+            next.kind = UnionReadKind::PartitionsDropped;
+            break;
+        case ffi::FfiUnionKind::TimedOut:
+            next.kind = UnionReadKind::TimedOut;
+            break;
+        case ffi::FfiUnionKind::Finished:
+            next.kind = UnionReadKind::Finished;
+            break;
+    }
+    for (const auto& o : event.offsets) {
+        next.next_offsets.push_back(
+            {{o.table_id, o.bucket_id,
+              o.has_partition_id ? std::optional<int64_t>(o.partition_id) : std::nullopt},
+             o.offset});
+    }
+    if (next.kind == UnionReadKind::SnapshotFinished)
+        next.checkpoint = UnionReadCheckpoint{event.view_digest, std::move(next.next_offsets)};
+    out = std::move(next);
+    return utils::make_ok();
+}
+#endif
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,

@@ -1625,7 +1625,10 @@ dependencies = [
  "bigdecimal",
  "cxx",
  "cxx-build",
+ "fluss-lake",
  "fluss-rs",
+ "futures",
+ "prost 0.14.3",
  "tokio",
 ]
 
@@ -1651,6 +1654,7 @@ dependencies = [
  "futures",
  "opendal-core",
  "paimon",
+ "prost 0.14.3",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

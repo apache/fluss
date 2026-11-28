@@ -153,6 +153,31 @@ Complete API reference for the Fluss C++ client.
 |-------------------------------------------|-------------------------------------|
 | `CreateLookuper(Lookuper& out) -> Result` | Create a lookuper for point lookups |
 
+## Bounded and streaming UnionRead
+
+Capture a boundary with `Table::CaptureUnionReadContext`, or pass the boundary bytes
+captured by the Java or Rust SDK for the same table. Apply projection and filtering
+on `TableScan` before opening a reader. Omitting projection returns all columns; an
+explicitly empty projection returns zero columns and preserves the row count.
+
+| Method | What `UnionReadReader::Next` returns |
+|---|---|
+| `CreateBoundedUnionReader` | Arrow snapshot batches, then `Finished`. |
+| `CreateStreamingUnionReader` | Snapshot batches, one `SnapshotFinished` with a typed checkpoint, then Arrow `Changes` or `PartitionsDropped`. |
+| `ResumeStreamingUnionReader` | Changes from the saved checkpoint, using the original boundary, projection and filter. |
+
+Commit the snapshot and its checkpoint together. PK streaming requires FULL images. After the handoff, commit changes
+and offset advances together, even if filtering removes every row in a batch.
+`TimedOut` means no event was ready; continue polling the same reader.
+
+Streaming follows only the partitions and buckets in the captured boundary. A partition created
+later needs a new capture. On `PartitionsDropped`, remove the retired buckets from the
+checkpoint; their last consumed offsets do not guarantee that the reader reached the end.
+
+For each PK bucket, bounded reads and streaming bootstrap use the baseline captured in
+the context: a readable Paimon snapshot, a Fluss KV snapshot, or the complete log.
+A KV snapshot must remain available until the reader downloads it.
+
 ## `TableScan`
 
 | Method                                                               | Description                                   |

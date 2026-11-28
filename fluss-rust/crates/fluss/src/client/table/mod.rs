@@ -33,10 +33,12 @@ mod kv_value_decoder;
 mod lookup;
 mod memory;
 
+mod follow_reader;
 mod log_fetch_buffer;
 mod partition_getter;
 mod read_context_resolver;
 mod reader;
+pub use follow_reader::{FollowLogEvent, FollowLogReader};
 mod remote_log;
 mod scanner;
 mod upsert;
