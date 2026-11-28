@@ -89,6 +89,37 @@ class ClusterTest {
     }
 
     @Test
+    void testConstructorDoesNotRetainMutableMetadataMaps() {
+        long partitionId = 42L;
+        Map<TablePath, Long> tableIds = new HashMap<>();
+        tableIds.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
+        Map<PhysicalTablePath, Long> partitionIds = new HashMap<>();
+        partitionIds.put(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId);
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofPartition(partitionId), 2);
+        Map<Long, Long> bucketCountEpochs = new HashMap<>();
+        bucketCountEpochs.put(DATA1_TABLE_ID, 1L);
+        Cluster cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        Collections.emptyMap(),
+                        tableIds,
+                        partitionIds,
+                        bucketCounts,
+                        bucketCountEpochs);
+
+        tableIds.clear();
+        partitionIds.clear();
+        bucketCounts.clear();
+        bucketCountEpochs.clear();
+        assertThat(cluster.getTableId(DATA1_TABLE_PATH)).hasValue(DATA1_TABLE_ID);
+        assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).hasValue(partitionId);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(partitionId))).hasValue(2);
+        assertThat(cluster.getBucketCountEpoch(DATA1_TABLE_ID)).hasValue(1L);
+    }
+
+    @Test
     void testInvalidMetaAndUpdate() {
         Cluster cluster = createCluster(aliveTabletServersById);
         for (int i = 0; i < 10000; i++) {
@@ -154,6 +185,109 @@ class ClusterTest {
 
         assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).isNotPresent();
         assertThat(cluster.getPartitionName(partitionId)).isNotPresent();
+    }
+
+    @Test
+    void testInvalidatingAbsentMetadataReusesCluster() {
+        Cluster cluster = createCluster(aliveTabletServersById);
+        PhysicalTablePath absent = PhysicalTablePath.of(TablePath.of("db", "absent"));
+
+        assertThat(cluster.invalidPhysicalTableBucketMeta(Collections.singleton(absent)))
+                .isSameAs(cluster);
+        assertThat(
+                        cluster.invalidPhysicalTableBucketAndPartitionMeta(
+                                Collections.singleton(absent)))
+                .isSameAs(cluster);
+    }
+
+    @Test
+    void testInvalidationRemovesEmptyRoutingEntry() {
+        Cluster cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        Collections.singletonMap(
+                                DATA1_PHYSICAL_TABLE_PATH, Collections.emptyList()),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+
+        assertThat(cluster.getBucketLocationsByPath()).containsKey(DATA1_PHYSICAL_TABLE_PATH);
+        Cluster updated =
+                cluster.invalidPhysicalTableBucketMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH));
+        assertThat(updated.getBucketLocationsByPath()).doesNotContainKey(DATA1_PHYSICAL_TABLE_PATH);
+    }
+
+    @Test
+    void testInvalidationRemovesCountWithoutRouting() {
+        long partitionId = 42L;
+        TableOrPartition table = TableOrPartition.ofTable(DATA1_TABLE_ID);
+        TableOrPartition partition = TableOrPartition.ofPartition(partitionId);
+        Map<TableOrPartition, Integer> counts = new HashMap<>();
+        counts.put(table, 4);
+        counts.put(partition, 2);
+        Cluster cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        Collections.emptyMap(),
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
+                        Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
+                        counts,
+                        Collections.emptyMap());
+
+        Cluster tableInvalidated =
+                cluster.invalidPhysicalTableBucketMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH));
+        assertThat(tableInvalidated.getBucketCount(table)).isEmpty();
+        assertThat(tableInvalidated.getBucketCount(partition)).hasValue(2);
+        assertThat(tableInvalidated.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024))
+                .hasValue(partitionId);
+
+        Cluster partitionInvalidated =
+                cluster.invalidPhysicalTableBucketMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH_PA_2024));
+        assertThat(partitionInvalidated.getBucketCount(partition)).isEmpty();
+        assertThat(partitionInvalidated.getBucketCount(table)).hasValue(4);
+        assertThat(partitionInvalidated.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024))
+                .hasValue(partitionId);
+    }
+
+    @Test
+    void testInvalidationRemovesPartitionIdentityWithoutRouting() {
+        long partitionId = 42L;
+        Cluster cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        COORDINATOR_SERVER,
+                        Collections.emptyMap(),
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
+                        Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+
+        Cluster tableInvalidated =
+                cluster.invalidPhysicalTableBucketAndPartitionMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH));
+        assertThat(tableInvalidated).isSameAs(cluster);
+        assertThat(tableInvalidated.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024))
+                .hasValue(partitionId);
+        assertThat(
+                        cluster.invalidPhysicalTableBucketMeta(
+                                Collections.singleton(DATA1_PHYSICAL_TABLE_PATH_PA_2024)))
+                .isSameAs(cluster);
+
+        Cluster partitionInvalidated =
+                cluster.invalidPhysicalTableBucketAndPartitionMeta(
+                        Collections.singleton(DATA1_PHYSICAL_TABLE_PATH_PA_2024));
+        assertThat(partitionInvalidated.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024))
+                .isEmpty();
+        assertThat(
+                        partitionInvalidated.invalidPhysicalTableBucketAndPartitionMeta(
+                                Collections.singleton(DATA1_PHYSICAL_TABLE_PATH_PA_2024)))
+                .isSameAs(partitionInvalidated);
     }
 
     @Test
