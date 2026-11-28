@@ -607,6 +607,8 @@ public class FlussAuthorizationITCase {
 
             assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
                     .isEmpty();
+            assertThatThrownBy(() -> guestConn.getTable(data1TablePathPk))
+                    .hasRootCauseInstanceOf(AuthorizationException.class);
 
             // if add acl to allow guest read any resource, it will allow to get metadata.
             List<AclBinding> aclBindings =
@@ -622,6 +624,9 @@ public class FlussAuthorizationITCase {
             FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
             assertThat(guestGateway.metadata(metadataRequest).get().getTableMetadatasList())
                     .hasSize(1);
+            try (Table table = guestConn.getTable(data1TablePathPk)) {
+                assertThat(table.getTableInfo().getTablePath()).isEqualTo(data1TablePathPk);
+            }
         }
     }
 
