@@ -56,6 +56,7 @@ import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.partition.Partition;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.table.source.DataSplit;
@@ -70,6 +71,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -101,6 +103,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The UT for tiering to Paimon via {@link PaimonLakeTieringFactory}. */
 class PaimonTieringTest {
@@ -145,6 +148,67 @@ class PaimonTieringTest {
                 Arguments.of(true, false),
                 Arguments.of(false, true),
                 Arguments.of(false, false));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTieringWithWiderPaimonSchema(boolean legacyTable) throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "source_table");
+        TablePath lakeTablePath = TablePath.of("paimon", "target_table");
+        Identifier lakeIdentifier = toPaimon(lakeTablePath);
+        Schema.Builder paimonSchema =
+                Schema.newBuilder().column("id", DataTypes.INT()).primaryKey("id");
+        if (legacyTable) {
+            doCreatePaimonTable(lakeTablePath, paimonSchema);
+        } else {
+            paimonCatalog.createDatabase(lakeTablePath.getDatabaseName(), true);
+            paimonCatalog.createTable(lakeIdentifier, paimonSchema.build(), false);
+        }
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("id", org.apache.fluss.types.DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME, "paimon")
+                        .property(ConfigOptions.TABLE_DATALAKE_TABLE_NAME, "target_table")
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        paimonCatalog.alterTable(
+                lakeIdentifier,
+                SchemaChange.addColumn("external_column", DataTypes.BIGINT()),
+                false);
+        LogRecord record = new GenericRecord(0L, 1L, INSERT, GenericRow.of(1));
+        try (LakeWriter<PaimonWriteResult> writer =
+                createLakeWriter(tablePath, 0, null, null, tableInfo)) {
+            if (legacyTable) {
+                // Adding a column after the legacy system columns breaks their expected layout.
+                assertThatThrownBy(() -> writer.write(record))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("Fluss table " + tablePath)
+                        .hasMessageContaining("Paimon table " + lakeTablePath)
+                        .hasMessageContaining("1 field")
+                        .hasMessageContaining("2 user columns")
+                        .hasMessageContaining("Reconcile the schemas")
+                        .hasRootCauseInstanceOf(IllegalStateException.class);
+            } else {
+                // A reader may still hold the old TableInfo after a legitimate ADD COLUMN.
+                writer.write(record);
+                assertThat(writer.complete()).isNotNull();
+            }
+        }
+
+        paimonCatalog.alterTable(lakeIdentifier, SchemaChange.dropColumn("external_column"), false);
+        try (LakeWriter<PaimonWriteResult> writer =
+                createLakeWriter(tablePath, 0, null, null, tableInfo)) {
+            writer.write(record);
+            assertThat(writer.complete()).isNotNull();
+        }
     }
 
     @ParameterizedTest
