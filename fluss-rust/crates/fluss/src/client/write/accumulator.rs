@@ -31,6 +31,7 @@ use crate::metadata::{
 use crate::record::{ArrowBatchConfig, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
+use arrow::array::RecordBatch;
 use dashmap::DashMap;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -184,6 +185,32 @@ impl std::fmt::Debug for MemoryPermit {
     }
 }
 
+impl MemoryPermit {
+    /// Bytes this permit holds.
+    pub(crate) fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Moves `size` bytes (at most all of them) of this permit into a new permit, so one
+    /// reservation can be handed to several batches.
+    pub(crate) fn split(&mut self, size: usize) -> MemoryPermit {
+        let size = size.min(self.size);
+        self.size -= size;
+        MemoryPermit {
+            limiter: Arc::clone(&self.limiter),
+            size,
+        }
+    }
+}
+
+/// Buffer memory to reserve for a batch holding only `batch`, a prebuilt Arrow batch.
+///
+/// Such a batch never takes more rows, so reserving a whole `batch_size` over-counts small
+/// parts. Capped at `batch_size` so a large batch never reserves more than it used to.
+pub(crate) fn prebuilt_batch_alloc_size(batch: &RecordBatch, batch_size: usize) -> usize {
+    batch.get_array_memory_size().clamp(1, batch_size.max(1))
+}
+
 impl Drop for MemoryPermit {
     fn drop(&mut self) {
         if self.size > 0 {
@@ -255,6 +282,16 @@ impl RecordAccumulator {
     /// Total writer buffer memory in bytes (constant).
     pub(crate) fn buffer_total_bytes(&self) -> usize {
         self.memory_limiter.total_bytes()
+    }
+
+    /// Reserves `size` bytes of writer buffer memory up front, waiting at most until
+    /// `deadline` (the configured buffer wait timeout when `None`).
+    pub(crate) fn reserve_memory(
+        &self,
+        size: usize,
+        deadline: Option<Instant>,
+    ) -> Result<MemoryPermit> {
+        self.memory_limiter.acquire_within(size, deadline)
     }
 
     /// Currently-available writer buffer memory in bytes.
@@ -554,16 +591,32 @@ impl RecordAccumulator {
         // producer holds dq + blocks on memory, while sender needs dq to drain.
         drop(dq_guard);
 
-        let batch_size = dynamic_target.unwrap_or(self.config.writer_batch_size as usize);
-        let record_size = record.estimated_record_size();
-        let alloc_size = batch_size.max(record_size);
-        let permit = self
-            .memory_limiter
-            .acquire_within(alloc_size, record.submit_deadline)?;
+        let (permit, alloc_size) = match record.take_reserved_memory() {
+            // Reserved by the caller, e.g. for every part of a split Arrow batch at once.
+            Some(permit) => {
+                let alloc_size = permit.size();
+                (permit, alloc_size)
+            }
+            None => {
+                let batch_size = dynamic_target.unwrap_or(self.config.writer_batch_size as usize);
+                let alloc_size = match &record.record {
+                    Record::Log(LogWriteRecord::RecordBatch(batch)) => {
+                        prebuilt_batch_alloc_size(batch, batch_size)
+                    }
+                    _ => batch_size.max(record.estimated_record_size()),
+                };
+                let permit = self
+                    .memory_limiter
+                    .acquire_within(alloc_size, record.submit_deadline)?;
+                (permit, alloc_size)
+            }
+        };
 
         // Re-acquire dq lock after memory is available
         let mut dq_guard = dq.lock();
         if routing.current() != bucket_count {
+            // Keep a caller reservation for the retry.
+            record.restore_reserved_memory(permit);
             return Ok(RecordAppendResult::routing_changed());
         }
         // Re-try: another thread may have created a batch while we waited
