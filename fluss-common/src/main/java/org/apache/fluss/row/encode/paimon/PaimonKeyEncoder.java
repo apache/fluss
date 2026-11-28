@@ -20,45 +20,64 @@ package org.apache.fluss.row.encode.paimon;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.row.encode.KeyEncodingRecycler;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import java.util.List;
 
-/** An implementation of {@link KeyEncoder} to follow Paimon's encoding strategy. */
+/**
+ * An implementation of {@link KeyEncoder} to follow Paimon's encoding strategy.
+ *
+ * <p>One instance may be shared by concurrent callers: the mutable writer is borrowed per {@link
+ * #encodeKey(InternalRow)} call from a {@link KeyEncodingRecycler} instead of being held as state.
+ */
+@ThreadSafe
 public class PaimonKeyEncoder implements KeyEncoder {
 
     private final InternalRow.FieldGetter[] fieldGetters;
 
     private final PaimonBinaryRowWriter.FieldWriter[] fieldEncoders;
 
-    private final PaimonBinaryRowWriter paimonBinaryRowWriter;
+    private final KeyEncodingRecycler<PaimonBinaryRowWriter> keyWriterRecycler;
 
     public PaimonKeyEncoder(RowType rowType, List<String> keys) {
+        final int keyCount = keys.size();
         // for get fields from fluss internal row
-        fieldGetters = new InternalRow.FieldGetter[keys.size()];
+        fieldGetters = new InternalRow.FieldGetter[keyCount];
         // for encode fields into paimon
-        fieldEncoders = new PaimonBinaryRowWriter.FieldWriter[keys.size()];
-        for (int i = 0; i < keys.size(); i++) {
+        fieldEncoders = new PaimonBinaryRowWriter.FieldWriter[keyCount];
+        for (int i = 0; i < keyCount; i++) {
             int keyIndex = rowType.getFieldIndex(keys.get(i));
             DataType keyDataType = rowType.getTypeAt(keyIndex);
             fieldGetters[i] = InternalRow.createFieldGetter(keyDataType, keyIndex);
             fieldEncoders[i] = PaimonBinaryRowWriter.createFieldWriter(keyDataType);
         }
 
-        paimonBinaryRowWriter = new PaimonBinaryRowWriter(keys.size());
+        keyWriterRecycler =
+                new KeyEncodingRecycler<>(
+                        () -> new PaimonBinaryRowWriter(keyCount),
+                        PaimonBinaryRowWriter::reset,
+                        PaimonBinaryRowWriter::capacity);
     }
 
     @Override
     public byte[] encodeKey(InternalRow row) {
+        PaimonBinaryRowWriter paimonBinaryRowWriter = keyWriterRecycler.borrow();
         paimonBinaryRowWriter.reset();
-        // always be RowKind.INSERT for bucketed row
-        paimonBinaryRowWriter.writeChangeType(ChangeType.INSERT);
-        // iterate all the fields of the row, and encode each field
-        for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeField(
-                    paimonBinaryRowWriter, i, fieldGetters[i].getFieldOrNull(row));
+        try {
+            // always be RowKind.INSERT for bucketed row
+            paimonBinaryRowWriter.writeChangeType(ChangeType.INSERT);
+            // iterate all the fields of the row, and encode each field
+            for (int i = 0; i < fieldGetters.length; i++) {
+                fieldEncoders[i].writeField(
+                        paimonBinaryRowWriter, i, fieldGetters[i].getFieldOrNull(row));
+            }
+            return paimonBinaryRowWriter.toBytes();
+        } finally {
+            keyWriterRecycler.recycle(paimonBinaryRowWriter);
         }
-        return paimonBinaryRowWriter.toBytes();
     }
 }

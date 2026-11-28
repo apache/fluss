@@ -17,6 +17,7 @@
 
 package org.apache.fluss.row.encode.paimon;
 
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
@@ -36,6 +37,8 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,6 +63,24 @@ class PaimonKeyEncoderTest {
 
         // verify both the result should be same
         assertThat(encodedKey).isEqualTo(paimonEncodedKey);
+    }
+
+    @Test
+    void testEncoderUsesKeyCountCapturedAtConstruction() {
+        RowType rowType =
+                DataTypes.ROW(
+                        new DataField("id", DataTypes.INT()),
+                        new DataField("extra", DataTypes.INT()));
+        List<String> keys = new ArrayList<>();
+        keys.add("id");
+        PaimonKeyEncoder encoder = new PaimonKeyEncoder(rowType, keys);
+        keys.add("extra");
+
+        PaimonKeyEncoder stableEncoder =
+                new PaimonKeyEncoder(rowType, Collections.singletonList("id"));
+        GenericRow row = GenericRow.of(42, 99);
+
+        assertThat(encoder.encodeKey(row)).isEqualTo(stableEncoder.encodeKey(row));
     }
 
     private IndexedRow genFlussRowForAllTypes(DataType[] dataTypes) {
