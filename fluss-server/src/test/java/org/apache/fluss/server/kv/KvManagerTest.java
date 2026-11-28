@@ -22,13 +22,15 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
@@ -38,7 +40,12 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.kv.historical.HistoricalKvKeyEncoder;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -50,12 +57,14 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
+import io.github.fluss_contrib.rocksdb.FlushOptions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,6 +87,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -86,12 +96,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
-import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
@@ -176,6 +187,125 @@ final class KvManagerTest {
         }
         if (localDiskManager != null) {
             localDiskManager.close();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "false,false,false",
+        "true,false,false",
+        "false,true,false",
+        "true,true,false",
+        "false,false,true",
+        "true,false,true"
+    })
+    void testClusterPrefixBloomOnCreateAndRecovery(
+            boolean enabled, boolean historical, boolean paimon) throws Exception {
+        String partitionName = historical ? HISTORICAL_PARTITION_VALUE : "2026-10-28";
+        initTableBuckets(partitionName);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("dt", DataTypes.STRING())
+                        .column("a", DataTypes.INT())
+                        .column("id", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("dt", "a", "id")
+                        .build();
+        conf.set(ConfigOptions.KV_USE_BLOOM_FILTER, false);
+        Configuration tableConf = new Configuration();
+        if (enabled) {
+            conf.set(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER, true);
+        }
+        tableConf.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, paimon ? 1 : 2);
+        if (paimon) {
+            tableConf.set(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+        }
+        TablePath path =
+                TablePath.of("db1", "prefix_bloom_" + enabled + "_" + historical + "_" + paimon);
+        zkClient.registerSchema(path, schema, schemaId);
+        long now = System.currentTimeMillis();
+        zkClient.registerTable(
+                path,
+                new TableRegistration(
+                        tableBucket1.getTableId(),
+                        null,
+                        Collections.singletonList("dt"),
+                        new TableDescriptor.TableDistribution(1, Collections.singletonList("a")),
+                        tableConf.toMap(),
+                        Collections.emptyMap(),
+                        null,
+                        now,
+                        now),
+                false);
+        PhysicalTablePath physicalPath = PhysicalTablePath.of(path, partitionName);
+        LogTablet log =
+                logManager.getOrCreateLog(
+                        tempDir, physicalPath, tableBucket1, LogFormat.ARROW, 1, true);
+        SchemaGetter getter = new TestingSchemaGetter(new SchemaInfo(schema, schemaId));
+        KvTablet tablet =
+                kvManager.getOrCreateKv(
+                        physicalPath,
+                        tableBucket1,
+                        log,
+                        KvManager.getTableInfo(zkClient, path),
+                        getter,
+                        null);
+        byte[] key =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                                schema.getRowType(),
+                                Arrays.asList("a", "id"),
+                                new TableConfig(tableConf),
+                                false)
+                        .encodeKey(
+                                GenericRow.of(BinaryString.fromString("2026-10-28"), 42, 7, null));
+        if (historical) {
+            key = HistoricalKvKeyEncoder.encode("2026-10-28", key);
+        }
+        tablet.getRocksDBKv().put(key, key);
+        try (FlushOptions flush = new FlushOptions().setWaitForFlush(true)) {
+            tablet.getRocksDBKv().getDb().flush(flush);
+        }
+        File tabletDir = tablet.getKvTabletDir();
+        assertPrefixBloomOptions(tabletDir, enabled && !historical && !paimon);
+        assertStoredKeyReadable(tablet.getRocksDBKv(), key);
+        assertThat(conf.get(ConfigOptions.KV_USE_BLOOM_FILTER)).isFalse();
+        kvManager.shutdown();
+        conf.set(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER, !enabled);
+        kvManager =
+                KvManager.create(
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        KvTablet recovered = kvManager.loadKv(tabletDir, getter, null);
+        assertPrefixBloomOptions(tabletDir, !enabled && !historical && !paimon);
+        assertStoredKeyReadable(recovered.getRocksDBKv(), key);
+        assertThat(conf.get(ConfigOptions.KV_USE_BLOOM_FILTER)).isFalse();
+    }
+
+    private static void assertStoredKeyReadable(RocksDBKv kv, byte[] key) throws IOException {
+        assertThat(kv.get(key)).isEqualTo(key);
+        try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(key)) {
+            assertThat(lookup.readAll()).containsExactly(key);
+        }
+    }
+
+    private static void assertPrefixBloomOptions(File tabletDir, boolean expected)
+            throws IOException {
+        try (Stream<Path> files = Files.walk(tabletDir.toPath())) {
+            Path latest =
+                    files.filter(p -> p.getFileName().toString().startsWith("OPTIONS-"))
+                            .max(Comparator.comparing(p -> p.getFileName().toString()))
+                            .get();
+            String options = new String(Files.readAllBytes(latest), StandardCharsets.UTF_8);
+            if (expected) {
+                assertThat(options).contains("prefix_extractor=rocksdb.LayoutPrefix.v1:v32");
+                assertThat(options).contains("filter_policy=bloomfilter");
+            } else {
+                assertThat(options).doesNotContain("prefix_extractor=rocksdb.LayoutPrefix");
+                assertThat(options).doesNotContain("filter_policy=bloomfilter");
+            }
         }
     }
 
@@ -1084,10 +1214,15 @@ final class KvManagerTest {
                 physicalTablePath,
                 tableBucket,
                 logTablet,
-                KvFormat.COMPACTED,
+                TableInfo.of(
+                        tablePath,
+                        tableBucket.getTableId(),
+                        schemaId,
+                        TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(3).build(),
+                        tempDir.toURI().toString(),
+                        0L,
+                        0L),
                 schemaGetter,
-                new TableConfig(new Configuration()),
-                DEFAULT_COMPRESSION,
                 null);
     }
 
