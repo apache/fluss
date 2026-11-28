@@ -45,7 +45,10 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -65,6 +68,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -73,6 +77,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -496,6 +501,78 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualLogAssignment::addAll));
             assertTieringSplitsMatch(actualLogAssignment, expectedLogAssignment);
+        }
+    }
+
+    @Test
+    void testTableIsReportedWithEpochOfCoordinatorThatAssignedIt() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-test-coordinator-epoch");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        int coordinatorEpoch =
+                coordinatorGateway
+                        .lakeTieringHeartbeat(new LakeTieringHeartbeatRequest())
+                        .get()
+                        .getCoordinatorEpoch();
+
+        // a gateway that can act like the coordinator leader has switched: once the epoch is
+        // bumped, the heartbeat responses carry a newer coordinator epoch
+        AtomicInteger epochBump = new AtomicInteger(0);
+        Map<Long, Integer> coordinatorEpochOfFinishedTables = new ConcurrentHashMap<>();
+        CoordinatorGateway gateway =
+                (CoordinatorGateway)
+                        Proxy.newProxyInstance(
+                                CoordinatorGateway.class.getClassLoader(),
+                                new Class<?>[] {CoordinatorGateway.class},
+                                (proxy, method, args) -> {
+                                    Object result = method.invoke(coordinatorGateway, args);
+                                    if (!method.getName().equals("lakeTieringHeartbeat")) {
+                                        return result;
+                                    }
+                                    ((LakeTieringHeartbeatRequest) args[0])
+                                            .getFinishedTablesList()
+                                            .forEach(
+                                                    finishedTable ->
+                                                            coordinatorEpochOfFinishedTables.put(
+                                                                    finishedTable.getTableId(),
+                                                                    finishedTable
+                                                                            .getCoordinatorEpoch()));
+                                    return ((CompletableFuture<?>) result)
+                                            .thenApply(
+                                                    response -> {
+                                                        LakeTieringHeartbeatResponse heartbeat =
+                                                                (LakeTieringHeartbeatResponse)
+                                                                        response;
+                                                        return heartbeat.setCoordinatorEpoch(
+                                                                heartbeat.getCoordinatorEpoch()
+                                                                        + epochBump.get());
+                                                    });
+                                });
+
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            // the tiering service registers to the coordinator of the current epoch
+            enumerator.start(gateway, admin, new TieringSplitGenerator(admin));
+
+            // the coordinator leader switches, then the table is assigned by the new coordinator
+            epochBump.set(1);
+            registerReaderAndHandleSplitRequests(context, enumerator, 1, 0);
+            appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 1);
+            waitUntilTieringTableSplitAssignmentReady(context, 1, 200L);
+
+            enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+            for (int i = 0;
+                    i < 100 && !coordinatorEpochOfFinishedTables.containsKey(tableId);
+                    i++) {
+                context.runPeriodicCallable(0);
+                Thread.sleep(100);
+            }
+
+            // the table must be reported with the epoch of the coordinator that assigned it,
+            // otherwise the new coordinator rejects the report and only reschedules the table
+            // after the tiering timeout
+            assertThat(coordinatorEpochOfFinishedTables)
+                    .containsEntry(tableId, coordinatorEpoch + 1);
         }
     }
 
