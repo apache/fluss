@@ -24,6 +24,7 @@ import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableInfo;
 
 import java.io.IOException;
 
@@ -43,6 +44,11 @@ public class PaimonLakeTieringFactory
     public LakeWriter<PaimonWriteResult> createLakeWriter(WriterInitContext writerInitContext)
             throws IOException {
         return new PaimonLakeWriter(paimonCatalogProvider, writerInitContext);
+    }
+
+    @Override
+    public boolean supportsRecordBatchWrite(TableInfo tableInfo) {
+        return true;
     }
 
     @Override

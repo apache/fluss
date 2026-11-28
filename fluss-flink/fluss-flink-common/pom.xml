@@ -200,6 +200,22 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Unshaded Arrow, which the tiering job needs to take the Arrow record batch path.
+             At runtime a lake plugin supplies it (e.g. paimon-arrow). -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
