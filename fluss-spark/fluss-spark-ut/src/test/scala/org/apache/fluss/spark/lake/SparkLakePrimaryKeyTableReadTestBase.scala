@@ -590,4 +590,121 @@ class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableRea
     conf.setString("warehouse", warehousePath)
     conf
   }
+
+  test("Spark Lake Read: custom lake path preserves predicate pushdown in union read") {
+    val tableName = scopedTableName("t_custom_path_union")
+    withTable(tableName) {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName
+             |  (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_pk_union',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+
+      tierToLake(tableName)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
+             |(4, 'dave', 88), (5, 'eve', 92)
+             |""".stripMargin)
+
+      val query =
+        sql(
+          s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName " +
+            "WHERE score >= 90 ORDER BY id")
+
+      checkAnswer(
+        query,
+        Row(1, 90) :: Row(3, 95) :: Row(5, 92) :: Nil
+      )
+      assertPushedNames(query, Set(">="))
+    }
+  }
+
+  test("Spark Lake Read: custom PK path filtered fallback before lake snapshot") {
+    val tableName = scopedTableName("t_custom_pk_filtered_fallback")
+    withTable(tableName) {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName
+             |  (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_pk_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'mapped_pk_fallback',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+
+      // No lake snapshot has been created.
+      checkAnswer(
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName ORDER BY id"),
+        Row(1, 90) :: Row(2, 85) :: Row(3, 95) :: Nil
+      )
+
+      val filtered =
+        sql(
+          s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName " +
+            "WHERE score >= 90 ORDER BY id")
+
+      checkAnswer(filtered, Row(1, 90) :: Row(3, 95) :: Nil)
+    }
+  }
+
+  test("Spark Lake Read: custom PK path filters updated values across lake union") {
+    val tableName = scopedTableName("t_custom_pk_filter_updates")
+    withTable(tableName) {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName
+             |  (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_update_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'mapped_update_table',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
+             |(1, 'alice', 95), (2, 'bob', 80), (3, 'charlie', 91)
+             |""".stripMargin)
+
+      tierToLake(tableName)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
+             |(1, 'alice_updated', 70), (2, 'bob_updated', 98)
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName ORDER BY id"),
+        Row(1, 70) :: Row(2, 98) :: Row(3, 91) :: Nil
+      )
+
+      val filtered =
+        sql(
+          s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName " +
+            "WHERE score >= 90 ORDER BY id")
+
+      checkAnswer(filtered, Row(2, 98) :: Row(3, 91) :: Nil)
+      assertPushedNames(filtered, Set(">="))
+    }
+  }
 }
