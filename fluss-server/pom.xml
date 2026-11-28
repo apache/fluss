@@ -37,8 +37,6 @@
 
     <properties>
         <commons-cli.version>1.5.0</commons-cli.version>
-        <!-- 2.9.3 is the latest version that supports JDK 8 -->
-        <caffeine.version>2.9.3</caffeine.version>
     </properties>
 
     <dependencies>
@@ -70,18 +68,6 @@
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-shaded-zookeeper</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.roaringbitmap</groupId>
-            <artifactId>RoaringBitmap</artifactId>
-            <version>${roaringbitmap.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.datasketches</groupId>
-            <artifactId>datasketches-java</artifactId>
-            <version>${datasketches-java.version}</version>
         </dependency>
 
         <!--
@@ -154,16 +140,8 @@
                             </artifactSet>
                             <relocations>
                                 <relocation>
-                                    <pattern>org.apache.datasketches</pattern>
-                                    <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
-                                </relocation>
-                                <relocation>
                                     <pattern>org.apache.commons</pattern>
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>org.roaringbitmap</pattern>
-                                    <shadedPattern>org.apache.fluss.shaded.org.roaringbitmap</shadedPattern>
                                 </relocation>
                             </relocations>
                         </configuration>
