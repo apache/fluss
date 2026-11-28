@@ -332,6 +332,9 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
     }
 
     private static List<RecordHeader> readHeaders(Header[] headers) {
+        if (headers.length == 0) {
+            return Collections.emptyList();
+        }
         List<RecordHeader> copied = new ArrayList<>(headers.length);
         for (Header header : headers) {
             copied.add(new RecordHeader(header.key(), header.value()));
