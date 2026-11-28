@@ -90,6 +90,17 @@ public class IdempotenceBucketEntry {
                 : Optional.of(lastAckedSequence);
     }
 
+    boolean canRecoverWriterId() {
+        for (WriteBatch batch : inflightBatchesBySequence) {
+            if (batch.isDone()
+                    || batch.hasUncertainDelivery()
+                    || batch.batchSequence() <= lastAckedSequence) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void startBatchSequencesAtBeginning(long newWriterId) {
         final int[] sequence = {0};
         resetSequenceNumbers(
@@ -117,6 +128,17 @@ public class IdempotenceBucketEntry {
 
     void incrementSequence() {
         this.nextSequence += 1;
+    }
+
+    boolean removeRejectedTail(WriteBatch batch) {
+        int sequence = batch.batchSequence();
+        if (sequence != nextSequence - 1
+                || sequence <= lastAckedSequence
+                || !inflightBatchesBySequence.remove(batch)) {
+            return false;
+        }
+        nextSequence = sequence;
+        return true;
     }
 
     void addInflightBatch(WriteBatch batch) {

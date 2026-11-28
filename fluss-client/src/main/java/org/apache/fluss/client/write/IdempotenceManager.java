@@ -20,6 +20,7 @@ package org.apache.fluss.client.write;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -35,6 +36,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Optional;
@@ -62,19 +64,24 @@ public class IdempotenceManager {
     private static final int RETRY_INTERVAL_MS = 100;
 
     private final boolean idempotenceEnabled;
+    private final boolean recoverOnOutOfOrderSequence;
     private final IdempotenceBucketMap idempotenceBucketMap;
     private final int maxInflightRequestsPerBucket;
     private final TabletServerGateway tabletServerGateway;
     private final MetadataUpdater metadataUpdater;
 
     private volatile long writerId;
+    @Nullable private volatile ApiException recoveryCause;
+    private volatile boolean hasUnresolvedRequest;
 
     public IdempotenceManager(
             boolean idempotenceEnabled,
             int maxInflightRequestsPerBucket,
             TabletServerGateway tabletServerGateway,
-            MetadataUpdater metadataUpdater) {
+            MetadataUpdater metadataUpdater,
+            boolean recoverOnOutOfOrderSequence) {
         this.idempotenceEnabled = idempotenceEnabled;
+        this.recoverOnOutOfOrderSequence = recoverOnOutOfOrderSequence;
         this.maxInflightRequestsPerBucket = maxInflightRequestsPerBucket;
         this.idempotenceBucketMap = new IdempotenceBucketMap();
         this.tabletServerGateway = tabletServerGateway;
@@ -84,6 +91,62 @@ public class IdempotenceManager {
 
     boolean idempotenceEnabled() {
         return idempotenceEnabled;
+    }
+
+    boolean recoveryEnabled() {
+        return idempotenceEnabled && recoverOnOutOfOrderSequence;
+    }
+
+    boolean isRecoveringWriterId() {
+        return recoveryCause != null;
+    }
+
+    void recordUncertainAttempt(WriteBatch batch, boolean requestMayStillArrive) {
+        batch.markDeliveryUncertain();
+        if (requestMayStillArrive) {
+            // The original RPC can still overwrite a newer update after its retry succeeds.
+            preventWriterIdRecovery();
+        }
+    }
+
+    void preventWriterIdRecovery() {
+        hasUnresolvedRequest = true;
+    }
+
+    synchronized boolean requestWriterIdRecovery(ReadyWriteBatch ready, ApiException cause) {
+        WriteBatch batch = ready.writeBatch();
+        if (!recoveryEnabled()
+                || hasUnresolvedRequest
+                || !hasWriterId(batch.writerId())
+                || batch.batchSequence() <= 0
+                || !isNextSequence(ready.tableBucket(), batch.batchSequence())
+                || batch.hasUncertainDelivery()) {
+            return false;
+        }
+        if (recoveryCause == null) {
+            recoveryCause = cause;
+        }
+        return true;
+    }
+
+    /** The sender must wait for all in-flight write callbacks before resetting sequences. */
+    void recoverWriterId(Set<PhysicalTablePath> tables) throws Throwable {
+        synchronized (this) {
+            if (hasUnresolvedRequest || !idempotenceBucketMap.canRecoverWriterId()) {
+                throw recoveryCause;
+            }
+        }
+        long newWriterId = requestWriterId(tables);
+        LOG.info(
+                "Recovering writer {} with new writer ID {} after {}.",
+                writerId,
+                newWriterId,
+                recoveryCause.getClass().getSimpleName());
+        synchronized (this) {
+            idempotenceBucketMap.restartSequences(newWriterId);
+            setWriterId(newWriterId);
+            recoveryCause = null;
+        }
     }
 
     boolean hasWriterId(long writerId) {
@@ -142,8 +205,21 @@ public class IdempotenceManager {
         return idempotenceBucketMap.getOrCreate(tableBucket).nextSequence();
     }
 
-    synchronized void incrementBatchSequence(TableBucket tableBucket) {
-        idempotenceBucketMap.get(tableBucket).incrementSequence();
+    synchronized boolean tryAssignSequence(WriteBatch batch, TableBucket tableBucket) {
+        if (!isWriterIdValid() || isRecoveringWriterId()) {
+            return false;
+        }
+        maybeUpdateWriterId(tableBucket);
+        IdempotenceBucketEntry entry = idempotenceBucketMap.get(tableBucket);
+        batch.setWriterState(writerId, entry.nextSequence());
+        entry.incrementSequence();
+        entry.addInflightBatch(batch);
+        LOG.debug(
+                "Assigned writer ID {} and sequence {} to batch for {}",
+                writerId,
+                batch.batchSequence(),
+                tableBucket);
+        return true;
     }
 
     synchronized WriteBatch nextBatchBySequence(TableBucket tableBucket) {
@@ -161,14 +237,11 @@ public class IdempotenceManager {
         return idempotenceBucketMap.lastAckedBatchSequence(tableBucket);
     }
 
-    synchronized void addInFlightBatch(WriteBatch batch, TableBucket tableBucket) {
-        if (!batch.hasBatchSequence()) {
-            throw new IllegalStateException(
-                    "Can't track batch for bucket "
-                            + tableBucket
-                            + " when batch sequence is not set.");
-        }
-        idempotenceBucketMap.get(tableBucket).addInflightBatch(batch);
+    synchronized boolean tryReclaimRejectedSequence(ReadyWriteBatch ready) {
+        WriteBatch batch = ready.writeBatch();
+        return hasWriterId(batch.writerId())
+                && !batch.hasUncertainDelivery()
+                && idempotenceBucketMap.get(ready.tableBucket()).removeRejectedTail(batch);
     }
 
     synchronized void removeInFlightBatch(ReadyWriteBatch batch) {
@@ -237,10 +310,12 @@ public class IdempotenceManager {
                     readyWriteBatch.tableBucket(),
                     batch.writerId(),
                     batch.batchSequence());
-            // Reset the writer state since we have hit an irrecoverable exception and cannot make
-            // any guarantees about the previously committed message. Note that this will discard
-            // the writer id and batch sequence for all existing buckets.
-            resetWriterId();
+            if (isRecoveringWriterId()) {
+                // Resetting here would discard the batches waiting for recovery.
+                preventWriterIdRecovery();
+            } else {
+                resetWriterId();
+            }
         } else {
             removeInFlightBatch(readyWriteBatch);
             if (adjustSequenceNumbers) {
@@ -304,36 +379,27 @@ public class IdempotenceManager {
         return false;
     }
 
-    /**
-     * Returns true if the batch has already been committed on the server.
-     *
-     * <p>If the batch's sequence is less than or equal to {@code lastAckedBatchSequence}, it means
-     * a higher-sequence batch has already been acknowledged. This implies the previous batch was
-     * also successfully written on the server (otherwise the higher-sequence batch could not have
-     * been committed).
-     *
-     * @param batch the batch to check
-     * @param tableBucket the target table-bucket
-     * @return true if the batch is already committed on the server
-     */
-    synchronized boolean isAlreadyCommitted(WriteBatch batch, TableBucket tableBucket) {
+    synchronized boolean hasCoveringAck(WriteBatch batch, TableBucket tableBucket) {
         Optional<Integer> lastAcked = lastAckedBatchSequence(tableBucket);
-        return lastAcked.isPresent() && batch.batchSequence() <= lastAcked.get();
+        return hasWriterId(batch.writerId())
+                && lastAcked.isPresent()
+                && batch.batchSequence() <= lastAcked.get();
     }
 
     void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
-        if (isWriterIdValid()) {
-            return;
+        if (!isWriterIdValid()) {
+            setWriterId(requestWriterId(tablePaths));
         }
+    }
 
+    private long requestWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
         int retryCount = 0;
         while (true) {
             try {
-                tabletServerGateway
+                return tabletServerGateway
                         .initWriter(prepareInitWriterRequest(tablePaths))
-                        .thenAccept(response -> setWriterId(response.getWriterId()))
-                        .get(); // TODO: can optimize into async response handling.
-                return;
+                        .get()
+                        .getWriterId();
             } catch (Exception e) {
                 Throwable t = ExceptionUtils.stripExecutionException(e);
                 if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {

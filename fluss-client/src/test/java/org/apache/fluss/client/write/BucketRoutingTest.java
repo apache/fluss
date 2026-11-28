@@ -321,7 +321,7 @@ class BucketRoutingTest {
         RecordAccumulator accumulator =
                 new RecordAccumulator(
                         configuration(ConfigOptions.NoKeyAssigner.STICKY, 64 * 1024),
-                        new IdempotenceManager(false, 5, null, null),
+                        new IdempotenceManager(false, 5, null, null, false),
                         TestingWriterMetricGroup.newInstance(),
                         SystemClock.getInstance(),
                         (tableInfo, path) -> bucketAssigner);
@@ -727,7 +727,7 @@ class BucketRoutingTest {
         RecordAccumulator accumulator =
                 new RecordAccumulator(
                         configuration(ConfigOptions.NoKeyAssigner.STICKY, 64 * 1024),
-                        new IdempotenceManager(false, 5, null, null),
+                        new IdempotenceManager(false, 5, null, null, false),
                         TestingWriterMetricGroup.newInstance(),
                         SystemClock.getInstance(),
                         (table, path) -> assigner);
@@ -1111,7 +1111,7 @@ class BucketRoutingTest {
             Clock clock) {
         return new RecordAccumulator(
                 configuration(strategy, memorySize),
-                new IdempotenceManager(false, 5, null, null),
+                new IdempotenceManager(false, 5, null, null, false),
                 metrics,
                 clock);
     }

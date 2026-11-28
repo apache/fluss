@@ -1651,6 +1651,20 @@ public class ConfigOptions {
                                     + "idempotence is disabled. If idempotence is explicitly enabled and conflicting "
                                     + "config are set, a ConfigException is thrown");
 
+    public static final ConfigOption<Boolean> CLIENT_WRITER_RECOVER_ON_OUT_OF_ORDER_SEQUENCE =
+            key("client.writer.recover-on-out-of-order-sequence")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Allow an idempotent writer to retry with a new writer ID when the next batch "
+                                    + "of a previously acknowledged bucket is rejected as out of order, for example after idle writer state expires. "
+                                    + "A write RPC that might still reach the server prevents switching IDs, even if its retry succeeds. "
+                                    + "A later batch's ACK alone cannot confirm an earlier rejected batch. "
+                                    + "An unrecoverable out-of-order error, terminal request failure or exhausted write retries "
+                                    + "stop the writer across all buckets, even outside recovery. If the last attempt failed "
+                                    + "before send, at the disk write lock or at a full historical write queue, only that batch "
+                                    + "fails when the client can confirm every attempt was rejected and reclaim the bucket's last assigned sequence.");
+
     public static final ConfigOption<Integer> CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET =
             key("client.writer.max-inflight-requests-per-bucket")
                     .intType()

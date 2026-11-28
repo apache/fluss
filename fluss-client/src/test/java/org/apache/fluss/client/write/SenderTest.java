@@ -30,6 +30,7 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -51,6 +52,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
@@ -840,7 +842,8 @@ final class SenderTest {
                                 false,
                                 MAX_INFLIGHT_REQUEST_PER_BUCKET,
                                 metadataUpdater.newRandomTabletServerClient(),
-                                metadataUpdater),
+                                metadataUpdater,
+                                false),
                         maxRetries,
                         0);
         // do a successful retry.
@@ -1292,156 +1295,417 @@ final class SenderTest {
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRecoverSequenceRejectionWithAnotherBucketInFlight(boolean loseOtherResponse)
+            throws Exception {
+        IdempotenceManager manager = startIdempotentSender(true);
+        TableBucket otherBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        long oldWriterId = acknowledgeFirstRecord(manager);
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 1);
+        CompletableFuture<Exception> second = sendLogRecord(tb1, 2);
+        CompletableFuture<Exception> other = sendLogRecord(otherBucket, 3);
+
+        rejectSequence(2, 1);
+        rejectSequence(1, 0);
+        sender.wakeup();
+        sender.runOnce();
+        assertThat(manager.writerId()).isEqualTo(oldWriterId);
+        assertThat(first).isNotDone();
+        assertThat(second).isNotDone();
+        if (loseOtherResponse) {
+            failRequest(otherBucket, 0, new TimeoutException("write response timed out"));
+            sender.runOnce();
+            assertThat(manager.writerId()).isEqualTo(oldWriterId);
+            assertThat(other.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+            assertThat(first.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+            assertThat(second.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+        } else {
+            finishRequest(otherBucket, 0, createProduceLogResponse(otherBucket, 0, 1));
+            sender.runOnce();
+            long newWriterId = writerIdInRequest();
+            assertThat(newWriterId).isNotEqualTo(oldWriterId).isNotEqualTo(NO_WRITER_ID);
+            finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 1, 2));
+            assertThat(first).isCompletedWithValue(null);
+            assertThat(second).isNotDone();
+            sender.runOnce();
+            assertThat(writerIdInRequest()).isEqualTo(newWriterId);
+            finishIdempotentProduceLogRequest(1, tb1, 0, createProduceLogResponse(tb1, 2, 3));
+            assertThat(second).isCompletedWithValue(null);
+            assertThat(other).isCompletedWithValue(null);
+        }
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @Test
+    void testUnknownWriteOutcomeCannotReplayUnderNewId() throws Exception {
+        IdempotenceManager manager = startIdempotentSender(true);
+        long oldWriterId = acknowledgeFirstRecord(manager);
+        CompletableFuture<Exception> pending = sendLogRecord(tb1, 1);
+        failRequest(tb1, 0, new TimeoutException("write response timed out"));
+        sender.runOnce();
+        assertThat(writerIdInRequest()).isEqualTo(oldWriterId);
+        rejectSequence(1, 0);
+        assertThat(pending).isDone();
+        assertThat(pending.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+    }
+
+    @Test
+    void testExhaustedTimeoutOnAnotherBucketStopsRecovery() throws Exception {
+        sender.destroyResources();
+        IdempotenceManager manager = createIdempotenceManager(true, true);
+        sender = setupWithIdempotenceState(manager, 1, 0);
+        long oldWriterId = acknowledgeFirstRecord(manager);
+        TableBucket otherBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        CompletableFuture<Exception> other = sendLogRecord(otherBucket, 1);
+        finishRequest(
+                otherBucket, 0, createProduceLogResponse(otherBucket, Errors.REQUEST_TIME_OUT));
+        sender.runOnce();
+        CompletableFuture<Exception> cold = sendLogRecord(tb1, 1);
+        rejectSequence(1, 0);
+        failRequest(otherBucket, 0, new TimeoutException("retry timed out"));
+        sender.runOnce();
+        assertThat(other.getNow(null)).isInstanceOf(TimeoutException.class);
+        assertThat(cold.getNow(null)).isInstanceOf(TimeoutException.class);
+        assertThat(manager.writerId()).isEqualTo(oldWriterId);
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1})
+    void testAcknowledgedRetryCannotFenceOriginalRequest(int sequence) throws Exception {
+        IdempotenceManager manager = startIdempotentSender(true);
+        if (sequence > 0) {
+            acknowledgeFirstRecord(manager);
+        }
+        CompletableFuture<Exception> pending = sendLogRecord(tb1, sequence);
+        long oldWriterId = manager.writerId();
+        failRequest(tb1, 0, new TimeoutException("original request may still reach the server"));
+        sender.runOnce();
+        finishIdempotentProduceLogRequest(
+                sequence, tb1, 0, createProduceLogResponse(tb1, sequence, sequence + 1));
+        assertThat(pending).isCompletedWithValue(null);
+        CompletableFuture<Exception> cold = sendLogRecord(tb1, sequence + 1);
+        CompletableFuture<Exception> other = sendLogRecord(new TableBucket(DATA1_TABLE_ID, 1), 7);
+        rejectSequence(sequence + 1, 0);
+        assertThat(cold.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+        sender.runOnce();
+        assertThat(other.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(manager.writerId()).isEqualTo(oldWriterId);
+    }
+
+    private long acknowledgeFirstRecord(IdempotenceManager manager) throws Exception {
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 0);
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0, 1));
+        assertThat(first).isCompletedWithValue(null);
+        return manager.writerId();
+    }
+
+    private void rejectSequence(int sequence, int requestIndex) {
+        finishIdempotentProduceLogRequest(
+                sequence,
+                tb1,
+                requestIndex,
+                createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+    }
+
+    private long writerIdInRequest() {
+        ProduceLogRequest request = (ProduceLogRequest) getRequest(tb1, 0);
+        return getProduceLogRecords(request, tb1).batchIterator().next().writerId();
+    }
+
+    private IdempotenceManager startIdempotentSender(boolean recover) {
+        sender.destroyResources();
+        IdempotenceManager manager = createIdempotenceManager(true, recover);
+        sender = setupWithIdempotenceState(manager);
+        return manager;
+    }
+
+    private CompletableFuture<Exception> sendLogRecord(TableBucket bucket, int value)
+            throws Exception {
+        CompletableFuture<Exception> result = new CompletableFuture<>();
+        appendToAccumulator(bucket, row(value, "a"), (tb, offset, error) -> result.complete(error));
+        sender.runOnce();
+        return result;
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+    void testColdRecoveryAfterPreWriteRejection(boolean missingGateway, boolean exhaustRetries)
+            throws Exception {
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)) {
+                    private int unavailable = missingGateway ? (exhaustRetries ? 2 : 1) : 0;
+
+                    @Override
+                    public TabletServerGateway newTabletServerClientForNode(int serverId) {
+                        if (unavailable > 0) {
+                            unavailable--;
+                            return null;
+                        }
+                        return super.newTabletServerClientForNode(serverId);
+                    }
+                };
+        Cluster cluster = metadataUpdater.getCluster();
+        sender.destroyResources();
+        IdempotenceManager manager = createIdempotenceManager(true, true);
+        sender = setupWithIdempotenceState(manager, 1, 0);
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 0);
+        long oldWriterId = manager.writerId();
+        if (missingGateway) {
+            metadataUpdater.updateCluster(cluster);
+        } else {
+            failRequest(tb1, 0, new DiskWriteLockedException("disk full"));
+        }
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        sender.runOnce();
+        if (exhaustRetries) {
+            if (!missingGateway) {
+                failRequest(tb1, 0, new DiskWriteLockedException("disk still full"));
+            }
+            assertThat(first.getNow(null))
+                    .isInstanceOf(
+                            missingGateway
+                                    ? LeaderNotAvailableException.class
+                                    : DiskWriteLockedException.class);
+            assertThat(sender.getFatalError()).isNull();
+            first = sendLogRecord(tb1, 1);
+        }
+        assertThat(writerIdInRequest()).isEqualTo(oldWriterId);
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0, 1));
+        assertThat(first).isCompletedWithValue(null);
+
+        CompletableFuture<Exception> cold = sendLogRecord(tb1, 1);
+        rejectSequence(1, 0);
+        sender.runOnce();
+        assertThat(writerIdInRequest()).isNotEqualTo(oldWriterId);
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 1, 2));
+        assertThat(cold).isCompletedWithValue(null);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCannotReuseSequenceAfterTimeoutOrAfterSendingSuccessor(boolean sendSuccessor)
+            throws Exception {
+        sender.destroyResources();
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        IdempotenceManager manager = createIdempotenceManager(true, true);
+        sender = setupWithIdempotenceState(manager, 1, 0);
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 1);
+        if (sendSuccessor) {
+            sendLogRecord(tb1, 2);
+            failRequest(tb1, 0, new DiskWriteLockedException("disk full"));
+        } else {
+            failRequest(tb1, 0, new TimeoutException("missing response"));
+        }
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        sender.runOnce();
+        failRequest(tb1, sendSuccessor ? 1 : 0, new DiskWriteLockedException("disk full"));
+        assertThat(first.getNow(null)).isInstanceOf(DiskWriteLockedException.class);
+        assertThat(sender.getFatalError()).isInstanceOf(DiskWriteLockedException.class);
+        sender.runOnce();
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @Test
+    void testConcurrentWriterResetFailsRecoveryWithFirstRejection() throws Exception {
+        IdempotenceManager manager = startIdempotentSender(true);
+        acknowledgeFirstRecord(manager);
+        TableBucket secondBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        CompletableFuture<Exception> initial = sendLogRecord(secondBucket, 0);
+        finishRequest(secondBucket, 0, createProduceLogResponse(secondBucket, 0, 1));
+        assertThat(initial).isCompletedWithValue(null);
+
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 1);
+        CompletableFuture<Exception> second = sendLogRecord(secondBucket, 2);
+        TableBucket thirdBucket = new TableBucket(DATA1_TABLE_ID, 2);
+        CompletableFuture<Exception> third = sendLogRecord(thirdBucket, 3);
+        ProduceLogResponse firstRejection =
+                createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION);
+        firstRejection.getBucketsRespAt(0).setErrorMessage("first cold bucket");
+        finishRequest(tb1, 0, firstRejection);
+        finishRequest(
+                secondBucket,
+                0,
+                createProduceLogResponse(secondBucket, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+        finishRequest(
+                thirdBucket,
+                0,
+                createProduceLogResponse(thirdBucket, Errors.UNKNOWN_WRITER_ID_EXCEPTION));
+        sender.runOnce();
+
+        assertThat(third.getNow(null)).isInstanceOf(UnknownWriterIdException.class);
+        assertThat(first.getNow(null))
+                .isInstanceOf(OutOfOrderSequenceException.class)
+                .hasMessage("first cold bucket");
+        assertThat(second.getNow(null)).isSameAs(first.getNow(null));
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @Test
+    void testRequestLevelOutOfOrderCannotTriggerRecovery() throws Exception {
+        IdempotenceManager manager = startIdempotentSender(true);
+        acknowledgeFirstRecord(manager);
+        CompletableFuture<Exception> pending = sendLogRecord(tb1, 1);
+        failRequest(tb1, 0, new OutOfOrderSequenceException("RPC failed without a bucket result"));
+        assertThat(pending).isDone();
+        assertThat(pending.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+        sender.runOnce();
+        assertThat(pendingRequestSize(tb1)).isZero();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, true", "true, true", "true, false"})
+    void testSequenceRejectionAfterAcknowledgedSuccessor(boolean recover, boolean retry)
+            throws Exception {
+        IdempotenceManager manager = startIdempotentSender(recover);
+        long oldWriterId = acknowledgeFirstRecord(manager);
+        CompletableFuture<Exception> pending = sendLogRecord(tb1, 1);
+        // Five subsequent writes evict seq1 from the server's duplicate history.
+        for (int sequence = 2; sequence <= 6; sequence++) {
+            CompletableFuture<Exception> later = sendLogRecord(tb1, sequence);
+            finishIdempotentProduceLogRequest(
+                    sequence, tb1, 1, createProduceLogResponse(tb1, sequence, sequence + 1));
+            assertThat(later).isCompletedWithValue(null);
+        }
+        if (retry) {
+            finishIdempotentProduceLogRequest(
+                    1, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+            sender.runOnce();
+        }
+        rejectSequence(1, 0);
+        if (recover) {
+            assertThat(pending.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+            assertThat(sender.getFatalError()).isInstanceOf(OutOfOrderSequenceException.class);
+        } else {
+            assertThat(pending).isCompletedWithValue(null);
+        }
+        assertThat(sender.numOfInFlightBatches(tb1)).isZero();
+        assertThat(manager.writerId()).isEqualTo(oldWriterId);
+        assertThat(manager.lastAckedBatchSequence(tb1)).contains(6);
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, true", "true, true", "true, false"})
+    void testRetryReorderedBatchesUnderOriginalWriter(boolean recover, boolean ackFirst)
+            throws Exception {
+        IdempotenceManager manager = startIdempotentSender(recover);
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 0);
+        CompletableFuture<Exception> second = sendLogRecord(tb1, 1);
+        long oldWriterId = manager.writerId();
+        if (!ackFirst) {
+            rejectSequence(1, 1);
+            assertThat(second).isNotDone();
+        }
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0, 1));
+        assertThat(first).isCompletedWithValue(null);
+        if (ackFirst) {
+            rejectSequence(1, 0);
+        }
+        sender.runOnce();
+        assertThat(writerIdInRequest()).isEqualTo(oldWriterId);
+        assertThat(second).isNotDone();
+        finishIdempotentProduceLogRequest(1, tb1, 0, createProduceLogResponse(tb1, 1, 2));
+        assertThat(second).isCompletedWithValue(null);
+        assertThat(manager.lastAckedBatchSequence(tb1)).contains(1);
+    }
+
     @Test
     void testRetryAfterResettingInFlightBatchSequence() throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
-
-        // Send the first ProduceLogRequest.
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
-        // Send the second ProduceLogRequest.
-        CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
-        sender1.runOnce();
-
-        // response 0 with retrievable error which will reEnqueue the batch.
+        IdempotenceManager manager = startIdempotentSender(false);
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 1);
+        CompletableFuture<Exception> second = sendLogRecord(tb1, 2);
         finishIdempotentProduceLogRequest(
                 0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
-        // response 1 with UnknownWriterIdException which will reset writer
         finishIdempotentProduceLogRequest(
                 1, tb1, 0, createProduceLogResponse(tb1, Errors.UNKNOWN_WRITER_ID_EXCEPTION));
-        retry(
-                Duration.ofMinutes(1),
-                () -> { // after response 1 is received, the writer will be reset
-                    assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
-                    assertThat(
-                                    accumulator.getReadyDeque(
-                                            PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                            tb1.getBucket()))
-                            .hasSize(1);
-                    assertThat(
-                                    accumulator
-                                            .getReadyDeque(
-                                                    PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                                    tb1.getBucket())
-                                            .peek()
-                                            .batchSequence())
-                            .isEqualTo(0);
-                });
-        assertThat(future1.isDone()).isFalse();
-        assertThat(future2.isDone()).isTrue();
+        assertThat(manager.isWriterIdValid()).isFalse();
+        assertThat(manager.hasInflightBatches(tb1)).isFalse();
+        assertThat(first).isNotDone();
+        assertThat(second.getNow(null)).isInstanceOf(UnknownWriterIdException.class);
 
-        // resend the first ProduceLogRequest.
-        sender1.runOnce();
-        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        sender1.runOnce();
-        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
-        assertThat(future1.isDone()).isTrue();
+        sender.runOnce();
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0, 1));
+        assertThat(first).isCompletedWithValue(null);
+        assertThat(sender.numOfInFlightBatches(tb1)).isZero();
     }
 
     @Test
     void testCorrectHandlingOfOutOfOrderResponses() throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
+        IdempotenceManager idempotenceManager = startIdempotentSender(false);
+        sender.runOnce();
         assertThat(idempotenceManager.isWriterIdValid()).isTrue();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
 
-        // Send first ProduceLogRequest.
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
+        CompletableFuture<Exception> future1 = sendLogRecord(tb1, 1);
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
-        // Send second ProduceLogRequest.
-        CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
-        sender1.runOnce();
+        CompletableFuture<Exception> future2 = sendLogRecord(tb1, 1);
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
         assertThat(future1.isDone()).isFalse();
         assertThat(future2.isDone()).isFalse();
 
-        // first finish second ProduceLogRequest with the out-of-order exception.
         finishIdempotentProduceLogRequest(
                 1, tb1, 1, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
 
-        sender1.runOnce(); // receive response 1.
+        sender.runOnce(); // receive response 1.
         Deque<WriteBatch> queuedBatches =
                 accumulator.getReadyDeque(PhysicalTablePath.of(DATA1_TABLE_PATH), tb1.getBucket());
 
-        // Make sure that we are queueing the second batch first.
         assertThat(queuedBatches.size()).isEqualTo(1);
         assertThat(queuedBatches.peek().batchSequence()).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
-        // receive response 0
         finishIdempotentProduceLogRequest(
                 0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
-        // Make sure we requeued both batches in the correct order.
         assertThat(queuedBatches.size()).isEqualTo(2);
         assertThat(queuedBatches.peek().batchSequence()).isEqualTo(0);
         assertThat(queuedBatches.peekLast().batchSequence()).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
         assertThat(future1.isDone()).isFalse();
         assertThat(future2.isDone()).isFalse();
-        sender1.runOnce(); // send request 0
-        sender1.runOnce(); // don't do anything, only one inflight allowed once we are retrying.
+        sender.runOnce(); // send request 0
+        sender.runOnce(); // don't do anything, only one inflight allowed once we are retrying.
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
-        // Make sure that the requests are sent in order, even though the previous responses were
-        // not in order.
         finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        sender1.runOnce(); // receive response 0.
+        sender.runOnce(); // receive response 0.
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
-        assertThat(future1.isDone()).isTrue();
-        assertThat(future1.get()).isNull();
+        assertThat(future1).isCompletedWithValue(null);
 
-        // send request 1.
         finishIdempotentProduceLogRequest(1, tb1, 0, createProduceLogResponse(tb1, 1L, 2L));
-        sender1.runOnce(); // receive response 1.
+        sender.runOnce(); // receive response 1.
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
-        assertThat(future2.isDone()).isTrue();
-        assertThat(future2.get()).isNull();
+        assertThat(future2).isCompletedWithValue(null);
     }
 
     @Test
     void testCorrectHandlingOfOutOfOrderResponsesWhenSecondSucceeds() throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
+        IdempotenceManager idempotenceManager = startIdempotentSender(false);
+        sender.runOnce();
         assertThat(idempotenceManager.isWriterIdValid()).isTrue();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
 
-        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
-
-        // Send first ProduceLogRequest.
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
+        CompletableFuture<Exception> future1 = sendLogRecord(tb1, 1);
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
-        // Send second ProduceLogRequest.
-        CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
-        sender1.runOnce();
+        CompletableFuture<Exception> future2 = sendLogRecord(tb1, 1);
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
         assertThat(future1.isDone()).isFalse();
         assertThat(future2.isDone()).isFalse();
 
-        // first finish second ProduceLogRequest with success.
         finishIdempotentProduceLogRequest(1, tb1, 1, createProduceLogResponse(tb1, 1L, 2L));
-        sender1.runOnce(); // receive response 1
-        assertThat(future2.isDone()).isTrue();
-        assertThat(future2.get()).isNull();
+        sender.runOnce(); // receive response 1
+        assertThat(future2).isCompletedWithValue(null);
         assertThat(future1.isDone()).isFalse();
         Deque<WriteBatch> queuedBatches =
                 accumulator.getReadyDeque(PhysicalTablePath.of(DATA1_TABLE_PATH), tb1.getBucket());
@@ -1449,255 +1713,48 @@ final class SenderTest {
         assertThat(queuedBatches.size()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
 
-        // then finish second ProduceLogRequest with error.
         finishIdempotentProduceLogRequest(
                 0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
-        // Make sure we requeued both batches in the correct order.
         assertThat(queuedBatches.size()).isEqualTo(1);
         assertThat(queuedBatches.peek().batchSequence()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
-        sender1.runOnce(); // resend request 1.
+        sender.runOnce(); // resend request 1.
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
 
-        // Make sure we handle the out of order successful responses correctly.
         finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        sender1.runOnce(); // receive response 0.
+        sender.runOnce(); // receive response 0.
         assertThat(queuedBatches.size()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
-        assertThat(future1.isDone()).isTrue();
-        assertThat(future1.get()).isNull();
+        assertThat(future1).isCompletedWithValue(null);
     }
 
-    /**
-     * Tests that when a batch's response is lost (e.g., due to request timeout) but the batch was
-     * successfully written on the server, and subsequent batches with higher sequence numbers are
-     * acknowledged, the client should treat the retried batch as already committed instead of
-     * entering an infinite retry loop with {@link
-     * org.apache.fluss.exception.OutOfOrderSequenceException}.
-     *
-     * <p>Detailed scenario:
-     *
-     * <ol>
-     *   <li>Send batch1(seq=0) ~ batch5(seq=4). All 5 batches are successfully written on the
-     *       server (server {@code lastBatchSeq=4}).
-     *   <li>batch2~5 (seq=1~4) responses return normally. Client {@code lastAckedBatchSequence=4}.
-     *   <li>Send batch6(seq=5) and ack successfully. Server {@code lastBatchSeq=5}.
-     *   <li>batch1(seq=0) response is lost due to {@code REQUEST_TIME_OUT}. batch1 is re-enqueued
-     *       for retry.
-     *   <li>Client retries batch1(seq=0). Since server {@code lastBatchSeq=5} and {@code 0 != 5+1},
-     *       server returns {@code OUT_OF_ORDER_SEQUENCE_EXCEPTION}.
-     *   <li>Client detects {@code batch1.seq(0) <= lastAckedBatchSequence(5)}: batch1 is already
-     *       committed. Client completes batch1 successfully without further retries.
-     * </ol>
-     */
-    @Test
-    void testCorrectHandlingOfOutOfOrderResponsesWhenResponseLostButSubsequentBatchesSucceeded()
-            throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
-
-        // Send batch1 (seq=0): its response will be lost later.
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
-        assertThat(future1.isDone()).isFalse();
-        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
-
-        // Send batch2~5 (seq=1~4) and collect their futures.
-        int numFollowingBatches = 4;
-        List<CompletableFuture<Exception>> followingFutures = new ArrayList<>();
-        for (int i = 0; i < numFollowingBatches; i++) {
-            CompletableFuture<Exception> future = new CompletableFuture<>();
-            followingFutures.add(future);
-            appendToAccumulator(tb1, row(i + 2, "b"), (tb, leo, e) -> future.complete(e));
-            sender1.runOnce();
-            assertThat(future.isDone()).isFalse();
-        }
-        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(5);
-
-        // batch2~5 (seq=1~4) responses return normally.
-        for (int seq = 1; seq <= numFollowingBatches; seq++) {
-            finishIdempotentProduceLogRequest(
-                    seq, tb1, 1, createProduceLogResponse(tb1, seq, seq + 1L));
-            assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(seq));
-            assertThat(followingFutures.get(seq - 1).isDone()).isTrue();
-            assertThat(followingFutures.get(seq - 1).get()).isNull();
-        }
-
-        // Send batch6 (seq=5) and ack successfully.
-        // Now server lastBatchSeq=5. batch1 (seq=0) is still waiting response.
-        CompletableFuture<Exception> future6 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(6, "f"), (tb, leo, e) -> future6.complete(e));
-        sender1.runOnce(); // drain and send batch6 (seq=5)
-        finishIdempotentProduceLogRequest(5, tb1, 1, createProduceLogResponse(tb1, 5L, 6L));
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
-        assertThat(future6.isDone()).isTrue();
-        assertThat(future6.get()).isNull();
-
-        // All 6 batches are written successfully on the server (server lastBatchSeq=5).
-        // batch1 (seq=0) response is lost, simulated by REQUEST_TIME_OUT.
-        finishIdempotentProduceLogRequest(
-                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
-        assertThat(future1.isDone()).isFalse();
-
-        // Now retry batch1 (seq=0). Server lastBatchSeq=5, so 0 != 5+1,
-        // server returns OUT_OF_ORDER_SEQUENCE_EXCEPTION.
-        sender1.runOnce(); // send retried batch1
-        finishIdempotentProduceLogRequest(
-                0, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
-
-        // The client should detect that batch1.seq(0) <= lastAckedBatchSequence(5),
-        // meaning batch1 was already committed on the server (its response was just lost).
-        // It should complete batch1 successfully instead of entering an infinite retry loop.
-        assertThat(future1.isDone()).isTrue();
-        assertThat(future1.get()).isNull();
-        // lastAckedBatchSequence should remain at 5 (not changed by completing already-committed
-        // batch1)
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
-        // No more inflight batches
-        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
-    }
-
-    /**
-     * A late (reordered) out-of-order response must be retried, not treated as fatal, when the
-     * acked sequence has advanced while the batch was in flight.
-     *
-     * <p>Scenario: seq0 and seq1 are both in flight (each sent when {@code lastAcked=-1}). Response
-     * reordering delivers seq0's success first, advancing {@code lastAcked} to 0. seq1's
-     * out-of-order response then arrives late; it reflects a superseded server state. Since seq1
-     * was sent when {@code lastAcked=-1}, which is now behind the current {@code lastAcked=0}, the
-     * writer must retry seq1 instead of resetting.
-     */
-    @Test
-    void testStaleOutOfOrderResponseIsRetriedInsteadOfResettingWriter() throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-        long writerId = idempotenceManager.writerId();
-
-        // Send seq0 and seq1; both are sent while lastAcked is not present (-1).
-        CompletableFuture<Exception> future0 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future0.complete(e));
-        sender1.runOnce();
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
-        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
-
-        // Reordered responses: seq0 succeeds first, advancing lastAcked to 0.
-        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        sender1.runOnce();
-        assertThat(future0.get()).isNull();
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
-
-        // seq1's out-of-order response arrives late. It is stale (seq1 was sent at lastAcked=-1,
-        // now behind lastAcked=0), so the writer must retry it, not reset.
-        finishIdempotentProduceLogRequest(
-                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-        assertThat(idempotenceManager.writerId()).isEqualTo(writerId);
-        assertThat(future1.isDone()).isFalse();
-
-        // The retried seq1 succeeds once the server observes the advanced state.
-        sender1.runOnce();
-        finishIdempotentProduceLogRequest(1, tb1, 0, createProduceLogResponse(tb1, 1L, 2L));
-        sender1.runOnce();
-        assertThat(future1.get()).isNull();
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
-    }
-
-    /**
-     * A genuine out-of-order response (no progress since the batch was sent) must still reset the
-     * writer.
-     *
-     * <p>Scenario: seq0 is acknowledged so {@code lastAcked=0}. seq1 is then sent while {@code
-     * lastAcked=0} (no in-flight predecessor). seq1 gets an out-of-order response with no
-     * advancement since it was sent, indicating an unrecoverable regression, so the writer resets.
-     */
     @Test
     void testGenuineOutOfOrderResponseResetsWriter() throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-
-        // Establish lastAcked = 0.
-        CompletableFuture<Exception> future0 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future0.complete(e));
-        sender1.runOnce();
-        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        sender1.runOnce();
-        assertThat(future0.get()).isNull();
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
-
-        // Send seq1 while lastAcked is already 0 (no in-flight predecessor).
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
-
-        // seq1 gets an out-of-order response with no progress since it was sent: genuine
-        // regression -> the writer is reset. Do not run the sender again before asserting, since
-        // the next iteration would re-initialize a fresh writer id.
-        finishIdempotentProduceLogRequest(
-                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
-        assertThat(future1.get()).isInstanceOf(OutOfOrderSequenceException.class);
-        assertThat(idempotenceManager.isWriterIdValid()).isFalse();
+        IdempotenceManager manager = startIdempotentSender(false);
+        acknowledgeFirstRecord(manager);
+        CompletableFuture<Exception> pending = sendLogRecord(tb1, 1);
+        rejectSequence(1, 0);
+        assertThat(pending.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(manager.isWriterIdValid()).isFalse();
     }
 
-    /**
-     * The send-time acked-sequence snapshot must be refreshed on every send attempt: after a stale
-     * out-of-order response is retried, a subsequent out-of-order response with no new
-     * acknowledgement in between must reset the writer (it is no longer stale). This guards against
-     * regressing the snapshot to a capture-once semantic.
-     *
-     * <p>Scenario: seq0 and seq1 are in flight (each sent at {@code lastAcked=-1}). seq0 succeeds
-     * ({@code lastAcked=0}). seq1's first (stale) out-of-order response is retried and the resend
-     * refreshes seq1's snapshot to 0. A second out-of-order response for seq1, with no new ack,
-     * then finds {@code 0 > 0} false and resets the writer.
-     */
     @Test
     void testSendTimeSnapshotIsRefreshedOnRetrySoRepeatedOutOfOrderResets() throws Exception {
-        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
-        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-        long writerId = idempotenceManager.writerId();
-
-        // Send seq0 and seq1; both are sent while lastAcked is not present (-1).
-        CompletableFuture<Exception> future0 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future0.complete(e));
-        sender1.runOnce();
-        CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> future1.complete(e));
-        sender1.runOnce();
-
-        // seq0 succeeds first, advancing lastAcked to 0.
+        IdempotenceManager manager = startIdempotentSender(false);
+        CompletableFuture<Exception> first = sendLogRecord(tb1, 1);
+        CompletableFuture<Exception> second = sendLogRecord(tb1, 2);
+        long oldWriterId = manager.writerId();
         finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
-        sender1.runOnce();
-        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
+        assertThat(first).isCompletedWithValue(null);
+        assertThat(manager.lastAckedBatchSequence(tb1)).contains(0);
+        rejectSequence(1, 0);
+        sender.runOnce();
+        assertThat(writerIdInRequest()).isEqualTo(oldWriterId);
+        assertThat(second).isNotDone();
 
-        // First (stale) seq1 out-of-order: sent at lastAcked=-1 < current 0 -> retried, writer
-        // kept. The following runOnce resends seq1, refreshing its send-time snapshot to 0.
-        finishIdempotentProduceLogRequest(
-                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
-        sender1.runOnce();
-        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
-        assertThat(idempotenceManager.writerId()).isEqualTo(writerId);
-        assertThat(future1.isDone()).isFalse();
-
-        // Second seq1 out-of-order with no new ack: the refreshed snapshot is now 0, so the
-        // response is no longer stale (0 > 0 is false) and the writer is reset.
-        finishIdempotentProduceLogRequest(
-                1, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
-        assertThat(future1.get()).isInstanceOf(OutOfOrderSequenceException.class);
-        assertThat(idempotenceManager.isWriterIdValid()).isFalse();
+        rejectSequence(1, 0);
+        assertThat(second.getNow(null)).isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(manager.isWriterIdValid()).isFalse();
     }
 
     @Test
@@ -2902,11 +2959,17 @@ final class SenderTest {
     }
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {
+        return createIdempotenceManager(idempotenceEnabled, false);
+    }
+
+    private IdempotenceManager createIdempotenceManager(
+            boolean idempotenceEnabled, boolean recoverOutOfOrder) {
         return new IdempotenceManager(
                 idempotenceEnabled,
                 MAX_INFLIGHT_REQUEST_PER_BUCKET,
                 metadataUpdater.newRandomTabletServerClient(),
-                metadataUpdater);
+                metadataUpdater,
+                recoverOutOfOrder);
     }
 
     private static boolean hasIdempotentRecords(TableBucket tb, ProduceLogRequest request) {

@@ -327,11 +327,12 @@ public class WriterClient {
         }
 
         TabletServerGateway tabletServerGateway = metadataUpdater.newRandomTabletServerClient();
-        return idempotenceEnabled
-                ? new IdempotenceManager(
-                        true, maxInflightRequestPerBucket, tabletServerGateway, metadataUpdater)
-                : new IdempotenceManager(
-                        false, maxInflightRequestPerBucket, tabletServerGateway, metadataUpdater);
+        return new IdempotenceManager(
+                idempotenceEnabled,
+                maxInflightRequestPerBucket,
+                tabletServerGateway,
+                metadataUpdater,
+                conf.get(ConfigOptions.CLIENT_WRITER_RECOVER_ON_OUT_OF_ORDER_SEQUENCE));
     }
 
     private short configureAcks(boolean idempotenceEnabled) {
