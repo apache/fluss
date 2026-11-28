@@ -1376,7 +1376,7 @@ pub struct GetBulkLoadInfoRequest {
     #[prost(message, required, tag = "1")]
     pub handle: PbBulkLoadHandle,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBulkLoadTargetProgress {
     #[prost(int64, optional, tag = "1")]
     pub partition_id: ::core::option::Option<i64>,
@@ -1388,6 +1388,8 @@ pub struct PbBulkLoadTargetProgress {
     pub committed_bucket_count: i64,
     #[prost(bool, required, tag = "5")]
     pub withdrawn: bool,
+    #[prost(string, optional, tag = "6")]
+    pub partition_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetBulkLoadInfoResponse {

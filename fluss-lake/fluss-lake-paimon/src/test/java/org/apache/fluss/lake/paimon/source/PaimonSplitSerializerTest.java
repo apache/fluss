@@ -56,7 +56,24 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
     @Test
     void testSerializeAndDeserialize() throws Exception {
         // partitioned pk-table split and bucket-unaware append-table split with empty partition
-        assertV3RoundTrip(createStringPartitionSplit());
+        PaimonSplit bucketAwareSplit = createStringPartitionSplit();
+        assertV3RoundTrip(bucketAwareSplit);
+
+        // Older splits may have no physical bucket count; serialization must preserve that.
+        DataSplit dataSplit = bucketAwareSplit.dataSplit();
+        PaimonSplit withoutBucketCount =
+                new PaimonSplit(
+                        DataSplit.builder()
+                                .withSnapshot(dataSplit.snapshotId())
+                                .withPartition(dataSplit.partition())
+                                .withBucket(dataSplit.bucket())
+                                .withBucketPath(dataSplit.bucketPath())
+                                .withDataFiles(dataSplit.dataFiles())
+                                .build(),
+                        false,
+                        bucketAwareSplit.partition());
+        assertThat(withoutBucketCount.totalBuckets()).isNull();
+        assertV3RoundTrip(withoutBucketCount);
 
         PaimonSplit bucketUnAwareSplit = createBucketUnAwareSplit();
         assertThat(bucketUnAwareSplit.isBucketUnAware()).isTrue();
@@ -154,6 +171,7 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
 
         PaimonSplit deserialized = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserialized.dataSplit()).isEqualTo(original.dataSplit());
+        assertThat(deserialized.totalBuckets()).isEqualTo(original.totalBuckets());
         assertThat(deserialized.isBucketUnAware()).isEqualTo(original.isBucketUnAware());
         assertThat(deserialized.partition()).isEqualTo(original.partition());
         return deserialized;

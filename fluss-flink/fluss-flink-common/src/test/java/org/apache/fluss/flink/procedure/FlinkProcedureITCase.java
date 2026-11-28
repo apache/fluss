@@ -45,6 +45,7 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
+import org.apache.flink.runtime.util.EnvironmentInformation;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.types.Row;
@@ -77,6 +78,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** ITCase for Flink Procedure. */
 public abstract class FlinkProcedureITCase {
@@ -141,6 +143,27 @@ public abstract class FlinkProcedureITCase {
     void after() {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"'missing'", "'missing', ''", "`table` => 'missing'"})
+    @MultiVersionTest
+    void testEnableFlussOnLakeTableCallSignatures(String arguments) {
+        assumeThat(
+                        arguments.contains("=>")
+                                && EnvironmentInformation.getVersion().startsWith("1.18"))
+                .as("Named procedure arguments require Flink 1.19 or later")
+                .isFalse();
+        // Resolve the SQL signature before rejecting the missing source table.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "CALL "
+                                                + CATALOG_NAME
+                                                + ".sys.enable_fluss_on_lake_table("
+                                                + arguments
+                                                + ")"))
+                .hasStackTraceContaining("EnableFlussOnLakeTableProcedure.call");
     }
 
     @Test

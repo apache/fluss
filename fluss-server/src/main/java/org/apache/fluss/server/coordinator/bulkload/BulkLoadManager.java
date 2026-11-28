@@ -202,7 +202,7 @@ public final class BulkLoadManager {
                             .setCommittedBucketCount(buckets.committed)
                             .setWithdrawn(target.withdrawn);
             if (target.partitionId != null) {
-                progress.setPartitionId(target.partitionId);
+                progress.setPartitionId(target.partitionId).setPartitionName(target.partitionName);
                 if (running && !target.withdrawn) {
                     PartitionRegistration partition = currentPartitions.get(target.partitionName);
                     progress.setWithdrawn(

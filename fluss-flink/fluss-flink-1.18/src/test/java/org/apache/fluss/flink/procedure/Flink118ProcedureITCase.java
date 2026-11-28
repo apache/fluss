@@ -40,6 +40,7 @@ public class Flink118ProcedureITCase extends FlinkProcedureITCase {
                                                         CATALOG_NAME))
                                         .wait())
                 .hasMessageContaining(
-                        "No match found for function signature list_acl(<CHARACTER>, <CHARACTER>, <CHARACTER>)");
+                        "No match found for function signature list_acl(<CHARACTER>, <CHARACTER>,"
+                                + " <CHARACTER>)");
     }
 }

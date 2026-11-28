@@ -20,9 +20,9 @@ package org.apache.fluss.flink.procedure;
 import org.apache.fluss.client.tiering.FlussTableLakeSnapshotCommitter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.flink.action.bulkload.LoadLakeDataToFlussAction;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
@@ -35,18 +35,24 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
+import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
+import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.procedure.ProcedureContext;
+
+import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** Procedure for promoting an existing Paimon table to a datalake-enabled Fluss table. */
@@ -54,26 +60,36 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
 
     private static final String SUCCESS_MESSAGE = "Successfully enabled Fluss on %s table '%s'.";
 
-    @ProcedureHint(argument = {@ArgumentHint(name = "table", type = @DataTypeHint("STRING"))})
-    public String[] call(ProcedureContext context, String table) throws Exception {
-        return enable(table, Collections.<String, String>emptyMap());
+    static Class<? extends EnableFlussOnLakeTableProcedure> getProcedureClass() {
+        try {
+            ProcedureHint.class.getMethod("argument");
+            return EnableFlussOnLakeTableProcedure.class;
+        } catch (NoSuchMethodException e) {
+            // Only Flink 1.18 needs overloads. Keeping them on newer versions would prevent
+            // named arguments from resolving.
+            return Flink118.class;
+        }
     }
 
+    /** Promotes a lake table, optionally overriding its table options. */
     @ProcedureHint(
             argument = {
                 @ArgumentHint(name = "table", type = @DataTypeHint("STRING")),
-                @ArgumentHint(name = "options", type = @DataTypeHint("STRING"))
+                @ArgumentHint(name = "options", type = @DataTypeHint("STRING"), isOptional = true)
             })
-    public String[] call(ProcedureContext context, String table, String options) throws Exception {
-        return enable(table, parseOptions(options));
-    }
-
-    private String[] enable(String table, Map<String, String> options) throws Exception {
+    public String[] call(ProcedureContext context, String table, @Nullable String options)
+            throws Exception {
         TablePath tablePath = parseTablePath(table, flussProcedureContext.getDefaultDatabase());
         TableInfo tableInfo;
         boolean flussTableCreated = false;
         try {
-            tableInfo = admin.createTableFromLake(tablePath, options).get();
+            tableInfo =
+                    admin.createTableFromLake(
+                                    tablePath,
+                                    options == null
+                                            ? Collections.emptyMap()
+                                            : parseOptions(options))
+                            .get();
             flussTableCreated = true;
         } catch (ExecutionException e) {
             if (!ExceptionUtils.findThrowable(e, TableAlreadyExistException.class).isPresent()) {
@@ -82,29 +98,97 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
             tableInfo = admin.getTableInfo(tablePath).get();
         }
 
-        // If lake reads are not enabled yet, register any missing snapshot and enable them.
-        if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
-            // A newly created table has no registered snapshot. On retries, preserve any snapshot
-            // already registered by an earlier attempt for the re-enable consistency check.
-            if (flussTableCreated || !hasRegisteredLakeSnapshot(tablePath)) {
-                registerLakeSnapshot(tableInfo);
-            }
-
-            admin.alterTable(
-                            tablePath,
-                            Collections.singletonList(
-                                    TableChange.set(
-                                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
-                            false)
-                    .get();
+        if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+            return success(tableInfo);
         }
+        if (!flussTableCreated && hasRegisteredLakeSnapshot(tablePath)) {
+            // Preserve the snapshot registered by an earlier attempt for the server's re-enable
+            // consistency check. Retrying must not load or register a newer source snapshot.
+            enableLake(tableInfo);
+            return success(tableInfo);
+        }
+
+        try (TemporaryClassLoaderContext ignored =
+                TemporaryClassLoaderContext.of(flussProcedureContext.getClassLoader())) {
+            LakeStorage lakeStorage = createLakeStorage(tableInfo);
+            Optional<Long> snapshotId;
+            try (LakeCatalog lakeCatalog = lakeStorage.createLakeCatalog()) {
+                snapshotId = lakeCatalog.getLatestSnapshotId(tableInfo.getLakeTablePath());
+            }
+            if (snapshotId.isPresent() && tableInfo.hasPrimaryKey()) {
+                checkState(
+                        flussTableCreated,
+                        "Cannot load an existing lake-disabled primary-key table without a"
+                                + " registered snapshot. Resolve any previous Bulk Load and recreate"
+                                + " the Fluss table before retrying.");
+                return loadAndEnable(context, tableInfo, snapshotId.get());
+            }
+            return enableWithoutLoad(tableInfo, snapshotId);
+        }
+    }
+
+    private String[] loadAndEnable(ProcedureContext context, TableInfo tableInfo, long snapshotId)
+            throws Exception {
+        // The job owns snapshot registration and lake enablement after Bulk Load commit succeeds.
+        // Sync mode only changes whether CALL waits; it does not change who enables the table.
+        JobClient job =
+                new LoadLakeDataToFlussAction(
+                                flussProcedureContext.getFlussConfiguration(),
+                                Configuration.fromMap(
+                                        extractAndRemovePrefix(
+                                                flussProcedureContext.getLakeCatalogProperties(),
+                                                DataLakeFormat.PAIMON + ".")),
+                                tableInfo.getTablePath(),
+                                snapshotId,
+                                UUID.randomUUID().toString(),
+                                tableInfo.getTableId())
+                        .submit(context.getExecutionEnvironment());
+        if (!context.getExecutionEnvironment()
+                .getConfiguration()
+                .get(TableConfigOptions.TABLE_DML_SYNC)) {
+            return new String[] {"JobID=" + job.getJobID()};
+        }
+        job.getJobExecutionResult().get();
+        return success(tableInfo);
+    }
+
+    private String[] enableWithoutLoad(TableInfo tableInfo, Optional<Long> snapshotId)
+            throws Exception {
+        // Log tables and tables without a source snapshot need no KV load job.
+        if (snapshotId.isPresent()) {
+            try (FlussTableLakeSnapshotCommitter committer =
+                    new FlussTableLakeSnapshotCommitter(
+                            flussProcedureContext.getFlussConfiguration())) {
+                committer.open();
+                committer.commitLakeSnapshot(
+                        tableInfo.getTableId(),
+                        tableInfo.getTablePath(),
+                        snapshotId.get(),
+                        Collections.emptyMap());
+            }
+        }
+        enableLake(tableInfo);
+        return success(tableInfo);
+    }
+
+    private void enableLake(TableInfo tableInfo) throws Exception {
+        admin.alterTable(
+                        tableInfo.getTablePath(),
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+    }
+
+    private String[] success(TableInfo tableInfo) {
         String lakeFormat =
                 tableInfo
                         .getTableConfig()
                         .getDataLakeFormat()
                         .map(DataLakeFormat::toString)
                         .orElse("lake");
-        return new String[] {String.format(SUCCESS_MESSAGE, lakeFormat, tablePath)};
+        return new String[] {String.format(SUCCESS_MESSAGE, lakeFormat, tableInfo.getTablePath())};
     }
 
     private boolean hasRegisteredLakeSnapshot(TablePath tablePath) throws Exception {
@@ -120,40 +204,7 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
         }
     }
 
-    private void registerLakeSnapshot(TableInfo tableInfo) {
-        try (TemporaryClassLoaderContext ignored =
-                        TemporaryClassLoaderContext.of(flussProcedureContext.getClassLoader());
-                LakeCatalog lakeCatalog = createLakeCatalog(tableInfo)) {
-            Optional<Long> snapshotId =
-                    lakeCatalog.getLatestSnapshotId(tableInfo.getLakeTablePath());
-            if (!snapshotId.isPresent()) {
-                return;
-            }
-            // Existing primary-key data must be loaded into Fluss before lake reads are enabled.
-            if (tableInfo.hasPrimaryKey()) {
-                throw new UnsupportedOperationException(
-                        "Enabling Fluss on a Paimon primary-key table with an existing snapshot "
-                                + "requires Bulk Load, which is not supported by this procedure yet. "
-                                + "The Fluss table metadata remains lake-disabled.");
-            }
-
-            try (FlussTableLakeSnapshotCommitter committer =
-                    new FlussTableLakeSnapshotCommitter(
-                            flussProcedureContext.getFlussConfiguration())) {
-                committer.open();
-                committer.commitInitialSnapshot(
-                        tableInfo.getTableId(), tableInfo.getTablePath(), snapshotId.get());
-            }
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format(
-                            "Failed to register the initial lake snapshot for table %s (table ID %d).",
-                            tableInfo.getTablePath(), tableInfo.getTableId()),
-                    e);
-        }
-    }
-
-    private LakeCatalog createLakeCatalog(TableInfo tableInfo) {
+    private LakeStorage createLakeStorage(TableInfo tableInfo) {
         DataLakeFormat dataLakeFormat = tableInfo.getTableConfig().getDataLakeFormat().get();
         LakeStoragePlugin lakeStoragePlugin =
                 LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat.toString(), null);
@@ -164,8 +215,7 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
                 extractAndRemovePrefix(
                         flussProcedureContext.getLakeCatalogProperties(), dataLakeFormat + "."));
         Configuration lakeConfiguration = Configuration.fromMap(lakeProperties);
-        LakeStorage lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfiguration);
-        return lakeStorage.createLakeCatalog();
+        return lakeStoragePlugin.createLakeStorage(lakeConfiguration);
     }
 
     static TablePath parseTablePath(String table, String defaultDatabase) {
@@ -222,5 +272,14 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
     private static IllegalArgumentException invalidOption(String option, String reason) {
         return new IllegalArgumentException(
                 "Invalid table option '" + option.trim() + "': " + reason + ".");
+    }
+
+    /** Positional overload for Flink 1.18, which does not support optional arguments. */
+    public static class Flink118 extends EnableFlussOnLakeTableProcedure {
+
+        /** Promotes a table with default options. */
+        public String[] call(ProcedureContext context, String table) throws Exception {
+            return call(context, table, null);
+        }
     }
 }

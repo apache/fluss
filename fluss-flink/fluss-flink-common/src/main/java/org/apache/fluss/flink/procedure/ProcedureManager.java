@@ -87,7 +87,8 @@ public class ProcedureManager {
         LIST_PARTITION_INFOS("sys.list_partition_infos", ListPartitionInfosProcedure.class),
         DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class),
         ENABLE_FLUSS_ON_LAKE_TABLE(
-                "sys.enable_fluss_on_lake_table", EnableFlussOnLakeTableProcedure.class);
+                "sys.enable_fluss_on_lake_table",
+                EnableFlussOnLakeTableProcedure.getProcedureClass());
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;

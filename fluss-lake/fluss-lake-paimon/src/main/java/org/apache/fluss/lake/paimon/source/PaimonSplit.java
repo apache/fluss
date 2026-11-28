@@ -22,6 +22,8 @@ import org.apache.fluss.lake.source.LakeSplit;
 
 import org.apache.paimon.table.source.DataSplit;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /** Split for paimon table. */
@@ -54,6 +56,12 @@ public class PaimonSplit implements LakeSplit {
     @Override
     public List<String> partition() {
         return partition;
+    }
+
+    @Override
+    @Nullable
+    public Integer totalBuckets() {
+        return dataSplit.totalBuckets();
     }
 
     public DataSplit dataSplit() {

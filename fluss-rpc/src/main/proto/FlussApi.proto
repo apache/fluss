@@ -1051,6 +1051,7 @@ message PbBulkLoadTargetProgress {
   required int64 allocated_bucket_count = 3;
   required int64 committed_bucket_count = 4;
   required bool withdrawn = 5;
+  optional string partition_name = 6;
 }
 
 message GetBulkLoadInfoResponse {

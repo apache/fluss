@@ -156,6 +156,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final String defaultDatabase;
     protected final String bootstrapServers;
     protected final Map<String, String> securityConfigs;
+    private final Map<String, String> fileSystemConfigs;
     protected final LakeFlinkCatalog lakeFlinkCatalog;
     protected volatile Map<String, String> lakeCatalogProperties;
     protected final Supplier<Map<String, String>> lakeCatalogPropertiesSupplier;
@@ -197,6 +198,27 @@ public class FlinkCatalog extends AbstractCatalog {
                 classLoader,
                 securityConfigs,
                 lakeCatalogPropertiesSupplier,
+                Collections.emptyMap(),
+                new LakeFlinkCatalog(name, classLoader));
+    }
+
+    /** Creates a catalog with explicit filesystem configuration for its client and procedures. */
+    public FlinkCatalog(
+            String name,
+            String defaultDatabase,
+            String bootstrapServers,
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs,
+            Supplier<Map<String, String>> lakeCatalogPropertiesSupplier,
+            Map<String, String> fileSystemConfigs) {
+        this(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                lakeCatalogPropertiesSupplier,
+                fileSystemConfigs,
                 new LakeFlinkCatalog(name, classLoader));
     }
 
@@ -209,12 +231,33 @@ public class FlinkCatalog extends AbstractCatalog {
             Map<String, String> securityConfigs,
             Supplier<Map<String, String>> lakeCatalogPropertiesSupplier,
             LakeFlinkCatalog lakeFlinkCatalog) {
+        this(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                lakeCatalogPropertiesSupplier,
+                Collections.emptyMap(),
+                lakeFlinkCatalog);
+    }
+
+    private FlinkCatalog(
+            String name,
+            String defaultDatabase,
+            String bootstrapServers,
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs,
+            Supplier<Map<String, String>> lakeCatalogPropertiesSupplier,
+            Map<String, String> fileSystemConfigs,
+            LakeFlinkCatalog lakeFlinkCatalog) {
         super(name, defaultDatabase);
         this.catalogName = name;
         this.defaultDatabase = defaultDatabase;
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
+        this.fileSystemConfigs = Collections.unmodifiableMap(new HashMap<>(fileSystemConfigs));
         this.lakeCatalogPropertiesSupplier = lakeCatalogPropertiesSupplier;
         this.lakeFlinkCatalog = lakeFlinkCatalog;
     }
@@ -1087,10 +1130,12 @@ public class FlinkCatalog extends AbstractCatalog {
         return lakeCatalogProperties;
     }
 
-    private Configuration getFlussConfiguration() {
+    @VisibleForTesting
+    Configuration getFlussConfiguration() {
         Map<String, String> flussConfigs = new HashMap<>();
         flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
         flussConfigs.putAll(securityConfigs);
+        flussConfigs.putAll(fileSystemConfigs);
         return Configuration.fromMap(flussConfigs);
     }
 

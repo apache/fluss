@@ -19,6 +19,8 @@ package org.apache.fluss.lake.source;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /**
@@ -38,6 +40,15 @@ public interface LakeSplit extends java.io.Serializable {
      * @return the bucket id
      */
     int bucket();
+
+    /**
+     * Returns the total number of buckets used to write this split's physical partition, or null if
+     * unknown. This can differ from the table's current bucket count after bucket rescaling.
+     */
+    @Nullable
+    default Integer totalBuckets() {
+        return null;
+    }
 
     /**
      * Returns the hierarchical partition values for this split, or an empty list if the split

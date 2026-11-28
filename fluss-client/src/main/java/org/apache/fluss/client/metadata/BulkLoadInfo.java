@@ -116,6 +116,7 @@ public final class BulkLoadInfo {
     public static final class TargetProgress {
 
         private final @Nullable Long partitionId;
+        private final @Nullable String partitionName;
         private final int bucketCount;
         private final long allocatedBucketCount;
         private final long committedBucketCount;
@@ -123,6 +124,7 @@ public final class BulkLoadInfo {
 
         private TargetProgress(PbBulkLoadTargetProgress progress) {
             partitionId = progress.hasPartitionId() ? progress.getPartitionId() : null;
+            partitionName = progress.hasPartitionName() ? progress.getPartitionName() : null;
             bucketCount = progress.getBucketCount();
             allocatedBucketCount = progress.getAllocatedBucketCount();
             committedBucketCount = progress.getCommittedBucketCount();
@@ -133,6 +135,15 @@ public final class BulkLoadInfo {
         @Nullable
         public Long getPartitionId() {
             return partitionId;
+        }
+
+        /**
+         * Returns the original partition name, including for deleted targets, or null for a
+         * non-partitioned target or a response from an older coordinator.
+         */
+        @Nullable
+        public String getPartitionName() {
+            return partitionName;
         }
 
         /** Returns the number of buckets in the target. */

@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_SECURITY_PREFIX;
 import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
@@ -39,10 +40,13 @@ public class FlinkCatalogFactory implements CatalogFactory {
 
     public static final String IDENTIFIER = "fluss";
 
+    private static final String CLIENT_FILESYSTEM_PREFIX = CLIENT_PREFIX + "fs.";
+
     public static final List<String> PREFIXES_TO_SKIP_VALIDATE = new ArrayList<>();
 
     static {
         PREFIXES_TO_SKIP_VALIDATE.add(CLIENT_SECURITY_PREFIX);
+        PREFIXES_TO_SKIP_VALIDATE.add(CLIENT_FILESYSTEM_PREFIX);
         for (DataLakeFormat value : DataLakeFormat.values()) {
             PREFIXES_TO_SKIP_VALIDATE.add(value.toString());
         }
@@ -83,6 +87,7 @@ public class FlinkCatalogFactory implements CatalogFactory {
                         lakeCatalogProperties.putAll(extractPrefix(options, lakeFormat.toString()));
                     }
                     return lakeCatalogProperties;
-                });
+                },
+                extractPrefix(options, CLIENT_FILESYSTEM_PREFIX));
     }
 }
