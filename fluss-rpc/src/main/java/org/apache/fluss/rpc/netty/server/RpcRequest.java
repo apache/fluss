@@ -27,4 +27,7 @@ public interface RpcRequest {
 
     /** Releases the Netty buffer associated with this request. */
     void releaseBuffer();
+
+    /** Called by the owner that successfully removes this request from the queue. */
+    default void onDequeued() {}
 }

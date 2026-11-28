@@ -114,6 +114,16 @@ public class RequestChannel {
         reconcileBackpressure();
     }
 
+    /** Removes a queued request, returning whether the caller owns its cleanup. */
+    public boolean removeRequest(RpcRequest request) {
+        if (requestQueue.remove(request)) {
+            request.onDequeued();
+            reconcileBackpressure();
+            return true;
+        }
+        return false;
+    }
+
     /**
      * Sends a shutdown request to the channel. This can allow request processor gracefully
      * shutdown.
@@ -134,6 +144,7 @@ public class RequestChannel {
         try {
             RpcRequest request = requestQueue.poll(timeoutMs, TimeUnit.MILLISECONDS);
             if (request != null) {
+                request.onDequeued();
                 reconcileBackpressure();
             }
             return request;
