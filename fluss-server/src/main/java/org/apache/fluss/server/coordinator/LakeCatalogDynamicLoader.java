@@ -98,13 +98,27 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                     if (!key.equals(DATALAKE_FORMAT.key())
                             && !key.equals(DATALAKE_ENABLED.key())
                             && key.startsWith("datalake.")
-                            && !key.startsWith(datalakePrefix)) {
+                            && !key.startsWith(datalakePrefix)
+                            && !isIgnoredByCurrentConfig(key, value)) {
                         throw new ConfigException(
                                 String.format(
                                         "Invalid configuration '%s' for '%s' datalake format",
                                         key, newDatalakeFormat));
                     }
                 });
+    }
+
+    /**
+     * Returns whether the datalake config is already in the current config with the same value
+     * while it doesn't belong to the current datalake format. Such a config, e.g. one from the
+     * static server config which isn't validated on startup, is already ignored by the cluster and
+     * shouldn't make the changes of other configs fail.
+     */
+    private boolean isIgnoredByCurrentConfig(String key, String value) {
+        DataLakeFormat currentDatalakeFormat = currentConfiguration.get(DATALAKE_FORMAT);
+        return currentDatalakeFormat != null
+                && !key.startsWith("datalake." + currentDatalakeFormat + ".")
+                && value.equals(currentConfiguration.toMap().get(key));
     }
 
     @Override

@@ -276,6 +276,58 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testExistingConfigOfOtherLakeFormatDoesNotBlockConfigChanges() throws Exception {
+        // the static server config isn't validated on startup, so it may carry a datalake config
+        // of a format that is not the datalake format of the cluster
+        Configuration configuration = new Configuration();
+        configuration.setString(DATALAKE_FORMAT.key(), "paimon");
+        configuration.setString("datalake.iceberg.type", "rest");
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager = createManager(configuration);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // the existing config is already ignored, it must not block other config changes
+            dynamicConfigManager.alterConfigs(
+                    Collections.singletonList(
+                            new AlterConfig(
+                                    "datalake.paimon.metastore",
+                                    "filesystem",
+                                    AlterConfigOpType.SET)));
+            assertThat(
+                            lakeCatalogDynamicLoader
+                                    .getLakeCatalogContainer()
+                                    .getDefaultTableLakeOptions())
+                    .isEqualTo(
+                            Collections.singletonMap(
+                                    "table.datalake.paimon.metastore", "filesystem"));
+
+            // changing the existing config or adding a new one of another format is still invalid
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "hive",
+                                                            AlterConfigOpType.SET))))
+                    .hasMessage(
+                            "Invalid configuration 'datalake.iceberg.type' for 'paimon' datalake format");
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.warehouse",
+                                                            "/tmp/iceberg",
+                                                            AlterConfigOpType.SET))))
+                    .hasMessage(
+                            "Invalid configuration 'datalake.iceberg.warehouse' for 'paimon' datalake format");
+        }
+    }
+
+    @Test
     void testWrongLakeFormatPrefix() throws Exception {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
