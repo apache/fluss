@@ -64,8 +64,43 @@ class KvSnapshotFileRuleTest {
     }
 
     @Test
+    void keepsInactiveSnapshotFileWhenMtimeIsUnavailable() {
+        FileMeta file = file("/kv/db/t-1/0/snap-5/001.sst", Long.MAX_VALUE);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
+                .isEqualTo(Decision.MTIME_UNAVAILABLE);
+    }
+
+    @Test
     void skipsUnknownFileNameInsideSnapshotDirectory() {
         FileMeta file = file("/kv/db/t-1/0/snap-5/data.bloom", NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
+                .isEqualTo(Decision.SKIP_UNKNOWN);
+    }
+
+    @Test
+    void recognizesRemoteSnapshotUuidFileName() {
+        FileMeta file =
+                file("/kv/db/t-1/0/snap-5/9ba9895d-2c2f-4fba-9e47-1961f30aa90f", NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
+                .isEqualTo(Decision.DELETE);
+    }
+
+    @Test
+    void keepsUuidFileInActiveSnapshot() {
+        FileMeta file =
+                file("/kv/db/t-1/0/snap-5/9ba9895d-2c2f-4fba-9e47-1961f30aa90f", NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, kvActiveSnapDirs("snap-5"), CUTOFF_MS))
+                .isEqualTo(Decision.KEEP_ACTIVE);
+    }
+
+    @Test
+    void rejectsMalformedRemoteSnapshotUuidFileName() {
+        FileMeta file =
+                file("/kv/db/t-1/0/snap-5/9ba9895d-2c2f-4fba-9e47-1961f30aa90x", NOW - 2 * DAY_MS);
 
         assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
                 .isEqualTo(Decision.SKIP_UNKNOWN);

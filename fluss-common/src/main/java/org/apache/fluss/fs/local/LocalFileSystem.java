@@ -22,6 +22,9 @@ import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FileSystemFailure;
+import org.apache.fluss.fs.FileSystemOperationException;
+import org.apache.fluss.fs.FileSystemPathNotFoundException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.utils.OperatingSystem;
@@ -30,13 +33,23 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -65,16 +78,11 @@ public class LocalFileSystem extends FileSystem {
     @Override
     public FileStatus getFileStatus(FsPath f) throws IOException {
         final File path = pathToFile(f);
-        if (path.exists()) {
+        try {
+            Files.readAttributes(path.toPath(), BasicFileAttributes.class);
             return new LocalFileStatus(path, this);
-        } else {
-            throw new FileNotFoundException(
-                    "File "
-                            + f
-                            + " does not exist or the user running "
-                            + "Fluss ('"
-                            + System.getProperty("user.name")
-                            + "') has insufficient permissions to access it.");
+        } catch (IOException failure) {
+            throw normalize(failure, "get_file_status", true);
         }
     }
 
@@ -91,85 +99,125 @@ public class LocalFileSystem extends FileSystem {
     @Override
     public FSDataInputStream open(final FsPath f) throws IOException {
         final File file = pathToFile(f);
-        return new LocalDataInputStream(file);
+        try {
+            return new LocalDataInputStream(file);
+        } catch (FileNotFoundException failure) {
+            try (SeekableByteChannel ignored =
+                    Files.newByteChannel(file.toPath(), StandardOpenOption.READ)) {
+                // A successful probe does not explain the earlier failure.
+            } catch (NoSuchFileException missing) {
+                failure.addSuppressed(missing);
+                throw new FileSystemPathNotFoundException("open", null, null, failure);
+            } catch (AccessDeniedException denied) {
+                failure.addSuppressed(denied);
+                throw new FileSystemOperationException(
+                        FileSystemFailure.Kind.PERMISSION_DENIED,
+                        FileSystemFailure.Resource.UNKNOWN,
+                        "open",
+                        false,
+                        null,
+                        null,
+                        failure);
+            } catch (IOException probeFailure) {
+                failure.addSuppressed(probeFailure);
+                throw normalize(failure, "open", false);
+            }
+            throw normalize(failure, "open", false);
+        } catch (IOException failure) {
+            throw normalize(failure, "open", false);
+        }
     }
 
     @Override
     public boolean exists(FsPath f) throws IOException {
-        final File path = pathToFile(f);
-        return path.exists();
+        return super.exists(f);
     }
 
     @Override
     public FileStatus[] listStatus(final FsPath f) throws IOException {
 
-        final File localf = pathToFile(f);
-        FileStatus[] results;
-
-        if (!localf.exists()) {
-            return null;
+        final Path path = pathToFile(f).toPath();
+        BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(path, BasicFileAttributes.class);
+        } catch (IOException failure) {
+            throw normalize(failure, "list_status", true);
         }
-        if (localf.isFile()) {
-            return new FileStatus[] {new LocalFileStatus(localf, this)};
-        }
-
-        final String[] names = localf.list();
-        if (names == null) {
-            return null;
-        }
-        results = new FileStatus[names.length];
-        for (int i = 0; i < names.length; i++) {
-            results[i] = getFileStatus(new FsPath(f, names[i]));
+        if (!attributes.isDirectory()) {
+            return new FileStatus[] {new LocalFileStatus(path.toFile(), this)};
         }
 
-        return results;
+        List<FileStatus> results = new ArrayList<FileStatus>();
+        boolean childDisappeared = false;
+        try (DirectoryStream<Path> children = Files.newDirectoryStream(path)) {
+            for (Path child : children) {
+                try {
+                    Files.readAttributes(child, BasicFileAttributes.class);
+                    results.add(new LocalFileStatus(child.toFile(), this));
+                } catch (NoSuchFileException ignored) {
+                    childDisappeared = true;
+                }
+            }
+        } catch (DirectoryIteratorException failure) {
+            throw normalize(failure.getCause(), "list_status", false);
+        } catch (IOException failure) {
+            throw normalize(failure, "list_status", true);
+        }
+        if (childDisappeared) {
+            try {
+                Files.readAttributes(path, BasicFileAttributes.class);
+            } catch (IOException failure) {
+                throw normalize(failure, "list_status", true);
+            }
+        }
+        return results.toArray(new FileStatus[0]);
     }
 
     @Override
     public boolean delete(final FsPath f, final boolean recursive) throws IOException {
-
-        final File file = pathToFile(f);
-        if (file.isFile()) {
-            return file.delete();
-        } else if ((!recursive) && file.isDirectory()) {
-            File[] containedFiles = file.listFiles();
-            if (containedFiles == null) {
-                throw new IOException(
-                        "Directory " + file + " does not exist or an I/O error occurred");
-            } else if (containedFiles.length != 0) {
-                throw new IOException("Directory " + file + " is not empty");
+        final Path path = pathToFile(f).toPath();
+        try {
+            if (!recursive) {
+                return Files.deleteIfExists(path);
             }
-        }
-
-        return delete(file);
-    }
-
-    /**
-     * Deletes the given file or directory.
-     *
-     * @param f the file to be deleted
-     * @return <code>true</code> if all files were deleted successfully, <code>false</code>
-     *     otherwise
-     * @throws IOException thrown if an error occurred while deleting the files/directories
-     */
-    private boolean delete(final File f) throws IOException {
-
-        if (f.isDirectory()) {
-            final File[] files = f.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    final boolean del = delete(file);
-                    if (!del) {
-                        return false;
-                    }
-                }
+            try {
+                Files.readAttributes(path, BasicFileAttributes.class);
+            } catch (NoSuchFileException ignored) {
+                return false;
             }
-        } else {
-            return f.delete();
-        }
+            Files.walkFileTree(
+                    path,
+                    new SimpleFileVisitor<Path>() {
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                                throws IOException {
+                            Files.deleteIfExists(file);
+                            return FileVisitResult.CONTINUE;
+                        }
 
-        // Now directory is empty
-        return f.delete();
+                        @Override
+                        public FileVisitResult visitFileFailed(Path file, IOException failure)
+                                throws IOException {
+                            if (failure instanceof NoSuchFileException) {
+                                return FileVisitResult.CONTINUE;
+                            }
+                            throw failure;
+                        }
+
+                        @Override
+                        public FileVisitResult postVisitDirectory(
+                                Path directory, IOException failure) throws IOException {
+                            if (failure != null) {
+                                throw failure;
+                            }
+                            Files.deleteIfExists(directory);
+                            return FileVisitResult.CONTINUE;
+                        }
+                    });
+            return true;
+        } catch (IOException failure) {
+            throw normalize(failure, "delete", false);
+        }
     }
 
     /**
@@ -182,22 +230,13 @@ public class LocalFileSystem extends FileSystem {
     @Override
     public boolean mkdirs(final FsPath f) throws IOException {
         checkNotNull(f, "path is null");
-        return mkdirsInternal(pathToFile(f));
-    }
-
-    private boolean mkdirsInternal(File file) throws IOException {
-        if (file.isDirectory()) {
+        try {
+            Files.createDirectories(pathToFile(f).toPath());
             return true;
-        } else if (file.exists() && !file.isDirectory()) {
-            // Important: The 'exists()' check above must come before the 'isDirectory()' check to
-            //            be safe when multiple parallel instances try to create the directory
-
-            // exists and is not a directory -> is a regular file
-            throw new FileAlreadyExistsException(file.getAbsolutePath());
-        } else {
-            File parent = file.getParentFile();
-            return (parent == null || mkdirsInternal(parent))
-                    && (file.mkdir() || file.isDirectory());
+        } catch (FileAlreadyExistsException failure) {
+            throw failure;
+        } catch (IOException failure) {
+            throw normalize(failure, "mkdirs", false);
         }
     }
 
@@ -206,17 +245,22 @@ public class LocalFileSystem extends FileSystem {
             throws IOException {
         checkNotNull(filePath, "filePath");
 
-        if (exists(filePath) && overwrite == WriteMode.NO_OVERWRITE) {
-            throw new FileAlreadyExistsException("File already exists: " + filePath);
-        }
+        try {
+            if (exists(filePath) && overwrite == WriteMode.NO_OVERWRITE) {
+                throw new FileAlreadyExistsException("File already exists: " + filePath);
+            }
 
-        final FsPath parent = filePath.getParent();
-        if (parent != null && !mkdirs(parent)) {
-            throw new IOException("Mkdirs failed to create " + parent);
-        }
+            final FsPath parent = filePath.getParent();
+            if (parent != null) {
+                mkdirs(parent);
+            }
 
-        final File file = pathToFile(filePath);
-        return new LocalDataOutputStream(file);
+            return new LocalDataOutputStream(pathToFile(filePath));
+        } catch (FileAlreadyExistsException failure) {
+            throw failure;
+        } catch (IOException failure) {
+            throw normalize(failure, "create", false);
+        }
     }
 
     @Override
@@ -226,21 +270,38 @@ public class LocalFileSystem extends FileSystem {
 
         final File dstParent = dstFile.getParentFile();
 
-        // Files.move fails if the destination directory doesn't exist
-        //noinspection ResultOfMethodCallIgnored -- we don't care if the directory existed or was
-        // created
-        dstParent.mkdirs();
-
         try {
+            Files.createDirectories(dstParent.toPath());
             Files.move(srcFile.toPath(), dstFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             return true;
-        } catch (NoSuchFileException
-                | AccessDeniedException
-                | DirectoryNotEmptyException
-                | SecurityException ex) {
-            // catch the errors that are regular "move failed" exceptions and return false
+        } catch (NoSuchFileException failure) {
+            if (Files.notExists(srcFile.toPath())) {
+                return false;
+            }
+            throw normalize(failure, "rename", false);
+        } catch (DirectoryNotEmptyException failure) {
             return false;
+        } catch (IOException failure) {
+            throw normalize(failure, "rename", false);
         }
+    }
+
+    private static IOException normalize(
+            IOException failure, String operation, boolean targetPath) {
+        if (failure instanceof FileSystemFailure) {
+            return failure;
+        }
+        if (targetPath && failure instanceof NoSuchFileException) {
+            return new FileSystemPathNotFoundException(operation, null, null, failure);
+        }
+        FileSystemFailure.Kind kind =
+                failure instanceof AccessDeniedException
+                        ? FileSystemFailure.Kind.PERMISSION_DENIED
+                        : failure instanceof NoSuchFileException
+                                ? FileSystemFailure.Kind.NOT_FOUND
+                                : FileSystemFailure.Kind.UNEXPECTED;
+        return new FileSystemOperationException(
+                kind, FileSystemFailure.Resource.UNKNOWN, operation, false, null, null, failure);
     }
 
     // ------------------------------------------------------------------------

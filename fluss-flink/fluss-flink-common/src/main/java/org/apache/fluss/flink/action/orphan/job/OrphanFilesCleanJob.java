@@ -76,7 +76,9 @@ public final class OrphanFilesCleanJob {
                         .process(
                                 new ScanAndCleanFunction(
                                         config.remoteFsOpRateLimitPerSecond(),
-                                        config.extraConfigs()))
+                                        config.extraConfigs(),
+                                        config.dryRun(),
+                                        config.resultAudit()))
                         .returns(TypeInformation.of(new TypeHint<CleanStats>() {}))
                         .name("ScanAndClean");
         if (parallelism != null) {
@@ -88,7 +90,7 @@ public final class OrphanFilesCleanJob {
                 stats.transform(
                                 "StatsAggregate",
                                 TypeInformation.of(new TypeHint<CleanStats>() {}),
-                                new StatsAggregateOperator(config.dryRun()))
+                                new StatsAggregateOperator(config.dryRun(), config.resultAudit()))
                         .setParallelism(1)
                         .setMaxParallelism(1);
 
