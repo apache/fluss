@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.CollectionUtils.findDuplicates;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -186,10 +187,7 @@ public final class RowType extends DataType {
             throw new IllegalArgumentException(
                     "Field names must contain at least one non-whitespace character.");
         }
-        final Set<String> duplicates =
-                fieldNames.stream()
-                        .filter(n -> Collections.frequency(fieldNames, n) > 1)
-                        .collect(Collectors.toSet());
+        final Set<String> duplicates = findDuplicates(fieldNames);
         if (!duplicates.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format("Field names must be unique. Found duplicates: %s", duplicates));
