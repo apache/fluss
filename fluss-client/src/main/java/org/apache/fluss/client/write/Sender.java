@@ -25,6 +25,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -58,7 +59,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
@@ -121,6 +124,15 @@ public class Sender implements Runnable {
 
     private final WriterMetricGroup writerMetricGroup;
 
+    private final DynamicPartitionCreator dynamicPartitionCreator;
+
+    /**
+     * Partitions that the coordinator refused to create as invalid. Partition creation callbacks
+     * add them, and the sender thread fails the writes to them.
+     */
+    private final Map<PhysicalTablePath, RejectedPartition> rejectedPartitions =
+            new ConcurrentHashMap<>();
+
     public Sender(
             RecordAccumulator accumulator,
             int maxRequestTimeoutMs,
@@ -129,7 +141,8 @@ public class Sender implements Runnable {
             int retries,
             MetadataUpdater metadataUpdater,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup) {
+            WriterMetricGroup writerMetricGroup,
+            DynamicPartitionCreator dynamicPartitionCreator) {
         this.accumulator = accumulator;
         this.maxRequestSize = maxRequestSize;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -143,6 +156,7 @@ public class Sender implements Runnable {
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
+        this.dynamicPartitionCreator = dynamicPartitionCreator;
 
         // TODO add retry logic while send failed. See FLUSS-56364375
     }
@@ -252,7 +266,38 @@ public class Sender implements Runnable {
         }
     }
 
+    /**
+     * Handles the result of a request to create a partition, see {@link
+     * DynamicPartitionCreator.PartitionCreationListener}.
+     */
+    void onPartitionCreationCompleted(
+            PhysicalTablePath physicalTablePath,
+            long tableId,
+            @Nullable InvalidPartitionException rejection) {
+        if (rejection != null) {
+            rejectedPartitions.put(physicalTablePath, new RejectedPartition(tableId, rejection));
+            wakeup();
+        } else {
+            // Creating the partition later supersedes an earlier rejection.
+            rejectedPartitions.computeIfPresent(
+                    physicalTablePath,
+                    (path, rejected) -> rejected.tableId == tableId ? null : rejected);
+        }
+    }
+
     private void sendWriteData() throws Exception {
+        for (Map.Entry<PhysicalTablePath, RejectedPartition> rejected :
+                rejectedPartitions.entrySet()) {
+            if (rejectedPartitions.remove(rejected.getKey(), rejected.getValue())) {
+                long tableId = rejected.getValue().tableId;
+                // A rejection for a dropped table doesn't fail writes to the re-created one.
+                abortBatches(
+                        rejected.getKey(),
+                        batch -> batch.tableId() == tableId,
+                        rejected.getValue().cause);
+            }
+        }
+
         Cluster clusterSnapshot = metadataUpdater.getCluster();
 
         // Reclaim stale per-bucket throttle state before checking send readiness.
@@ -260,6 +305,16 @@ public class Sender implements Runnable {
 
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
+
+        // Handle re-created partitions before draining, which would otherwise send their batches
+        // to the new partition with the dropped partition's bucket layout.
+        for (Map.Entry<PhysicalTablePath, Long> recreatedPartition :
+                readyCheckResult.recreatedPartitionPreviousIds.entrySet()) {
+            handleRecreatedPartition(
+                    recreatedPartition.getKey(),
+                    recreatedPartition.getValue(),
+                    clusterSnapshot.getPartitionIdOrElseThrow(recreatedPartition.getKey()));
+        }
 
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
@@ -864,28 +919,118 @@ public class Sender implements Runnable {
     }
 
     /**
-     * Rechecks unknown-leader partitions after a bulk metadata update reports {@link
-     * PartitionNotExistException}, and handles missing partitions for tables with historical
-     * partition support.
+     * Refreshes unknown-leader partitions one by one after a bulk metadata update reports {@link
+     * PartitionNotExistException}, so a missing partition doesn't hold up the other targets, and
+     * handles the partitions that are still missing.
      */
-    private void handlePartitionNotExistException(Set<PhysicalTablePath> unknownLeaderTables) {
-        for (PhysicalTablePath targetPath : unknownLeaderTables) {
-            if (!accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
+    private void handlePartitionNotExistException(Set<PhysicalTablePath> unknownLeaderTargets) {
+        Set<PhysicalTablePath> nonPartitionedTables = new HashSet<>();
+        for (PhysicalTablePath targetPath : unknownLeaderTargets) {
+            if (targetPath.getPartitionName() == null) {
+                nonPartitionedTables.add(targetPath);
                 continue;
             }
+            // A cached partition ID would skip the refresh that detects a dropped partition.
             metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
                     Collections.singleton(targetPath));
             try {
                 metadataUpdater.checkAndUpdatePartitionMetadata(targetPath);
             } catch (Exception e) {
                 Throwable t = ExceptionUtils.stripExecutionException(e);
-                if (t instanceof PartitionNotExistException) {
-                    handleMissingPartition(targetPath, t);
-                    continue;
+                if (!(t instanceof PartitionNotExistException)) {
+                    throw e;
                 }
-                throw e;
+                if (accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
+                    handleMissingPartition(targetPath, t);
+                } else {
+                    createPartitionOrAbortWrites(targetPath, t);
+                }
             }
         }
+        // Refreshing tables can't fail with PartitionNotExistException, so they share one request.
+        if (!nonPartitionedTables.isEmpty()) {
+            metadataUpdater.updatePhysicalTableMetadata(nonPartitionedTables);
+        }
+    }
+
+    /**
+     * Handles a write target of a table without historical partition support after refreshed
+     * metadata confirms that it doesn't exist. As for a new partition on write, it is created when
+     * dynamic partition creation is enabled, otherwise its batches fail. Its batches fail either
+     * way if any of them may have been sent to the dropped partition, see {@link
+     * #abortWritesIfAnyMayHaveBeenSent}.
+     */
+    private void createPartitionOrAbortWrites(PhysicalTablePath targetPath, Throwable cause) {
+        if (!abortWritesIfAnyMayHaveBeenSent(
+                targetPath,
+                "refreshed metadata confirms that the partition no longer exists",
+                cause)) {
+            try {
+                dynamicPartitionCreator.createMissingPartitionAsync(
+                        targetPath, accumulator.getTableInfo(targetPath));
+            } catch (PartitionNotExistException e) {
+                abortBatches(targetPath, e);
+            }
+        }
+        // The partition may be re-created with a different bucket count, by the creation above or
+        // by a later write.
+        accumulator.invalidateBucketLayout(targetPath);
+    }
+
+    /**
+     * Handles a write target whose partition was dropped and re-created, e.g. by another client,
+     * after its bucket layout was resolved. As when this writer re-creates the partition, its
+     * batches fail if any of them may have been sent to the dropped partition, and the others are
+     * sent once the bucket layout of the new partition is resolved.
+     */
+    private void handleRecreatedPartition(
+            PhysicalTablePath targetPath, long droppedPartitionId, long partitionId) {
+        LOG.info(
+                "Partition {} was dropped and re-created with ID {} (previously {}), resolving "
+                        + "its bucket layout again.",
+                targetPath,
+                partitionId,
+                droppedPartitionId);
+        abortWritesIfAnyMayHaveBeenSent(
+                targetPath,
+                String.format(
+                        "the partition was dropped and re-created with ID %d (previously %d)",
+                        partitionId, droppedPartitionId),
+                null);
+        accumulator.invalidateBucketLayout(targetPath);
+    }
+
+    /**
+     * Fails all writes to {@code targetPath} after its partition was dropped if any of them may
+     * have been sent to the dropped partition, and returns whether they failed.
+     *
+     * <p>They may have been sent if an idempotent writer has assigned batch sequences to them, and
+     * resending the sequences to a re-created partition could break idempotence. They may also have
+     * been sent if requests to the partition are still in flight, and their batches could be
+     * re-enqueued after the bucket layout of a re-created partition is resolved.
+     */
+    private boolean abortWritesIfAnyMayHaveBeenSent(
+            PhysicalTablePath targetPath, String reason, @Nullable Throwable cause) {
+        String consequence;
+        if (accumulator.hasSequencedBatches(targetPath)) {
+            consequence =
+                    ", and resending writes that may already have been sent to the dropped "
+                            + "partition to a re-created partition could break idempotence.";
+        } else if (hasInFlightBatches(targetPath)) {
+            consequence = " while requests to the dropped partition are still in flight.";
+        } else {
+            return false;
+        }
+        abortBatches(
+                targetPath,
+                newPartitionNotExistException(
+                        "Cannot continue writes to "
+                                + targetPath
+                                + " because "
+                                + reason
+                                + consequence,
+                        cause));
+        return true;
     }
 
     /**
@@ -963,15 +1108,17 @@ public class Sender implements Runnable {
 
     /** Returns whether a request to {@code targetPath} is still awaiting a response. */
     private boolean hasInFlightBatches(PhysicalTablePath targetPath) {
-        return !getInFlightBatches(targetPath).isEmpty();
+        return !getInFlightBatches(targetPath, batch -> true).isEmpty();
     }
 
-    private List<ReadyWriteBatch> getInFlightBatches(PhysicalTablePath targetPath) {
+    private List<ReadyWriteBatch> getInFlightBatches(
+            PhysicalTablePath targetPath, Predicate<WriteBatch> filter) {
         List<ReadyWriteBatch> matchedBatches = new ArrayList<>();
         synchronized (inFlightBatchesLock) {
             for (List<ReadyWriteBatch> batches : inFlightBatches.values()) {
                 for (ReadyWriteBatch batch : batches) {
-                    if (batch.writeBatch().writeTargetPath().equals(targetPath)) {
+                    if (batch.writeBatch().writeTargetPath().equals(targetPath)
+                            && filter.test(batch.writeBatch())) {
                         matchedBatches.add(batch);
                     }
                 }
@@ -980,10 +1127,22 @@ public class Sender implements Runnable {
         return matchedBatches;
     }
 
-    private void abortBatches(PhysicalTablePath targetPath, PartitionNotExistException exception) {
-        List<ReadyWriteBatch> matchingInFlightBatches = getInFlightBatches(targetPath);
+    private void abortBatches(PhysicalTablePath targetPath, Exception exception) {
+        abortBatches(targetPath, batch -> true, exception);
+    }
+
+    private void abortBatches(
+            PhysicalTablePath targetPath, Predicate<WriteBatch> filter, Exception exception) {
+        List<ReadyWriteBatch> matchingInFlightBatches = getInFlightBatches(targetPath, filter);
         // Make the batches terminal before detaching their in-flight bookkeeping.
-        accumulator.abortBatches(targetPath, exception);
+        int numAborted = accumulator.abortBatches(targetPath, filter, exception);
+        if (numAborted > 0) {
+            LOG.warn(
+                    "Failed {} write batches to {}: {}",
+                    numAborted,
+                    targetPath,
+                    exception.getMessage());
+        }
         for (ReadyWriteBatch batch : matchingInFlightBatches) {
             maybeRemoveFromInflightBatches(batch);
             if (idempotenceManager.idempotenceEnabled()) {
@@ -1100,6 +1259,17 @@ public class Sender implements Runnable {
         @Override
         public int hashCode() {
             return Objects.hash(tableBucket, originalPartitionName);
+        }
+    }
+
+    /** A partition that the coordinator refused to create as invalid for a table instance. */
+    private static final class RejectedPartition {
+        private final long tableId;
+        private final InvalidPartitionException cause;
+
+        private RejectedPartition(long tableId, InvalidPartitionException cause) {
+            this.tableId = tableId;
+            this.cause = cause;
         }
     }
 }
