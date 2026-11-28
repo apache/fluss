@@ -45,27 +45,35 @@ public class UnshadedZstdArrowCompressionCodec extends AbstractCompressionCodec 
 
         long compressedSize = CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH + maxSize;
         ArrowBuf compressedBuffer = allocator.buffer(compressedSize);
-        ByteBuffer compressedDirectBuffer =
-                compressedBuffer.nioBuffer(
-                        CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH, (int) maxSize);
+        boolean success = false;
+        try {
+            ByteBuffer compressedDirectBuffer =
+                    compressedBuffer.nioBuffer(
+                            CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH, (int) maxSize);
 
-        long bytesWritten =
-                Zstd.compressDirectByteBuffer(
-                        compressedDirectBuffer,
-                        0,
-                        (int) maxSize,
-                        uncompressedDirectBuffer,
-                        0,
-                        (int) uncompressedBuffer.writerIndex(),
-                        compressionLevel);
+            long bytesWritten =
+                    Zstd.compressDirectByteBuffer(
+                            compressedDirectBuffer,
+                            0,
+                            (int) maxSize,
+                            uncompressedDirectBuffer,
+                            0,
+                            (int) uncompressedBuffer.writerIndex(),
+                            compressionLevel);
 
-        if (Zstd.isError(bytesWritten)) {
-            compressedBuffer.close();
-            throw new RuntimeException("Error compressing: " + Zstd.getErrorName(bytesWritten));
+            if (Zstd.isError(bytesWritten)) {
+                throw new RuntimeException("Error compressing: " + Zstd.getErrorName(bytesWritten));
+            }
+
+            compressedBuffer.writerIndex(
+                    CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH + bytesWritten);
+            success = true;
+            return compressedBuffer;
+        } finally {
+            if (!success) {
+                compressedBuffer.close();
+            }
         }
-
-        compressedBuffer.writerIndex(CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH + bytesWritten);
-        return compressedBuffer;
     }
 
     @Override
@@ -74,35 +82,41 @@ public class UnshadedZstdArrowCompressionCodec extends AbstractCompressionCodec 
 
         ByteBuffer compressedDirectBuffer = compressedBuffer.nioBuffer();
         ArrowBuf uncompressedBuffer = allocator.buffer(decompressedLength);
-        ByteBuffer uncompressedDirectBuffer =
-                uncompressedBuffer.nioBuffer(0, (int) decompressedLength);
+        boolean success = false;
+        try {
+            ByteBuffer uncompressedDirectBuffer =
+                    uncompressedBuffer.nioBuffer(0, (int) decompressedLength);
 
-        long decompressedSize =
-                Zstd.decompressDirectByteBuffer(
-                        uncompressedDirectBuffer,
-                        0,
-                        (int) decompressedLength,
-                        compressedDirectBuffer,
-                        (int) CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
-                        (int)
-                                (compressedBuffer.writerIndex()
-                                        - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH));
-        if (Zstd.isError(decompressedSize)) {
-            uncompressedBuffer.close();
-            throw new RuntimeException(
-                    "Error decompressing: " + Zstd.getErrorName(decompressedSize));
-        }
+            long decompressedSize =
+                    Zstd.decompressDirectByteBuffer(
+                            uncompressedDirectBuffer,
+                            0,
+                            (int) decompressedLength,
+                            compressedDirectBuffer,
+                            (int) CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH,
+                            (int)
+                                    (compressedBuffer.writerIndex()
+                                            - CompressionUtil.SIZE_OF_UNCOMPRESSED_LENGTH));
+            if (Zstd.isError(decompressedSize)) {
+                throw new RuntimeException(
+                        "Error decompressing: " + Zstd.getErrorName(decompressedSize));
+            }
 
-        if (decompressedLength != decompressedSize) {
-            uncompressedBuffer.close();
-            throw new RuntimeException(
-                    "Expected != actual decompressed length: "
-                            + decompressedLength
-                            + " != "
-                            + decompressedSize);
+            if (decompressedLength != decompressedSize) {
+                throw new RuntimeException(
+                        "Expected != actual decompressed length: "
+                                + decompressedLength
+                                + " != "
+                                + decompressedSize);
+            }
+            uncompressedBuffer.writerIndex(decompressedLength);
+            success = true;
+            return uncompressedBuffer;
+        } finally {
+            if (!success) {
+                uncompressedBuffer.close();
+            }
         }
-        uncompressedBuffer.writerIndex(decompressedLength);
-        return uncompressedBuffer;
     }
 
     @Override

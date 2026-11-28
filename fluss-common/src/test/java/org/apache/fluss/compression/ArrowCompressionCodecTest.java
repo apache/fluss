@@ -35,12 +35,16 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowTyp
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 
+import com.github.luben.zstd.Zstd;
+import com.github.luben.zstd.ZstdException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -49,6 +53,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Test for arrow compression codec, such as {@link ZstdArrowCompressionCodec} and {@link
@@ -65,6 +70,64 @@ class ArrowCompressionCodecTest {
     @AfterEach
     void tearDown() {
         allocator.close();
+    }
+
+    @Test
+    void testZstdCompressionReleasesOutputOnException() {
+        ZstdArrowCompressionCodec codec = new ZstdArrowCompressionCodec();
+        try (ArrowBuf input = allocator.buffer(32)) {
+            input.setZero(0, 32);
+            input.writerIndex(32);
+            // The NIO view is shorter than writerIndex, causing Zstd's bounds check to throw.
+            input.readerIndex(1);
+            long allocatedMemory = allocator.getAllocatedMemory();
+
+            assertThatThrownBy(() -> codec.doCompress(allocator, input))
+                    .isInstanceOf(IndexOutOfBoundsException.class);
+
+            assertThat(allocator.getAllocatedMemory()).isEqualTo(allocatedMemory);
+            assertThat(input.refCnt()).isEqualTo(1);
+        }
+        assertThat(allocator.getAllocatedMemory()).isZero();
+    }
+
+    @Test
+    void testZstdDecompressionReleasesOutputOnException() {
+        ZstdArrowCompressionCodec codec = new ZstdArrowCompressionCodec();
+        try (ArrowBuf input = allocator.buffer(16)) {
+            input.setZero(0, 16);
+            input.nioBuffer(0, Long.BYTES).order(ByteOrder.LITTLE_ENDIAN).putLong(32);
+            input.writerIndex(16);
+            long allocatedMemory = allocator.getAllocatedMemory();
+
+            // The payload is not a valid Zstd frame, so Zstd throws instead of returning a code.
+            assertThatThrownBy(() -> codec.doDecompress(allocator, input))
+                    .isInstanceOf(ZstdException.class);
+
+            assertThat(allocator.getAllocatedMemory()).isEqualTo(allocatedMemory);
+            assertThat(input.refCnt()).isEqualTo(1);
+        }
+        assertThat(allocator.getAllocatedMemory()).isZero();
+    }
+
+    @Test
+    void testZstdDecompressionReleasesOutputOnLengthMismatch() {
+        ZstdArrowCompressionCodec codec = new ZstdArrowCompressionCodec();
+        byte[] compressed = Zstd.compress(new byte[32]);
+        try (ArrowBuf input = allocator.buffer(Long.BYTES + compressed.length)) {
+            input.nioBuffer(0, Long.BYTES).order(ByteOrder.LITTLE_ENDIAN).putLong(64);
+            input.setBytes(Long.BYTES, compressed);
+            input.writerIndex(Long.BYTES + compressed.length);
+            long allocatedMemory = allocator.getAllocatedMemory();
+
+            assertThatThrownBy(() -> codec.doDecompress(allocator, input))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessage("Expected != actual decompressed length: 64 != 32");
+
+            assertThat(allocator.getAllocatedMemory()).isEqualTo(allocatedMemory);
+            assertThat(input.refCnt()).isEqualTo(1);
+        }
+        assertThat(allocator.getAllocatedMemory()).isZero();
     }
 
     @ParameterizedTest
