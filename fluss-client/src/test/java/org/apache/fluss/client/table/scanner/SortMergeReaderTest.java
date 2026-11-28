@@ -37,6 +37,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -106,6 +108,107 @@ class SortMergeReaderTest {
                         : CloseableIterator.wrap(
                                 expectedLogRecords.stream().map(LogRecord::getRow).iterator());
         assertThat(actualRows).isEqualTo(materializeRows(expected, fieldGetters));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReadBatchWithInterleavedSnapshots(boolean withChangeLog) {
+        int[] pkIndexes = new int[] {0};
+        List<LogRecord> snapshotRecords = createRecords(0, 6, false);
+        LogRecord updatedRecord = createRecords(4, 1, true).get(0);
+        List<KeyValueRow> changeLogRecords = new ArrayList<>();
+        List<LogRecord> expectedRecords = new ArrayList<>(snapshotRecords);
+        if (withChangeLog) {
+            changeLogRecords.addAll(createDeleteRecords(pkIndexes, Arrays.asList(1)));
+            changeLogRecords.add(new KeyValueRow(pkIndexes, updatedRecord.getRow(), false));
+            expectedRecords.remove(1);
+            expectedRecords.set(3, updatedRecord);
+        }
+
+        SortMergeReader reader =
+                new SortMergeReader(
+                        null,
+                        pkIndexes,
+                        Arrays.asList(
+                                CloseableIterator.wrap(
+                                        Arrays.asList(
+                                                        snapshotRecords.get(0),
+                                                        snapshotRecords.get(3))
+                                                .iterator()),
+                                CloseableIterator.emptyIterator(),
+                                CloseableIterator.wrap(
+                                        Arrays.asList(
+                                                        snapshotRecords.get(1),
+                                                        snapshotRecords.get(4))
+                                                .iterator()),
+                                CloseableIterator.wrap(
+                                        Arrays.asList(
+                                                        snapshotRecords.get(2),
+                                                        snapshotRecords.get(5))
+                                                .iterator())),
+                        new FlussRowComparator(0),
+                        CloseableIterator.wrap(changeLogRecords.iterator()));
+
+        InternalRow.FieldGetter[] fieldGetters =
+                InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType(), new StringType()));
+        try (CloseableIterator<InternalRow> iterator = reader.readBatch()) {
+            assertThat(materializeRows(iterator, fieldGetters))
+                    .containsExactlyElementsOf(
+                            expectedRecords.stream()
+                                    .map(LogRecord::getRow)
+                                    .collect(Collectors.toList()));
+        }
+        assertThat(reader.readBatch()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReadBatchPreservesReusedSnapshotRowAndClosesIterator(boolean consumeAll) {
+        AtomicBoolean closed = new AtomicBoolean();
+        CloseableIterator<LogRecord> snapshotRecords =
+                new CloseableIterator<LogRecord>() {
+                    private final GenericRow reusedRow = row(0);
+                    private int nextKey;
+
+                    @Override
+                    public void close() {
+                        closed.set(true);
+                    }
+
+                    @Override
+                    public boolean hasNext() {
+                        return nextKey < 4;
+                    }
+
+                    @Override
+                    public LogRecord next() {
+                        if (!hasNext()) {
+                            throw new NoSuchElementException();
+                        }
+                        reusedRow.setField(0, nextKey);
+                        nextKey += 2;
+                        return new ScanRecord(reusedRow);
+                    }
+                };
+        SortMergeReader reader =
+                new SortMergeReader(
+                        null,
+                        new int[] {0},
+                        snapshotRecords,
+                        new FlussRowComparator(0),
+                        CloseableIterator.emptyIterator());
+
+        try (CloseableIterator<InternalRow> iterator = reader.readBatch()) {
+            assertThat(iterator.hasNext()).isTrue();
+            assertThat(iterator.hasNext()).isTrue();
+            assertThat(iterator.next().getInt(0)).isZero();
+            if (consumeAll) {
+                assertThat(iterator.next().getInt(0)).isEqualTo(2);
+                assertThat(iterator.hasNext()).isFalse();
+            }
+        }
+        assertThat(closed).isTrue();
     }
 
     @Test
