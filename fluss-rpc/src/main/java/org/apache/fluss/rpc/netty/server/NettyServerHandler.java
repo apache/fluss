@@ -105,7 +105,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         CompletableFuture<ApiMessage> future = new CompletableFuture<>();
-        ByteBuf buffer = (ByteBuf) msg;
+        FairRequestFrameDecoder.BufferedFrames delayed =
+                msg instanceof FairRequestFrameDecoder.BufferedFrames
+                        ? (FairRequestFrameDecoder.BufferedFrames) msg
+                        : null;
+        ByteBuf buffer = delayed == null ? (ByteBuf) msg : delayed.content();
         int frameLength = buffer.readInt();
         short apiKey = buffer.readShort();
         short apiVersion = buffer.readShort();
@@ -143,7 +147,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             isInternal,
                             authenticator.isCompleted() ? authenticator.createPrincipal() : null,
                             ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
-                            future);
+                            future,
+                            delayed == null ? System.currentTimeMillis() : delayed.receivedAtMs);
 
             // Reject requests from inactive connections before they enter the request queue. Lazy
             // requests retain the underlying ByteBuf and rely on the request processor to release
@@ -156,15 +161,15 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             }
 
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
-            if (apiKey == ApiKeys.AUTHENTICATE.id
-                    || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
+            if (handlesAuthenticationInline(apiKey)) {
                 // handle to authentication for 3 cases:
                 // 1. the channel is in authing state, and the request is auth request, normal case
                 // 2. the channel is in authentication state, but receive non-auth request, error
                 // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
-            } else {
-                requestChannel.putRequest(request);
+            } else if (!requestChannel.offerFlussRequest(ctx.channel(), request)) {
+                needRelease = true;
+                request.fail(new NetworkException("Request processor is shutting down"));
             }
 
         } catch (Throwable t) {
@@ -176,6 +181,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 buffer.release();
             }
         }
+    }
+
+    boolean handlesAuthenticationInline(short apiKey) {
+        return apiKey == ApiKeys.AUTHENTICATE.id
+                || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id);
     }
 
     @Override
@@ -244,7 +254,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private void sendResponse(ChannelHandlerContext ctx, FlussRequest request) {
         boolean cancelled = request.cancelled();
         if (cancelled) {
-            request.releaseBuffer();
+            request.releaseBufferFromResponse();
         }
 
         if (state.isActive()) {
@@ -256,7 +266,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 sendError(ctx, request, t);
             }
         } else {
-            request.releaseBuffer();
+            request.releaseBufferFromResponse();
         }
     }
 

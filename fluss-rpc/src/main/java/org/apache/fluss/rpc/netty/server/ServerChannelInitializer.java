@@ -31,6 +31,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.utils.MathUtils;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,27 +103,35 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
             // write before SslHandler does.
             ch.pipeline().addAfter("ssl", "fileRegionToByteBuf", new TlsFileRegionHandler());
         }
-        // initialBytesToStrip=0 to include the frame size field after decoding
-        addFrameDecoder(ch, maxRequestSize, 0, false);
-        addIdleStateHandler(ch);
+        RequestChannel requestChannel =
+                requestChannels[MathUtils.murmurHash(ch.id().hashCode()) % requestChannels.length];
         ServerAuthenticator serverAuthenticator = authenticatorSupplier.get();
         LOG.debug(
                 "initial a channel for listener {} with protocol {}",
                 endpointListenerName,
                 serverAuthenticator.protocol());
-        // TODO: we can introduce a smarter and dynamic strategy to distribute requests to channels
-        ch.pipeline()
-                .addLast(
-                        "handler",
-                        new NettyServerHandler(
-                                requestChannels[
-                                        MathUtils.murmurHash(ch.id().hashCode())
-                                                % requestChannels.length],
-                                apiManager,
-                                endpointListenerName,
-                                isInternal,
-                                requestsMetrics,
-                                serverAuthenticator));
+        NettyServerHandler handler =
+                new NettyServerHandler(
+                        requestChannel,
+                        apiManager,
+                        endpointListenerName,
+                        isInternal,
+                        requestsMetrics,
+                        serverAuthenticator);
+        if (requestChannel.schedulesConnectionHeads()) {
+            addIdleStateHandler(ch);
+            FairRequestFrameDecoder.addAroundIdleHandler(
+                    ch.pipeline(),
+                    maxRequestSize,
+                    requestChannel,
+                    key -> handler.handlesAuthenticationInline((short) key),
+                    SystemClock.getInstance());
+        } else {
+            // Keep the frame length field for the request handler.
+            addFrameDecoder(ch, maxRequestSize, 0, false);
+            addIdleStateHandler(ch);
+        }
+        ch.pipeline().addLast("handler", handler);
     }
 
     @Override

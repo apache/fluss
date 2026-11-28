@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,15 +34,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * A queue channel that can receive requests and send responses.
- *
- * <p>Uses an unbounded LinkedBlockingQueue to ensure that putRequest() never blocks, preventing
- * EventLoop threads from being blocked. Backpressure is applied at the TCP level by pausing channel
- * reads when the queue size exceeds the backpressure threshold.
- *
- * <p>Each RequestChannel instance manages its own associated Netty channels (those hashed to this
- * RequestChannel) and independently controls their backpressure state. This design encapsulates all
- * backpressure logic within the RequestChannel, eliminating the need for global state management.
+ * Connects a request processor to incoming RPCs. Native TabletServer groups schedule TCP queue
+ * heads. Other groups use a worker queue and its existing high and low watermarks.
  */
 @ThreadSafe
 public class RequestChannel {
@@ -92,6 +86,58 @@ public class RequestChannel {
      */
     private final ReentrantLock backpressureLock = new ReentrantLock();
 
+    private ConnectionHeadScheduler scheduler;
+    private ConnectionHeadScheduler.Owner owner;
+
+    void scheduleConnectionHeads(
+            ConnectionHeadScheduler scheduler, ConnectionHeadScheduler.WorkerGroup group) {
+        this.scheduler = scheduler;
+        this.owner = scheduler.createOwner(group);
+    }
+
+    boolean schedulesConnectionHeads() {
+        return scheduler != null;
+    }
+
+    boolean hasReadGrant(Channel channel) {
+        return scheduler.hasReadGrant(owner, channel);
+    }
+
+    boolean acquireRead(ChannelHandlerContext ctx, Runnable resume, int frameBytes) {
+        return scheduler.acquireRead(owner, ctx, resume, frameBytes);
+    }
+
+    void releaseRead(Channel channel, boolean cancel) {
+        scheduler.releaseRead(owner, channel, cancel);
+    }
+
+    boolean offerFlussRequest(Channel channel, FlussRequest request) {
+        if (scheduler == null) {
+            putRequest(request);
+            return true;
+        }
+        request.setProcessorOwnsBuffer();
+        return scheduler.offer(owner, channel, request);
+    }
+
+    RpcRequest nextRequest() {
+        if (scheduler == null) {
+            return pollRequest(300);
+        }
+        try {
+            return scheduler.take(owner);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    void requestFinished() {
+        if (scheduler != null) {
+            scheduler.finish(owner);
+        }
+    }
+
     public RequestChannel(int backpressureThreshold) {
         this.requestQueue = new LinkedBlockingQueue<>();
         this.backpressureThreshold = Math.max(1, backpressureThreshold);
@@ -119,7 +165,11 @@ public class RequestChannel {
      * shutdown.
      */
     public void putShutdownRequest() {
-        putRequest(ShutdownRequest.INSTANCE);
+        if (scheduler == null) {
+            putRequest(ShutdownRequest.INSTANCE);
+        } else {
+            scheduler.close(owner);
+        }
     }
 
     /**
@@ -145,7 +195,7 @@ public class RequestChannel {
 
     /** Get the number of requests in the queue. */
     public int requestsCount() {
-        return requestQueue.size();
+        return scheduler == null ? requestQueue.size() : owner.queued;
     }
 
     /**
@@ -161,6 +211,9 @@ public class RequestChannel {
      * @param channel the channel to register
      */
     public void registerChannel(Channel channel) {
+        if (scheduler != null) {
+            return;
+        }
         associatedChannels.add(channel);
 
         if (LOG.isDebugEnabled()) {
@@ -180,6 +233,9 @@ public class RequestChannel {
      * @param channel the channel to unregister
      */
     public void unregisterChannel(Channel channel) {
+        if (scheduler != null) {
+            return;
+        }
         associatedChannels.remove(channel);
         if (LOG.isDebugEnabled()) {
             LOG.debug(

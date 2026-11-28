@@ -1375,9 +1375,10 @@ public class ConfigOptions {
                     .defaultValue(500)
                     .withDescription(
                             "The queued-request backpressure threshold per listener resource group, "
-                                    + "divided among its worker threads. When a worker queue reaches its "
-                                    + "threshold, reads are paused on its associated connections. Queues "
-                                    + "are unbounded; this is not a hard limit on queued requests. When "
+                                    + "divided among its worker threads. Applies to the CoordinatorServer "
+                                    + "and TabletServer groups that serve a protocol other than native "
+                                    + "Fluss RPC. When a worker queue reaches its threshold, reads are "
+                                    + "paused on its associated connections. Queues are unbounded. When "
                                     + "the server binds both the listener selected by internal.listener.name "
                                     + "and external listeners, the internal listener uses a dedicated "
                                     + "group and all external listeners share another group. Otherwise, "

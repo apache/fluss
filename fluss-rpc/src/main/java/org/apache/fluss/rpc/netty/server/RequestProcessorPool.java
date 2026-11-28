@@ -64,16 +64,20 @@ final class RequestProcessorPool {
         for (int i = 0; i < numProcessors; i++) {
             RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
             requestChannels[i] = requestChannel;
-            // bind processor to a single channel to make requests from the
-            // same channel processed serializable
             int processorIndex = processorIndexOffset + i;
-            processors[i] =
+            RequestProcessor processor =
                     new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
+            processors[i] = processor;
             requestsMetrics.gauge(
                     PROCESSOR_INDEX,
                     String.valueOf(processorIndex),
                     MetricNames.REQUEST_QUEUE_SIZE,
                     requestChannel::requestsCount);
+            requestsMetrics.gauge(
+                    PROCESSOR_INDEX,
+                    String.valueOf(processorIndex),
+                    "synchronousRequestNanos",
+                    processor::synchronousRequestNanos);
         }
     }
 
