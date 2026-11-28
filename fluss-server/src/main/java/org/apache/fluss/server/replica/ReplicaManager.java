@@ -93,6 +93,7 @@ import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
+import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
@@ -611,26 +612,30 @@ public class ReplicaManager implements ServerReconfigurable {
 
                     List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
                     List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
+                    List<NotifyLeaderAndIsrData> replicasWithoutLogs = new ArrayList<>();
+                    // Track the buckets pending KV promotion on each disk for this batch only.
+                    Map<File, Set<TableBucket>> kvLeaderReservations = new HashMap<>();
+                    // Existing logs are pinned to their directories. Prepare those replicas first
+                    // so their pending promotions count when selecting directories for new logs.
                     for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
-                        LOG.info(
-                                "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
-                                data.getTableBucket(),
-                                data.getLeaderAndIsr(),
-                                data.getReplicas());
-                        TableBucket tb = data.getTableBucket();
-                        try {
-                            boolean becomeLeader = validateAndGetIsBecomeLeader(data);
-                            if (becomeLeader) {
-                                replicasToBeLeader.add(data);
-                            } else {
-                                replicasToBeFollower.add(data);
-                            }
-                        } catch (Exception e) {
-                            result.put(
-                                    tb,
-                                    new NotifyLeaderAndIsrResultForBucket(
-                                            tb, ApiError.fromThrowable(e)));
+                        if (logManager.getLog(data.getTableBucket()).isPresent()) {
+                            prepareReplicaTransition(
+                                    data,
+                                    kvLeaderReservations,
+                                    replicasToBeLeader,
+                                    replicasToBeFollower,
+                                    result);
+                        } else {
+                            replicasWithoutLogs.add(data);
                         }
+                    }
+                    for (NotifyLeaderAndIsrData data : replicasWithoutLogs) {
+                        prepareReplicaTransition(
+                                data,
+                                kvLeaderReservations,
+                                replicasToBeLeader,
+                                replicasToBeFollower,
+                                result);
                     }
 
                     makeLeaders(replicasToBeLeader, result);
@@ -1510,7 +1515,12 @@ public class ReplicaManager implements ServerReconfigurable {
                                     + " is not yet visible for "
                                     + tb);
                 }
-                replica.makeLeader(data);
+                boolean wasKvLeader = isActiveKvLeader(replica);
+                try {
+                    replica.makeLeader(data);
+                } finally {
+                    updateKvLeaderCount(replica, wasKvLeader);
+                }
 
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);
@@ -1580,7 +1590,14 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(data.getTableBucket());
-                if (replica.makeFollower(data)) {
+                boolean wasKvLeader = isActiveKvLeader(replica);
+                boolean becameFollower;
+                try {
+                    becameFollower = replica.makeFollower(data);
+                } finally {
+                    updateKvLeaderCount(replica, wasKvLeader);
+                }
+                if (becameFollower) {
                     replicasBecomeFollower.add(replica);
                     scannerManager.closeScannersForBucket(tb);
                 }
@@ -2280,21 +2297,48 @@ public class ReplicaManager implements ServerReconfigurable {
         delayedFetchLogManager.checkAndComplete(delayedTableBucketKey);
     }
 
-    /**
-     * validate notify leader and isr data, if the data is invalid, throw exception. otherwise,
-     * return the data is to become leader or not.
-     */
-    protected boolean validateAndGetIsBecomeLeader(NotifyLeaderAndIsrData data) {
+    private void prepareReplicaTransition(
+            NotifyLeaderAndIsrData data,
+            Map<File, Set<TableBucket>> kvLeaderReservations,
+            List<NotifyLeaderAndIsrData> replicasToBeLeader,
+            List<NotifyLeaderAndIsrData> replicasToBeFollower,
+            Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result) {
         TableBucket tb = data.getTableBucket();
-        Replica replica =
-                maybeCreateReplica(data)
-                        .orElseThrow(
-                                () ->
-                                        new StorageException(
-                                                String.format(
-                                                        "The replica %s for table bucket %s is offline while "
-                                                                + "notify leader and isr",
-                                                        serverId, tb)));
+        LOG.info(
+                "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
+                tb,
+                data.getLeaderAndIsr(),
+                data.getReplicas());
+        try {
+            Optional<Replica> replicaOpt = maybeCreateReplica(data, kvLeaderReservations);
+            if (!replicaOpt.isPresent()) {
+                throw new StorageException(
+                        String.format(
+                                "The replica %s for table bucket %s is offline while notify leader and isr",
+                                serverId, tb));
+            }
+            Replica replica = replicaOpt.get();
+            if (validateAndGetIsBecomeLeader(data, replica)) {
+                replicasToBeLeader.add(data);
+                if (replica.isKvTable()
+                        && !isActiveKvLeader(replica)
+                        && replica.requiresLeaderActivation(data.getLeaderEpoch())
+                        && data.getBucketEpoch() >= replica.getBucketEpoch()) {
+                    kvLeaderReservations
+                            .computeIfAbsent(
+                                    replica.getLogTablet().getDataDir(), ignored -> new HashSet<>())
+                            .add(tb);
+                }
+            } else {
+                replicasToBeFollower.add(data);
+            }
+        } catch (Exception e) {
+            result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
+        }
+    }
+
+    private boolean validateAndGetIsBecomeLeader(NotifyLeaderAndIsrData data, Replica replica) {
+        TableBucket tb = data.getTableBucket();
         int currentLeaderEpoch = replica.getLeaderEpoch();
         int requestLeaderEpoch = data.getLeaderEpoch();
         if (requestLeaderEpoch >= currentLeaderEpoch) {
@@ -2334,6 +2378,21 @@ public class ReplicaManager implements ServerReconfigurable {
         // replica while disk write protection is active because it should not need to download a
         // large remote snapshot during make-leader.
         localDiskManager.ensureWritable();
+    }
+
+    private boolean isActiveKvLeader(Replica replica) {
+        KvTablet tablet = replica.getKvTablet();
+        // KV deletion can fail after the manager has detached the tablet.
+        return replica.isLeader()
+                && tablet != null
+                && kvManager.getKv(replica.getTableBucket()).orElse(null) == tablet;
+    }
+
+    private void updateKvLeaderCount(Replica replica, boolean wasKvLeader) {
+        boolean isKvLeader = isActiveKvLeader(replica);
+        if (wasKvLeader != isKvLeader) {
+            localDiskManager.recordKvLeaderChange(replica.getLogTablet().getDataDir(), isKvLeader);
+        }
     }
 
     /**
@@ -2402,12 +2461,13 @@ public class ReplicaManager implements ServerReconfigurable {
             Replica replicaToDelete = ((OnlineReplica) replica).getReplica();
             if (deleteLocal) {
                 if (allReplicas.remove(tb) != null) {
+                    if (isActiveKvLeader(replicaToDelete)) {
+                        localDiskManager.recordKvLeaderChange(
+                                replicaToDelete.getLogTablet().getDataDir(), false);
+                    }
                     serverMetricGroup.removeTableBucketMetricGroup(
                             replicaToDelete.getPhysicalTablePath().getTablePath(), tb);
                     replicaToDelete.delete();
-                    localDiskManager.recordReplicaDelete(
-                            replicaToDelete.getLogTablet().getDataDir(),
-                            replicaToDelete.isKvTable());
                     Path tabletParentDir = replicaToDelete.getTabletParentDir();
                     if (tb.getPartitionId() != null) {
                         deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
@@ -2455,14 +2515,11 @@ public class ReplicaManager implements ServerReconfigurable {
 
         // Clean KV before log so that if KV cleanup fails, the log is still
         // present and a coordinator retry can re-enter this method.
-        boolean isKvTable = false;
         if (kvManager.getKv(tb).isPresent()) {
             kvManager.dropKv(tb);
-            isKvTable = true;
         } else {
             File kvTabletDir = FlussPaths.kvTabletDir(dataDir, physicalTablePath, tb);
             if (kvTabletDir.exists()) {
-                isKvTable = true;
                 try {
                     FileUtils.deleteDirectory(kvTabletDir);
                 } catch (IOException e) {
@@ -2475,8 +2532,6 @@ public class ReplicaManager implements ServerReconfigurable {
         }
 
         logManager.dropLog(tb);
-
-        localDiskManager.recordReplicaDelete(dataDir, isKvTable);
 
         if (tb.getPartitionId() != null) {
             deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
@@ -2553,6 +2608,11 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     protected Optional<Replica> maybeCreateReplica(NotifyLeaderAndIsrData data) {
+        return maybeCreateReplica(data, Collections.emptyMap());
+    }
+
+    private Optional<Replica> maybeCreateReplica(
+            NotifyLeaderAndIsrData data, Map<File, Set<TableBucket>> kvLeaderReservations) {
         Optional<Replica> replicaOpt = Optional.empty();
         try {
             TableBucket tb = data.getTableBucket();
@@ -2568,14 +2628,19 @@ public class ReplicaManager implements ServerReconfigurable {
                 String remoteDataDir = getRemoteDataDir(tb, physicalTablePath, tableRegistration);
 
                 boolean isKvTable = tableInfo.hasPrimaryKey();
-                Optional<LogTablet> existingLogTabletOpt = logManager.getLog(tb);
-                File dataDir =
-                        existingLogTabletOpt
-                                .map(LogTablet::getDataDir)
-                                .orElseGet(
-                                        () ->
-                                                localDiskManager.selectDataDirForNewBucket(
-                                                        isKvTable));
+                Optional<LogTablet> existingLogTablet = logManager.getLog(tb);
+                File dataDir;
+                if (existingLogTablet.isPresent()) {
+                    dataDir = existingLogTablet.get().getDataDir();
+                } else if (isKvTable
+                        && data.getLeader() == serverId
+                        // Write protection permits log creation but rejects KV promotion.
+                        // Fall back to replica totals because no KV leader is being added.
+                        && !localDiskManager.isDiskWriteLocked()) {
+                    dataDir = localDiskManager.selectDataDirForNewKvLeader(kvLeaderReservations);
+                } else {
+                    dataDir = localDiskManager.selectDataDirForNewBucket(isKvTable);
+                }
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(
                                 physicalTablePath, tb, isKvTable);
@@ -2606,9 +2671,6 @@ public class ReplicaManager implements ServerReconfigurable {
                 // Initialize the routing state before the replica becomes visible, so a
                 // ready leader always has its routing bucket count ready.
                 replica.updateRoutingState(data);
-                if (!existingLogTabletOpt.isPresent()) {
-                    localDiskManager.recordReplicaLoad(dataDir, isKvTable);
-                }
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {

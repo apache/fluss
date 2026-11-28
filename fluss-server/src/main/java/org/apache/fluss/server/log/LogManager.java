@@ -327,7 +327,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                                     isChangelog,
                                     clock,
                                     true);
-                    currentLogs.put(tableBucket, logTablet);
+                    registerLog(tableBucket, logTablet);
 
                     LOG.info(
                             "Loaded log for bucket {} in dir {}",
@@ -370,6 +370,8 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
     private void doDropLog(TableBucket tableBucket) {
         LogTablet dropLogTablet = currentLogs.remove(tableBucket);
         if (dropLogTablet != null) {
+            localDiskManager.recordReplicaDelete(
+                    dropLogTablet.getDataDir(), dropLogTablet.isChangelog());
             TablePath tablePath = dropLogTablet.getTablePath();
             try {
                 dropLogTablet.drop();
@@ -528,10 +530,13 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                         clock,
                         isCleanShutdown);
 
-        currentLogs.put(tableBucket, logTablet);
-        localDiskManager.recordReplicaLoad(dataDir, tableInfo.hasPrimaryKey());
-
+        registerLog(tableBucket, logTablet);
         return logTablet;
+    }
+
+    private void registerLog(TableBucket tableBucket, LogTablet logTablet) {
+        currentLogs.put(tableBucket, logTablet);
+        localDiskManager.recordReplicaLoad(logTablet.getDataDir(), logTablet.isChangelog());
     }
 
     /** Close all the logs. */

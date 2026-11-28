@@ -689,9 +689,11 @@ final class LogManagerTest extends LogTestBase {
         File dataDir2 = new File(tempDir, "data-2");
         initTableBuckets(null);
 
+        PhysicalTablePath kvTablePath = PhysicalTablePath.of(tablePath2);
         createLog(tablePath1, tableBucket1, dataDir1)
                 .appendAsLeader(genMemoryLogRecordsByObject(DATA1));
-        createLog(tablePath2, tableBucket2, dataDir2)
+        logManager
+                .getOrCreateLog(dataDir2, kvTablePath, tableBucket2, LogFormat.ARROW, 1, true)
                 .appendAsLeader(genMemoryLogRecordsByObject(DATA1));
 
         logManager.shutdown();
@@ -720,6 +722,12 @@ final class LogManagerTest extends LogTestBase {
         assertThat(logManager.getLog(tableBucket2)).isPresent();
         assertThat(logManager.getLog(tableBucket2).get().getDataDir())
                 .isEqualTo(dataDir2.getAbsoluteFile());
+
+        // Adding a KV log to dataDir1 ties the counts only if startup counted the KV log in
+        // dataDir2.
+        TableBucket newKvBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        logManager.getOrCreateLog(dataDir1, kvTablePath, newKvBucket, LogFormat.ARROW, 1, true);
+        assertThat(localDiskManager.selectDataDirForNewBucket(true)).isEqualTo(dataDir1);
     }
 
     private LogTablet getOrCreateLog(

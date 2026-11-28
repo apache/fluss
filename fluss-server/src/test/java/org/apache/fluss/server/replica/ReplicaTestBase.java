@@ -176,6 +176,11 @@ public class ReplicaTestBase {
         return conf;
     }
 
+    /** Creates the scheduler used by the replica test fixture. */
+    protected FlussScheduler createTestScheduler() {
+        return new FlussScheduler(2);
+    }
+
     /**
      * Returns the KV flush scheduler to install into the {@link KvManager}, or {@code null} to let
      * the manager create its own. Subclasses override this to gain deterministic control over when
@@ -229,7 +234,7 @@ public class ReplicaTestBase {
 
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofHours(12));
 
-        scheduler = new FlussScheduler(2);
+        scheduler = createTestScheduler();
         scheduler.startup();
         ioExecutor = Executors.newSingleThreadExecutor();
 
