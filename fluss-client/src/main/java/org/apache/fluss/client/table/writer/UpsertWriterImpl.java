@@ -46,6 +46,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final TableInfo tableInfo;
     private final KeyEncoder primaryKeyEncoder;
     private final @Nullable int[] targetColumns;
+    private final int[] primaryKeyIndexes;
     private final BucketCalculator bucketCalculator;
 
     private final KvFormat kvFormat;
@@ -79,6 +80,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 partialUpdateColumns);
 
         this.targetColumns = partialUpdateColumns;
+        this.primaryKeyIndexes = tableInfo.getSchema().getPrimaryKeyIndexes();
         // encode primary key using physical primary key
         this.primaryKeyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
@@ -169,6 +171,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
+        checkNotNullConstraints(row, tableInfo, targetColumns);
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey = bucketCalculator.encodeKey(row, key);
         WriteRecord record =
@@ -194,6 +197,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     @Override
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
         checkFieldCount(row);
+        checkNotNullConstraints(row, tableInfo, primaryKeyIndexes);
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey = bucketCalculator.encodeKey(row, key);
         WriteRecord record =
