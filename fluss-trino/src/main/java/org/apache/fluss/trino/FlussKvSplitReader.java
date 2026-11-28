@@ -18,7 +18,7 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
@@ -49,10 +49,10 @@ final class FlussKvSplitReader implements FlussSplitReader {
     private boolean finished;
     private boolean closed;
 
-    FlussKvSplitReader(Table table, FlussBucketHandle bucket) {
-        checkNotNull(table, "table is null");
+    FlussKvSplitReader(Scan scan, FlussBucketHandle bucket) {
+        checkNotNull(scan, "scan is null");
         this.bucket = checkNotNull(bucket, "bucket is null");
-        scanner = table.newScan().createBatchScanner(bucket.toTableBucket());
+        scanner = scan.createBatchScanner(bucket.toTableBucket());
     }
 
     @Override

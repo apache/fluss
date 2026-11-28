@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList.toImmutableList;
+import static org.apache.fluss.trino.FlussSessionProperties.getDomainCompactionThreshold;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Creates an independent bounded page source for each scheduled Fluss split. */
@@ -69,6 +70,7 @@ public final class FlussPageSourceProvider implements ConnectorPageSourceProvide
                 handle,
                 flussSplit,
                 projectedColumns,
+                getDomainCompactionThreshold(session),
                 checkNotNull(memoryContext, "memoryContext is null"));
     }
 }

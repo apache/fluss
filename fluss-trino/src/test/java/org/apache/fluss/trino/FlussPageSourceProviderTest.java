@@ -21,12 +21,12 @@ import io.trino.spi.connector.ConnectorPageSource;
 import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.MemoryContext;
 import io.trino.spi.predicate.TupleDomain;
+import io.trino.testing.TestingConnectorSession;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.Optional;
 
-import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Verifies that provider creation leaves reading and validation to the lazy page source. */
@@ -49,7 +49,10 @@ final class FlussPageSourceProviderTest {
             try (ConnectorPageSource source =
                     provider.createPageSource(
                             FlussTransactionHandle.INSTANCE,
-                            SESSION,
+                            TestingConnectorSession.builder()
+                                    .setPropertyMetadata(
+                                            FlussSessionProperties.getSessionProperties())
+                                    .build(),
                             split,
                             table,
                             Optional.empty(),

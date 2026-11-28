@@ -33,6 +33,7 @@ import java.util.Optional;
 
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
 import static org.apache.fluss.trino.FlussPartitionPruner.extractPartitionSpec;
+import static org.apache.fluss.trino.FlussPartitionPruner.prunePartitions;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 final class FlussSplitPlanner {
@@ -51,7 +52,10 @@ final class FlussSplitPlanner {
         ImmutableList.Builder<FlussPhysicalBucket> buckets = ImmutableList.builder();
         if (tableInfo.isPartitioned()) {
             for (PartitionInfo partition :
-                    metadataAccess.listScanPartitions(table, partitionSpec)) {
+                    prunePartitions(
+                            tableInfo,
+                            table.getConstraint(),
+                            metadataAccess.listScanPartitions(table, partitionSpec))) {
                 addBuckets(
                         buckets,
                         tableInfo.getTableId(),
@@ -86,13 +90,26 @@ final class FlussSplitPlanner {
         if (bucketCount <= 0) {
             throw new TrinoException(FLUSS_SPLIT_ERROR, "Invalid bucket count: " + bucketCount);
         }
-        int first = pruner.map(value -> value.getBucketId(bucketCount)).orElse(0);
-        int end = pruner.isPresent() ? first + 1 : bucketCount;
-        for (int bucketId = first; bucketId < end; bucketId++) {
-            buckets.add(
-                    new FlussPhysicalBucket(
-                            new FlussBucketHandle(tableId, partitionId, bucketId), partitionName));
+        if (pruner.isPresent()) {
+            for (int bucketId : pruner.get().getBucketIds(bucketCount)) {
+                addBucket(buckets, tableId, partitionId, partitionName, bucketId);
+            }
+        } else {
+            for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                addBucket(buckets, tableId, partitionId, partitionName, bucketId);
+            }
         }
+    }
+
+    private static void addBucket(
+            ImmutableList.Builder<FlussPhysicalBucket> buckets,
+            long tableId,
+            Optional<Long> partitionId,
+            Optional<String> partitionName,
+            int bucketId) {
+        buckets.add(
+                new FlussPhysicalBucket(
+                        new FlussBucketHandle(tableId, partitionId, bucketId), partitionName));
     }
 
     private static List<FlussSplit> planKvSplits(List<FlussPhysicalBucket> buckets) {
