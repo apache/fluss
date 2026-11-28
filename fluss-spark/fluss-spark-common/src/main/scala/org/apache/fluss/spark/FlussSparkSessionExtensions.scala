@@ -28,6 +28,7 @@ import org.apache.spark.sql.catalyst.parser.FlussSparkSqlParser
 class FlussSparkSessionExtensions extends (SparkSessionExtensions => Unit) {
 
   override def apply(extensions: SparkSessionExtensions): Unit = {
+    org.apache.fluss.spark.functions.SketchFunctions.inject(extensions)
     // parser extensions
     extensions.injectParser { case (_, parser) => new FlussSparkSqlParser(parser) }
 
