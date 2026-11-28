@@ -431,7 +431,9 @@ class LakeEnabledTableCreateITCase {
 
         paimonTable = (FileStoreTable) paimonCatalog.getTable(lakeEnabledPaimonPath);
         assertThat(paimonTable.location().toString()).isEqualTo(paimonPath);
-        assertThat(paimonTable.options()).containsEntry("fluss.key", "value");
+        assertThat(paimonTable.options()).doesNotContainKey("fluss.key");
+        assertThat(admin.getTableInfo(lakeEnabledTablePath).get().getCustomProperties().toMap())
+                .containsEntry("key", "value");
         long schemaId = paimonTable.schema().id();
 
         admin.alterTable(
@@ -985,10 +987,13 @@ class LakeEnabledTableCreateITCase {
                 Arrays.asList(TableChange.reset("k1"), TableChange.set("k2", "v2"));
         admin.alterTable(tablePath, tableChanges, false).get();
         paimonTable = paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
-        customProperties.remove("k1");
-        customProperties.put("k2", "v2");
-        tableDescriptor =
-                tableDescriptor.withProperties(tableDescriptor.getProperties(), customProperties);
+        assertThat(admin.getTableInfo(tablePath).get().getCustomProperties().toMap())
+                .containsEntry("k2", "v2")
+                .doesNotContainKey("k1");
+        // Fluss-only changes do not update the initial metadata copy in the lake table.
+        assertThat(paimonTable.options())
+                .containsEntry("fluss.k1", "v1")
+                .doesNotContainKey("fluss.k2");
         verifyPaimonTable(
                 paimonTable,
                 tableDescriptor,
@@ -1040,7 +1045,14 @@ class LakeEnabledTableCreateITCase {
 
         // test alter table if lake table not exists
         paimonCatalog.dropTable(Identifier.create(DATABASE, tablePath.getTableName()), true);
-        tableChanges = Collections.singletonList(TableChange.set("k3", "v3"));
+        admin.alterTable(tablePath, Collections.singletonList(TableChange.set("k3", "v3")), false)
+                .get();
+        assertThat(admin.getTableInfo(tablePath).get().getCustomProperties().toMap())
+                .containsEntry("k3", "v3");
+        // Native lake changes still require the lake table to exist.
+        tableChanges =
+                Collections.singletonList(
+                        TableChange.set("paimon.partition.timestamp-formatter", "yyyyMM"));
         List<TableChange> finalTableChanges1 = tableChanges;
         assertThatThrownBy(() -> admin.alterTable(tablePath, finalTableChanges1, false).get())
                 .cause()
@@ -1120,6 +1132,58 @@ class LakeEnabledTableCreateITCase {
 
         // enable lake table again should be ok, even though the table properties have changed
         admin.alterTable(tablePath, Collections.singletonList(enableLake), false).get();
+        assertThat(admin.getTableInfo(tablePath).get().getCustomProperties().toMap())
+                .containsEntry("k2", "v22");
+        assertThat(
+                        paimonCatalog
+                                .getTable(Identifier.create(DATABASE, tablePath.getTableName()))
+                                .options())
+                .containsEntry("fluss.k2", "v2");
+    }
+
+    @Test
+    void testAlterDisabledPkTablePropertiesWithoutLakeTable() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "disabled_pk_alter_properties");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .column("pt", DataTypes.STRING())
+                                        .primaryKey("id", "pt")
+                                        .build())
+                        .distributedBy(1, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "pt")
+                        .property("table.auto-partition.time-unit", "HOUR")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 1)
+                        .build();
+        admin.createTable(tablePath, descriptor, false).get();
+
+        admin.alterTable(
+                        tablePath,
+                        Arrays.asList(
+                                TableChange.set("table.auto-partition.num-retention", "3"),
+                                TableChange.set("k1", "v1")),
+                        false)
+                .get();
+
+        assertThat(
+                        admin.getTableInfo(tablePath)
+                                .get()
+                                .getTableConfig()
+                                .getAutoPartitionStrategy()
+                                .numToRetain())
+                .isEqualTo(3);
+        assertThat(admin.getTableInfo(tablePath).get().getCustomProperties().toMap())
+                .containsEntry("k1", "v1");
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(DATABASE, tablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class);
     }
 
     @Test
