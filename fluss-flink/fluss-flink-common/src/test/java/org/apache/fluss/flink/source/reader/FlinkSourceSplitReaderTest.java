@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
@@ -728,7 +729,163 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testPauseAndResumeLogSplit() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-pause-resume-log-split");
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(1).build());
+        appendRows(tablePath, 10);
+
+        // one record per poll, so the scanner still holds fetched records when the split pauses
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        LogSplit split = new LogSplit(new TableBucket(tableId, 0), null, 0L);
+
+        try (FlinkSourceSplitReader splitReader =
+                new FlinkSourceSplitReader(
+                        sourceConf,
+                        tablePath,
+                        schema.getRowType(),
+                        null,
+                        null,
+                        null,
+                        createMockSourceReaderMetrics())) {
+            assignSplits(splitReader, Collections.singletonList(split));
+            List<Long> offsets = fetchOffsets(splitReader, split.splitId(), 3);
+
+            splitReader.pauseOrResumeSplits(
+                    Collections.singletonList(split), Collections.emptyList());
+            splitReader.wakeUp();
+            RecordsWithSplitIds<RecordAndPos> whilePaused = splitReader.fetch();
+            assertThat(whilePaused.nextSplit()).isNull();
+            whilePaused.recycle();
+
+            splitReader.pauseOrResumeSplits(
+                    Collections.emptyList(), Collections.singletonList(split));
+            offsets.addAll(fetchOffsets(splitReader, split.splitId(), 10 - offsets.size()));
+
+            assertThat(offsets).containsExactly(0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L);
+        }
+    }
+
+    @Test
+    void testPauseOneOfTwoLogSplitsWhileTheOtherKeepsPolling() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-pause-one-of-two-log-splits");
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(2, "id").build());
+        appendRows(tablePath, 40);
+        Map<Integer, Long> endOffsets =
+                admin.listOffsets(tablePath, Arrays.asList(0, 1), new OffsetSpec.LatestSpec())
+                        .all()
+                        .get();
+        assertThat(endOffsets.values()).allSatisfy(end -> assertThat(end).isGreaterThan(3L));
+
+        // one record per poll, so the scanner still holds fetched records when a split pauses
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        LogSplit pausedSplit = new LogSplit(new TableBucket(tableId, 0), null, 0L);
+        LogSplit runningSplit = new LogSplit(new TableBucket(tableId, 1), null, 0L);
+
+        try (FlinkSourceSplitReader splitReader =
+                new FlinkSourceSplitReader(
+                        sourceConf,
+                        tablePath,
+                        schema.getRowType(),
+                        null,
+                        null,
+                        null,
+                        createMockSourceReaderMetrics())) {
+            assignSplits(splitReader, Arrays.asList(pausedSplit, runningSplit));
+            Map<String, List<Long>> offsets = new HashMap<>();
+            fetchOffsetsUntil(splitReader, offsets, pausedSplit.splitId(), 2);
+
+            // the running split keeps polling, so the scanner drops what it buffered for the
+            // paused bucket and has to fetch it again after the resume
+            splitReader.pauseOrResumeSplits(
+                    Collections.singletonList(pausedSplit), Collections.emptyList());
+            int readBeforePause = offsets.get(pausedSplit.splitId()).size();
+            fetchOffsetsUntil(
+                    splitReader, offsets, runningSplit.splitId(), endOffsets.get(1).intValue());
+            assertThat(offsets.get(pausedSplit.splitId())).hasSize(readBeforePause);
+
+            splitReader.pauseOrResumeSplits(
+                    Collections.emptyList(), Collections.singletonList(pausedSplit));
+            fetchOffsetsUntil(
+                    splitReader, offsets, pausedSplit.splitId(), endOffsets.get(0).intValue());
+
+            assertThat(offsets.get(pausedSplit.splitId()))
+                    .containsExactlyElementsOf(offsetRange(endOffsets.get(0)));
+            assertThat(offsets.get(runningSplit.splitId()))
+                    .containsExactlyElementsOf(offsetRange(endOffsets.get(1)));
+        }
+    }
+
     // ------------------
+
+    private List<Long> fetchOffsets(FlinkSourceSplitReader reader, String splitId, int count)
+            throws IOException {
+        List<Long> offsets = new ArrayList<>();
+        for (int fetches = 0; offsets.size() < count; fetches++) {
+            assertThat(fetches).as("fetches to read %s records", count).isLessThan(100);
+            RecordsWithSplitIds<RecordAndPos> records = reader.fetch();
+            for (String id = records.nextSplit(); id != null; id = records.nextSplit()) {
+                assertThat(id).isEqualTo(splitId);
+                RecordAndPos record;
+                while ((record = records.nextRecordFromSplit()) != null) {
+                    offsets.add(record.record().logOffset());
+                }
+            }
+            records.recycle();
+        }
+        return offsets;
+    }
+
+    private static List<Long> offsetRange(long end) {
+        List<Long> offsets = new ArrayList<>();
+        for (long offset = 0; offset < end; offset++) {
+            offsets.add(offset);
+        }
+        return offsets;
+    }
+
+    private void fetchOffsetsUntil(
+            FlinkSourceSplitReader reader,
+            Map<String, List<Long>> offsetsBySplit,
+            String splitId,
+            int count)
+            throws IOException {
+        for (int fetches = 0;
+                offsetsBySplit.getOrDefault(splitId, Collections.emptyList()).size() < count;
+                fetches++) {
+            assertThat(fetches)
+                    .as("fetches to read %s records of %s", count, splitId)
+                    .isLessThan(500);
+            RecordsWithSplitIds<RecordAndPos> records = reader.fetch();
+            for (String id = records.nextSplit(); id != null; id = records.nextSplit()) {
+                RecordAndPos record;
+                while ((record = records.nextRecordFromSplit()) != null) {
+                    offsetsBySplit
+                            .computeIfAbsent(id, k -> new ArrayList<>())
+                            .add(record.record().logOffset());
+                }
+            }
+            records.recycle();
+        }
+    }
 
     private void assignSplitsAndFetchUntilRetrieveRecords(
             FlinkSourceSplitReader reader,
