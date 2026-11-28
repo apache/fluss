@@ -1338,37 +1338,49 @@ public final class Replica {
             MergeMode mergeMode,
             int requiredAcks)
             throws Exception {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    if (!isLeader()) {
-                        throw new NotLeaderOrFollowerException(
-                                String.format(
-                                        "Leader not local for bucket %s on tabletServer %d",
-                                        tableBucket, localTabletServerId));
-                    }
-                    if (isHistoricalPartition()) {
-                        throw new InvalidPartitionException(
-                                "Normal write request must not target a historical partition.");
-                    }
+        AtomicBoolean leaderHWIncremented = new AtomicBoolean(false);
+        LogAppendInfo leaderAppendInfo =
+                inReadLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            if (!isLeader()) {
+                                throw new NotLeaderOrFollowerException(
+                                        String.format(
+                                                "Leader not local for bucket %s on tabletServer %d",
+                                                tableBucket, localTabletServerId));
+                            }
+                            if (isHistoricalPartition()) {
+                                throw new InvalidPartitionException(
+                                        "Normal write request must not target a historical partition.");
+                            }
 
-                    validateInSyncReplicaSize(requiredAcks);
-                    KvTablet kv = this.kvTablet;
-                    checkNotNull(
-                            kv, "KvTablet for the replica to put kv records shouldn't be null.");
-                    LogAppendInfo logAppendInfo;
-                    try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
-                    } catch (IOException e) {
-                        LOG.error("Error while putting records to {}", tableBucket, e);
-                        fatalErrorHandler.onFatalError(e);
-                        throw new KvStorageException(
-                                "Error while putting records to " + tableBucket, e);
-                    }
-                    // we may need to increment high watermark.
-                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
-                    return logAppendInfo;
-                });
+                            validateInSyncReplicaSize(requiredAcks);
+                            KvTablet kv = this.kvTablet;
+                            checkNotNull(
+                                    kv,
+                                    "KvTablet for the replica to put kv records shouldn't be null.");
+                            LogAppendInfo logAppendInfo;
+                            try {
+                                logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
+                            } catch (IOException e) {
+                                LOG.error("Error while putting records to {}", tableBucket, e);
+                                fatalErrorHandler.onFatalError(e);
+                                throw new KvStorageException(
+                                        "Error while putting records to " + tableBucket, e);
+                            }
+                            // we may need to increment high watermark.
+                            leaderHWIncremented.set(
+                                    maybeIncrementLeaderHW(logTablet, clock.milliseconds()));
+                            return logAppendInfo;
+                        });
+
+        // A write can itself publish a new high watermark, e.g. the offset of a KV flush that
+        // completed just before it. The flush-complete listener then finds nothing left to
+        // publish, so the operations waiting for that offset must be completed here.
+        if (leaderHWIncremented.get()) {
+            tryCompleteDelayedOperations();
+        }
+        return leaderAppendInfo;
     }
 
     /**
@@ -1400,22 +1412,32 @@ public final class Replica {
         HistoricalValueLookup historicalValueLookup =
                 localLookupResult.createValueLookup(lakeLookup);
 
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    validateHistoricalWrite(expectedLeaderEpoch, requiredAcks);
-                    KvTablet kv = this.kvTablet;
-                    checkNotNull(kv, "KvTablet for the historical replica shouldn't be null.");
-                    LogAppendInfo appendInfo =
-                            kv.putHistoricalAsLeader(
-                                    kvRecords,
-                                    targetColumns,
-                                    mergeMode,
-                                    originalPartitionName,
-                                    historicalValueLookup);
-                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
-                    return appendInfo;
-                });
+        AtomicBoolean leaderHWIncremented = new AtomicBoolean(false);
+        LogAppendInfo leaderAppendInfo =
+                inReadLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            validateHistoricalWrite(expectedLeaderEpoch, requiredAcks);
+                            KvTablet kv = this.kvTablet;
+                            checkNotNull(
+                                    kv, "KvTablet for the historical replica shouldn't be null.");
+                            LogAppendInfo appendInfo =
+                                    kv.putHistoricalAsLeader(
+                                            kvRecords,
+                                            targetColumns,
+                                            mergeMode,
+                                            originalPartitionName,
+                                            historicalValueLookup);
+                            leaderHWIncremented.set(
+                                    maybeIncrementLeaderHW(logTablet, clock.milliseconds()));
+                            return appendInfo;
+                        });
+
+        // Complete operations unblocked by the new high watermark, see putRecordsToLeader
+        if (leaderHWIncremented.get()) {
+            tryCompleteDelayedOperations();
+        }
+        return leaderAppendInfo;
     }
 
     /**

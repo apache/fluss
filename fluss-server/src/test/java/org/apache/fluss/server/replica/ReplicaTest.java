@@ -42,6 +42,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -87,6 +88,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -517,6 +519,65 @@ final class ReplicaTest extends ReplicaTestBase {
                 MergeMode.DEFAULT,
                 0);
         assertThat(kvReplica.getLogHighWatermark()).isEqualTo(2);
+    }
+
+    @Test
+    void testWriteThatPublishesFlushedOffsetCompletesDelayedWrites() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 2);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+        Replica kvReplica = replicaManager.getReplicaOrException(tb);
+        KvTablet kvTablet = checkNotNull(kvReplica.getKvTablet());
+
+        KvRecordTestUtils.KvRecordFactory kvRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+        KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
+                KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
+
+        // Hold asynchronous flushes and detach the flush-complete listener: a write that runs
+        // between a flush completing and its listener leaves the listener nothing to publish, so
+        // the write itself is the only one that can complete the delayed writes it unblocks.
+        holdableKvFlushScheduler.holdFlushes();
+        kvTablet.setFlushCompleteListener(null);
+
+        // Write 1 with acks=-1: LEO = 1 while the flush is held at 0, so it waits for the HW.
+        CompletableFuture<List<PutKvResultForBucket>> firstWrite = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                -1,
+                Collections.singletonMap(
+                        tb,
+                        kvRecordBatchFactory.ofRecords(
+                                kvRecordFactory.ofRecord("k1", new Object[] {1, "a"}))),
+                null,
+                MergeMode.DEFAULT,
+                (short) 1,
+                firstWrite::complete);
+        assertThat(kvReplica.getLogHighWatermark()).isEqualTo(0);
+        assertThat(firstWrite).isNotDone();
+
+        // The flush of offset 1 completes, but its listener has not published it yet.
+        holdableKvFlushScheduler.runHeldFlushes();
+        assertThat(kvTablet.getFlushedLogOffset()).isEqualTo(1);
+
+        // Write 2 publishes the completed flush offset 1 as the HW. That reaches the offset
+        // write 1 waits for, so write 1 must complete now rather than at its timeout.
+        CompletableFuture<List<PutKvResultForBucket>> secondWrite = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                -1,
+                Collections.singletonMap(
+                        tb,
+                        kvRecordBatchFactory.ofRecords(
+                                kvRecordFactory.ofRecord("k2", new Object[] {2, "b"}))),
+                null,
+                MergeMode.DEFAULT,
+                (short) 1,
+                secondWrite::complete);
+        assertThat(kvReplica.getLogHighWatermark()).isEqualTo(1);
+        assertThat(firstWrite).isDone();
+        assertThat(firstWrite.get().get(0).succeeded()).isTrue();
+        assertThat(firstWrite.get().get(0).getWriteLogEndOffset()).isEqualTo(1);
+        assertThat(secondWrite).isNotDone();
     }
 
     @Test
