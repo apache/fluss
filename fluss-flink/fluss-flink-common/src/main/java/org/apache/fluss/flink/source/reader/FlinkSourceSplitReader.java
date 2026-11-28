@@ -28,6 +28,7 @@ import org.apache.fluss.client.table.scanner.batch.KvSnapshotAndLogBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.lake.LakeSplitReaderGenerator;
@@ -114,6 +115,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     private final Connection connection;
     private final Table table;
+    private final String scannerTmpDir;
     private final FlinkMetricRegistry flinkMetricRegistry;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
@@ -143,6 +145,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         Collections.singleton(MetricNames.SCANNER_RECORDS_LAG));
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
+        this.scannerTmpDir = flussConf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
         this.tableId = table.getTableInfo().getTableId();
         this.sourceOutputType = sourceOutputType;
         this.boundedSplits = new ArrayDeque<>();
@@ -463,7 +466,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                                                                 "Batch hybrid snapshot log split "
                                                                         + "must have a stopping "
                                                                         + "offset.")),
-                                projectedFields);
+                                projectedFields,
+                                scannerTmpDir);
                 currentBoundedSplitReader =
                         new BoundedSplitReader(
                                 batchScanner, hybridSnapshotLogSplit.recordsToSkip());
