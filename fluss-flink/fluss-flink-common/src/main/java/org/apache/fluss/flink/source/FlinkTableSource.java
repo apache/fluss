@@ -895,8 +895,8 @@ public class FlinkTableSource
                         remainingFilters.add(filter);
                     } else {
                         acceptedFilters.add(filter);
+                        converted.add(p);
                     }
-                    converted.add(p);
                 } else {
                     remainingFilters.add(filter);
                 }

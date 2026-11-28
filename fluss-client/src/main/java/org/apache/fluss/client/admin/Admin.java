@@ -23,6 +23,7 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
+import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -72,8 +73,10 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.utils.PartitionUtils;
 
 import javax.annotation.Nullable;
 
@@ -434,6 +437,39 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<List<PartitionInfo>> listPartitionInfos(
             TablePath tablePath, PartitionSpec partialPartitionSpec);
+
+    /**
+     * Lists regular partitions that match a predicate asynchronously.
+     *
+     * <p>The predicate must use the field order and types of {@link
+     * PartitionUtils#partitionRowType(TableInfo)}.
+     *
+     * @param tablePath The path of the partitioned table.
+     * @param predicate The predicate on partition keys.
+     */
+    default CompletableFuture<List<PartitionInfo>> listPartitionInfosByPredicate(
+            TablePath tablePath, Predicate predicate) {
+        return getTableInfo(tablePath)
+                .thenCompose(tableInfo -> listPartitionInfosByPredicate(tableInfo, predicate));
+    }
+
+    /**
+     * Lists regular partitions that match a predicate using already resolved table metadata.
+     *
+     * @param tableInfo Current metadata for the partitioned table.
+     * @param predicate The predicate on the partition row type of the table.
+     * @see #listPartitionInfosByPredicate(TablePath, Predicate)
+     */
+    default CompletableFuture<List<PartitionInfo>> listPartitionInfosByPredicate(
+            TableInfo tableInfo, Predicate predicate) {
+        return listPartitionInfos(tableInfo.getTablePath())
+                .thenApply(
+                        partitions ->
+                                ClientUtils.filterPartitionInfos(
+                                        partitions,
+                                        PartitionUtils.partitionRowType(tableInfo),
+                                        predicate));
+    }
 
     /**
      * Create a new partition for a partitioned table.

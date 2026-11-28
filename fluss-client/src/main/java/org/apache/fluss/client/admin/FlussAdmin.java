@@ -41,6 +41,7 @@ import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -59,6 +60,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RetryableGatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
@@ -117,7 +119,6 @@ import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbListedGroup;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
-import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
@@ -126,9 +127,12 @@ import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.PartitionUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -501,15 +505,36 @@ public class FlussAdmin implements Admin {
         return listPartitionInfos(tablePath, partitionSpec, false);
     }
 
+    @Override
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfosByPredicate(
+            TableInfo tableInfo, Predicate predicate) {
+        TablePath tablePath = tableInfo.getTablePath();
+        if (!tableInfo.isPartitioned()) {
+            return FutureUtils.completedExceptionally(
+                    new TableNotPartitionedException(
+                            "Table '" + tablePath + "' is not a partitioned table."));
+        }
+        RowType partitionRowType = PartitionUtils.partitionRowType(tableInfo);
+        ListPartitionInfosRequest request = createListPartitionInfosRequest(tablePath);
+        try {
+            request.setPartitionPredicate(
+                    PredicateMessageUtils.toPbPredicate(predicate, partitionRowType));
+        } catch (IllegalArgumentException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+        return sendListPartitionInfosRequest(tablePath, false, request)
+                .thenApply(
+                        // Older servers ignore the optional predicate and return all partitions.
+                        partitions ->
+                                ClientUtils.filterPartitionInfos(
+                                        partitions, partitionRowType, predicate));
+    }
+
     private CompletableFuture<List<PartitionInfo>> listPartitionInfos(
             TablePath tablePath,
             @Nullable PartitionSpec partitionSpec,
             boolean includeSystemPartitions) {
-        ListPartitionInfosRequest request = new ListPartitionInfosRequest();
-        request.setTablePath(
-                new PbTablePath()
-                        .setDatabaseName(tablePath.getDatabaseName())
-                        .setTableName(tablePath.getTableName()));
+        ListPartitionInfosRequest request = createListPartitionInfosRequest(tablePath);
         if (partitionSpec != null) {
             request.setPartialPartitionSpec(makePbPartitionSpec(partitionSpec));
         }
@@ -517,6 +542,13 @@ public class FlussAdmin implements Admin {
             request.setIncludeSystemPartitions(true);
         }
 
+        return sendListPartitionInfosRequest(tablePath, includeSystemPartitions, request);
+    }
+
+    private CompletableFuture<List<PartitionInfo>> sendListPartitionInfosRequest(
+            TablePath tablePath,
+            boolean includeSystemPartitions,
+            ListPartitionInfosRequest request) {
         return readOnlyGateway
                 .listPartitionInfos(request)
                 .thenCompose(
@@ -1461,5 +1493,13 @@ public class FlussAdmin implements Admin {
                     !isNullOrWhitespaceOnly(rack),
                     "rack element must not be null, empty, or whitespace-only");
         }
+    }
+
+    private static ListPartitionInfosRequest createListPartitionInfosRequest(TablePath tablePath) {
+        ListPartitionInfosRequest request = new ListPartitionInfosRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return request;
     }
 }
