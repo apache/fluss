@@ -29,12 +29,9 @@ import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.net.MalformedURLException;
 import java.rmi.NoSuchObjectException;
-import java.rmi.NotBoundException;
-import java.rmi.Remote;
-import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * JMX Server implementation that JMX clients can connect to.
@@ -45,8 +42,6 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 class JMXServer {
     private static final Logger LOG = LoggerFactory.getLogger(JMXServer.class);
-
-    private final AtomicReference<Remote> rmiServerReference = new AtomicReference<>();
 
     private Registry rmiRegistry;
     private JMXConnectorServer connector;
@@ -64,7 +59,6 @@ class JMXServer {
     }
 
     void stop() throws IOException {
-        rmiServerReference.set(null);
         if (connector != null) {
             try {
                 connector.stop();
@@ -88,10 +82,8 @@ class JMXServer {
     }
 
     private void internalStart(int port) throws IOException {
-        rmiServerReference.set(null);
-
         // this allows clients to lookup the JMX service
-        rmiRegistry = new JmxRegistry(port, "jmxrmi", rmiServerReference);
+        rmiRegistry = LocateRegistry.createRegistry(port);
 
         String serviceUrl =
                 "service:jmx:rmi://localhost:" + port + "/jndi/rmi://localhost:" + port + "/jmxrmi";
@@ -108,60 +100,5 @@ class JMXServer {
                 new RMIConnectorServer(
                         url, null, rmiServer, ManagementFactory.getPlatformMBeanServer());
         connector.start();
-
-        // we can't pass the created stub directly to the registry since this would form a cyclic
-        // dependency:
-        // - you can only start the connector after the registry was started
-        // - you can only create the stub after the connector was started
-        // - you can only start the registry after the stub was created
-        rmiServerReference.set(rmiServer.toStub());
-    }
-
-    /** A registry that only exposes a single remote object. */
-    @SuppressWarnings("restriction")
-    private static class JmxRegistry extends sun.rmi.registry.RegistryImpl {
-        private final String lookupName;
-        private final AtomicReference<Remote> remoteServerStub;
-
-        JmxRegistry(
-                final int port,
-                final String lookupName,
-                final AtomicReference<Remote> remoteServerStub)
-                throws RemoteException {
-            super(port);
-            this.lookupName = lookupName;
-            this.remoteServerStub = remoteServerStub;
-        }
-
-        @Override
-        public Remote lookup(String s) throws NotBoundException {
-            if (lookupName.equals(s)) {
-                final Remote remote = remoteServerStub.get();
-                if (remote != null) {
-                    return remote;
-                }
-            }
-            throw new NotBoundException("Not bound.");
-        }
-
-        @Override
-        public void bind(String s, Remote remote) {
-            // this is called from RMIConnectorServer#start; don't throw a general AccessException
-        }
-
-        @Override
-        public void unbind(String s) {
-            // this is called from RMIConnectorServer#stop; don't throw a general AccessException
-        }
-
-        @Override
-        public void rebind(String s, Remote remote) {
-            // might as well not throw an exception here given that the others don't
-        }
-
-        @Override
-        public String[] list() {
-            return new String[] {lookupName};
-        }
     }
 }
