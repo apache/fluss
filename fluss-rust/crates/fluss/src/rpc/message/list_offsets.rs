@@ -39,7 +39,7 @@ pub const LIST_OFFSET_FROM_TIMESTAMP: i32 = 2;
 pub const CLIENT_FOLLOWER_SERVER_ID: i32 = -1;
 
 /// Offset specification for list offsets request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OffsetSpec {
     /// Earliest offset spec
     Earliest,

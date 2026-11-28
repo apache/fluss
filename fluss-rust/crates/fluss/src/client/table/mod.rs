@@ -23,6 +23,8 @@ use crate::metadata::{SchemaInfo, TableInfo, TablePath};
 use std::sync::Arc;
 
 pub const EARLIEST_OFFSET: i64 = -2;
+/// Resolve a scanner subscription to the end of the bucket on poll.
+pub const LATEST_OFFSET: i64 = -1;
 
 mod append;
 mod batch_scanner;
@@ -55,7 +57,10 @@ pub use reader::{
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
-pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
+pub use scanner::{
+    LogScanner, MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan,
+    RecordBatchLogScanner, TableScan,
+};
 pub use upsert::{TableUpsert, UpsertWriter};
 
 #[allow(dead_code)]

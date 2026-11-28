@@ -1,0 +1,657 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use fluss::client::{
+    ConsumerGroupOptions, FlussConnection, OffsetAndMetadata, OffsetCommitOutcome,
+};
+use fluss::config::Config;
+use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableBucket, TableDescriptor, TablePath};
+use fluss::row::{DataGetters, GenericRow};
+use std::collections::HashMap;
+use std::time::Duration;
+
+fn success(result: fluss::client::OffsetCommitResult) {
+    assert!(!result.is_empty());
+    assert!(
+        result
+            .values()
+            .all(|outcome| matches!(outcome, OffsetCommitOutcome::Committed)),
+        "{result:?}"
+    );
+}
+
+async fn connection() -> FlussConnection {
+    FlussConnection::new(Config {
+        bootstrap_servers: std::env::var("FLUSS_BOOTSTRAP_SERVERS").unwrap_or_else(|_| {
+            super::utils::get_shared_cluster()
+                .plaintext_bootstrap_servers()
+                .to_owned()
+        }),
+        scanner_log_max_poll_records: 2,
+        ..Config::default()
+    })
+    .await
+    .unwrap()
+}
+
+fn table_path() -> TablePath {
+    TablePath::new(
+        "fluss",
+        format!("consumer_offsets_{}", uuid::Uuid::new_v4().simple()),
+    )
+}
+
+async fn log_table(connection: &FlussConnection) -> (TablePath, TableBucket) {
+    let path = table_path();
+    let descriptor = TableDescriptor::builder()
+        .schema(
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .build()
+                .unwrap(),
+        )
+        .property("table.statistics.columns", "id")
+        .property("table.log.tiered.local-segments", "100")
+        .distributed_by(Some(1), vec![])
+        .build()
+        .unwrap();
+    connection
+        .get_admin()
+        .unwrap()
+        .create_table(&path, &descriptor, false)
+        .await
+        .unwrap();
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    for id in 0..8 {
+        let mut row = GenericRow::new(1);
+        row.set_field(0, id);
+        writer.append(&row).unwrap();
+    }
+    writer.flush().await.unwrap();
+    (path, TableBucket::new(table.get_table_info().table_id, 0))
+}
+
+#[tokio::test]
+async fn restore_skips_a_range_consumed_by_a_zero_row_poll() {
+    let connection = connection().await;
+    let (path, bucket) = log_table(&connection).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let group = format!("filtered-{}", bucket.table_id());
+    let filtered = table
+        .new_scan()
+        .filter(fluss::predicate::col("id").gt(7))
+        .unwrap()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    filtered.subscribe(0, 0).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let poll = filtered.poll(Duration::from_secs(5)).await.unwrap();
+            assert_eq!(poll.count(), 0);
+            if poll.consumed_up_to_offset(&bucket) == Some(8) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("filtered poll did not consume the existing eight records");
+    success(filtered.commit_sync().await.unwrap());
+    drop(filtered);
+
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    let mut row = GenericRow::new(1);
+    row.set_field(0, 8i32);
+    writer.append(&row).unwrap();
+    writer.flush().await.unwrap();
+    let restored = table
+        .new_scan()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    restored
+        .subscribe_from_committed(std::slice::from_ref(&bucket))
+        .unwrap();
+    let poll = restored.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(
+        poll.records(&bucket)
+            .iter()
+            .map(|row| row.offset())
+            .collect::<Vec<_>>(),
+        [8]
+    );
+    connection
+        .get_admin()
+        .unwrap()
+        .drop_table(&path, false)
+        .await
+        .unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_and_polled_offsets_restore_without_committing_prefetch() {
+    let connection = connection().await;
+    let admin = connection.get_admin().unwrap();
+    let (path, bucket) = log_table(&connection).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let group = format!("group-{}", bucket.table_id());
+    let buckets = std::slice::from_ref(&bucket);
+    let scanner = table
+        .new_scan()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    scanner.subscribe_from_committed(buckets).unwrap();
+    let records = scanner.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(
+        records
+            .records(&bucket)
+            .iter()
+            .map(|r| (r.offset(), r.row().get_int(0).unwrap()))
+            .collect::<Vec<_>>(),
+        vec![(0, 0), (1, 1)]
+    );
+    assert_eq!(
+        admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
+        None
+    );
+    // Only the first returned record has been processed.
+    success(
+        scanner
+            .commit_offsets_sync(HashMap::from([(bucket.clone(), OffsetAndMetadata::new(1))]))
+            .await
+            .unwrap(),
+    );
+    drop(scanner);
+    let restored = table
+        .new_scan()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    restored.subscribe_from_committed(buckets).unwrap();
+    let records = restored.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(
+        records
+            .records(&bucket)
+            .iter()
+            .map(|r| (r.offset(), r.row().get_int(0).unwrap()))
+            .collect::<Vec<_>>(),
+        vec![(1, 1), (2, 2)]
+    );
+    success(restored.commit_sync().await.unwrap());
+    // Eight records exist, but prefetch must not move the saved position past this poll.
+    assert_eq!(
+        admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
+        Some(OffsetAndMetadata::new(3))
+    );
+    let (other_path, other_bucket) = log_table(&connection).await;
+    let saved = admin
+        .get_consumer_offsets(&group, &[bucket.clone(), other_bucket.clone()])
+        .await
+        .unwrap();
+    assert_eq!(saved[&bucket], Some(OffsetAndMetadata::new(3)));
+    assert_eq!(saved[&other_bucket], None);
+    admin.drop_table(&other_path, false).await.unwrap();
+    admin.drop_table(&path, false).await.unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
+}
+
+#[tokio::test]
+async fn partition_commits_keep_partial_failures_and_missing_positions_distinct() {
+    let connection = connection().await;
+    let admin = connection.get_admin().unwrap();
+    let path = table_path();
+    let descriptor = TableDescriptor::builder()
+        .schema(
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("region", DataTypes::string())
+                .build()
+                .unwrap(),
+        )
+        .distributed_by(Some(1), vec![])
+        .partitioned_by(vec!["region"])
+        .build()
+        .unwrap();
+    admin.create_table(&path, &descriptor, false).await.unwrap();
+    for region in ["a", "b"] {
+        admin
+            .create_partition(
+                &path,
+                &PartitionSpec::new(HashMap::from([("region", region)])),
+                false,
+            )
+            .await
+            .unwrap();
+    }
+    super::utils::wait_for_partitions_ready(&admin, &path, &["a", "b"]).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let buckets: Vec<_> = admin
+        .list_partition_infos(&path)
+        .await
+        .unwrap()
+        .iter()
+        .map(|p| {
+            TableBucket::new_with_partition(
+                table.get_table_info().table_id,
+                Some(p.get_partition_id()),
+                0,
+            )
+        })
+        .collect();
+    let group = format!("group-{}", table.get_table_info().table_id);
+    let scanner = table
+        .new_scan()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .create_record_batch_log_scanner()
+        .unwrap();
+    let first = OffsetAndMetadata {
+        offset: 10,
+        metadata: Some("中文".into()),
+    };
+    let result = scanner
+        .commit_offsets_sync(HashMap::from([
+            (buckets[0].clone(), first.clone()),
+            (
+                buckets[1].clone(),
+                OffsetAndMetadata {
+                    offset: 20,
+                    metadata: Some("超".repeat(2000)),
+                },
+            ),
+        ]))
+        .await
+        .unwrap();
+    assert!(matches!(
+        result[&buckets[0]],
+        OffsetCommitOutcome::Committed
+    ));
+    assert!(
+        matches!(result[&buckets[1]], OffsetCommitOutcome::Rejected(ref error) if error.code == 80)
+    );
+    let saved = admin.get_consumer_offsets(&group, &buckets).await.unwrap();
+    assert_eq!(saved[&buckets[0]], Some(first.clone()));
+    assert_eq!(saved[&buckets[1]], None);
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    for region in ["a", "b"] {
+        for id in 0..12 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, region);
+            writer.append(&row).unwrap();
+        }
+    }
+    writer.flush().await.unwrap();
+    scanner.subscribe_from_committed(&buckets).unwrap();
+    let mut starts = HashMap::new();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while starts.len() < 2 {
+            for batch in scanner.poll(Duration::from_secs(2)).await.unwrap() {
+                starts
+                    .entry(batch.bucket().clone())
+                    .or_insert(batch.base_offset());
+            }
+        }
+    })
+    .await
+    .expect("expected records from both partitions");
+    assert_eq!(starts[&buckets[0]], 10);
+    assert_eq!(starts[&buckets[1]], 0);
+    let second = OffsetAndMetadata {
+        offset: 2,
+        metadata: Some(String::new()),
+    };
+    success(
+        scanner
+            .commit_offsets_sync(HashMap::from([(buckets[1].clone(), second.clone())]))
+            .await
+            .unwrap(),
+    );
+    let saved = admin.get_consumer_offsets(&group, &buckets).await.unwrap();
+    assert_eq!(saved[&buckets[0]], Some(first));
+    assert_eq!(saved[&buckets[1]], Some(second));
+    assert!(
+        admin
+            .get_consumer_offsets(&format!("other-{group}"), &buckets)
+            .await
+            .unwrap()
+            .values()
+            .all(Option::is_none)
+    );
+    admin.drop_table(&path, false).await.unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
+}
+
+#[tokio::test]
+async fn arrow_commits_track_delivered_batches_and_explicit_seek_positions() {
+    let connection = connection().await;
+    let admin = connection.get_admin().unwrap();
+    let (path, bucket) = log_table(&connection).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let group = format!("group-{}", bucket.table_id());
+    let buckets = std::slice::from_ref(&bucket);
+    let scanner = table
+        .new_scan()
+        .with_consumer_group(ConsumerGroupOptions::new(&group))
+        .unwrap()
+        .with_auto_commit(Duration::from_secs(3600))
+        .unwrap()
+        .create_record_batch_log_scanner()
+        .unwrap();
+    scanner.subscribe_from_committed(buckets).unwrap();
+    assert!(matches!(
+        fluss::client::RecordBatchLogReader::new_until_offsets(
+            scanner.new_shared_handle(),
+            HashMap::from([(bucket.clone(), 1)])
+        ),
+        Err(fluss::error::Error::IllegalArgument { .. })
+    ));
+    let batches = scanner.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(|batch| batch.batch().num_rows())
+            .sum::<usize>(),
+        8
+    );
+    success(scanner.commit_sync().await.unwrap());
+    assert_eq!(
+        admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
+        Some(OffsetAndMetadata::new(8))
+    );
+    scanner
+        .subscribe(0, fluss::client::LATEST_OFFSET)
+        .await
+        .unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    let mut row = GenericRow::new(1);
+    row.set_field(0, 8);
+    writer.append(&row).unwrap();
+    writer.flush().await.unwrap();
+    // The append between subscribe and the first poll belongs before the resolved end.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            assert!(
+                scanner
+                    .poll(Duration::from_millis(20))
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            if scanner.get_subscribed_buckets() == [(bucket.clone(), 9)] {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    scanner.subscribe(0, 0).await.unwrap();
+    scanner.close().await;
+    assert_eq!(
+        admin.get_consumer_offsets(&group, buckets).await.unwrap()[&bucket],
+        Some(OffsetAndMetadata::new(8))
+    );
+    admin.drop_table(&path, false).await.unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
+}
+
+#[tokio::test]
+async fn multi_table_auto_commit_and_admin_management_preserve_positions() {
+    let connection = connection().await;
+    let admin = connection.get_admin().unwrap();
+    let (first, a) = log_table(&connection).await;
+    let (second, b) = log_table(&connection).await;
+    let group = format!("multi-{}", a.table_id());
+    let buckets = [a.clone(), b.clone()];
+    let mut scanner = connection
+        .new_multi_table_scan(
+            std::slice::from_ref(&first),
+            ConsumerGroupOptions::new(&group),
+        )
+        .await
+        .unwrap()
+        .with_auto_commit(Duration::from_nanos(1))
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    assert_eq!(
+        scanner.register_table(&second).await.unwrap().table_id,
+        b.table_id()
+    );
+    scanner.subscribe_from_committed(&buckets).unwrap();
+    let first_poll = scanner.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(first_poll.count(), 2);
+    let first_bucket = first_poll
+        .records_by_buckets()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert!(
+        admin
+            .get_consumer_offsets(&group, &buckets)
+            .await
+            .unwrap()
+            .values()
+            .all(Option::is_none)
+    );
+    // Entering the next poll declares the previous result processed. Newly returned data
+    // must not be included in that automatic commit, even if it was already prefetched.
+    let second_poll = scanner.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(second_poll.count(), 2);
+    let second_bucket = second_poll
+        .records_by_buckets()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_ne!(first_bucket, second_bucket);
+    let saved = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let offsets = admin.get_consumer_offsets(&group, &buckets).await.unwrap();
+            if offsets[&first_bucket].is_some() {
+                break offsets;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(saved[&first_bucket], Some(OffsetAndMetadata::new(2)));
+    assert_eq!(saved[&second_bucket], None);
+    scanner.close().await;
+    assert!(admin.list_consumer_groups().await.unwrap().contains(&group));
+    let saved = admin.list_consumer_offsets(&group).await.unwrap();
+    assert_eq!(saved.len(), 2);
+    assert!(saved.values().all(|value| value.offset == 2));
+
+    // Admin rewinds and updates metadata across tables in one commit request.
+    success(
+        admin
+            .alter_consumer_offsets(
+                &group,
+                HashMap::from([
+                    (
+                        a.clone(),
+                        OffsetAndMetadata {
+                            offset: 1,
+                            metadata: Some(String::new()),
+                        },
+                    ),
+                    (
+                        b.clone(),
+                        OffsetAndMetadata {
+                            offset: 3,
+                            metadata: None,
+                        },
+                    ),
+                ]),
+            )
+            .await
+            .unwrap(),
+    );
+    let restored = connection
+        .new_multi_table_scan(
+            &[first.clone(), second.clone()],
+            ConsumerGroupOptions::new(&group),
+        )
+        .await
+        .unwrap()
+        .create_record_batch_log_scanner()
+        .unwrap();
+    restored.subscribe_from_committed(&buckets).unwrap();
+    let mut starts = HashMap::new();
+    for _ in 0..2 {
+        for batch in restored.poll(Duration::from_secs(10)).await.unwrap() {
+            starts
+                .entry(batch.bucket().clone())
+                .or_insert(batch.base_offset());
+        }
+    }
+    assert_eq!(starts[&a], 1);
+    assert_eq!(starts[&b], 3);
+    drop(restored);
+    let deleted = admin
+        .delete_consumer_offsets(&group, std::slice::from_ref(&a))
+        .await
+        .unwrap();
+    assert!(deleted[&a].is_ok());
+    assert_eq!(
+        admin.get_consumer_offsets(&group, &buckets).await.unwrap()[&a],
+        None
+    );
+    assert!(
+        admin
+            .delete_consumer_groups(&[group.clone(), "__internal".into()])
+            .await
+            .is_err()
+    );
+    assert_eq!(admin.list_consumer_offsets(&group).await.unwrap().len(), 1);
+    for _ in 0..2 {
+        let deleted = admin
+            .delete_consumer_groups(&[group.clone(), group.clone()])
+            .await
+            .unwrap();
+        assert!(deleted[&group].is_ok());
+    }
+    assert!(
+        admin
+            .list_consumer_offsets(&group)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!admin.list_consumer_groups().await.unwrap().contains(&group));
+    admin.drop_table(&first, false).await.unwrap();
+    admin.drop_table(&second, false).await.unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
+}
+
+#[tokio::test]
+async fn multi_table_assignment_failure_and_partial_commits_do_not_hide_progress() {
+    let connection = connection().await;
+    let admin = connection.get_admin().unwrap();
+    let (first, a) = log_table(&connection).await;
+    let (second, b) = log_table(&connection).await;
+    let group = format!("partial-{}", a.table_id());
+    let mut scanner = connection
+        .new_multi_table_scan(
+            &[first.clone(), second.clone()],
+            ConsumerGroupOptions::new(&group),
+        )
+        .await
+        .unwrap()
+        .create_log_scanner()
+        .unwrap();
+    scanner.subscribe(&a, 4).await.unwrap();
+    success(
+        admin
+            .alter_consumer_offsets(
+                &group,
+                HashMap::from([(a.clone(), OffsetAndMetadata::new(1))]),
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(
+        scanner
+            .subscribe_from_committed(&[a.clone(), TableBucket::new(b.table_id(), -1)])
+            .is_err()
+    );
+    let records = scanner.poll(Duration::from_secs(10)).await.unwrap();
+    assert_eq!(records.records(&a)[0].offset(), 4);
+    assert!(records.records(&b).is_empty());
+    let results = scanner
+        .commit_offsets_sync(HashMap::from([
+            (a.clone(), OffsetAndMetadata::new(5)),
+            (
+                b.clone(),
+                OffsetAndMetadata {
+                    offset: 2,
+                    metadata: Some("x".repeat(1_048_576)),
+                },
+            ),
+        ]))
+        .await
+        .unwrap();
+    assert!(matches!(results[&a], OffsetCommitOutcome::Committed));
+    assert!(matches!(results[&b], OffsetCommitOutcome::Rejected(_)));
+    let saved = admin
+        .get_consumer_offsets(&group, &[a.clone(), b.clone()])
+        .await
+        .unwrap();
+    assert_eq!(saved[&a], Some(OffsetAndMetadata::new(5)));
+    assert_eq!(saved[&b], None);
+    let descriptor = admin
+        .get_table_info(&first)
+        .await
+        .unwrap()
+        .to_table_descriptor()
+        .unwrap();
+    admin.drop_table(&first, false).await.unwrap();
+    admin
+        .create_table(&first, &descriptor, false)
+        .await
+        .unwrap();
+    let replacement = admin.get_table_info(&first).await.unwrap().table_id;
+    assert_ne!(replacement, a.table_id());
+    assert!(
+        scanner
+            .register_table(&first)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("recreated")
+    );
+    scanner.unsubscribe(&a).await.unwrap();
+    assert!(scanner.commit_sync().await.unwrap().is_empty());
+    assert_eq!(
+        scanner.register_table(&first).await.unwrap().table_id,
+        replacement
+    );
+    admin.delete_consumer_groups(&[group]).await.unwrap();
+    admin.drop_table(&first, false).await.unwrap();
+    admin.drop_table(&second, false).await.unwrap();
+    connection.close(Duration::from_secs(10)).await.unwrap();
+}

@@ -53,6 +53,11 @@ static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
                 .expect("Failed to canonicalize remote data directory path");
 
             let mut cluster_conf = HashMap::new();
+            // The offset system table defaults to three replicas; this cluster has one tablet.
+            cluster_conf.insert(
+                "server.consumer-offsets.table.replication-factor".to_string(),
+                "1".to_string(),
+            );
             cluster_conf.insert("log.segment.file-size".to_string(), "120b".to_string());
             cluster_conf.insert(
                 "remote.log.task-interval-duration".to_string(),

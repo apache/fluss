@@ -71,6 +71,143 @@ impl FlussAdmin {
         }
     }
 
+    /// Reads saved next offsets across tables without moving a scanner.
+    /// Returns `None` for a bucket with no commit; any bucket error fails the query.
+    /// Uses a 30-second deadline including owner discovery and routing retries.
+    pub async fn get_consumer_offsets(
+        &self,
+        group_id: &str,
+        buckets: &[TableBucket],
+    ) -> Result<HashMap<TableBucket, Option<crate::client::OffsetAndMetadata>>> {
+        self.consumer_group(group_id)?.fetch(buckets).await
+    }
+
+    fn consumer_group(
+        &self,
+        group_id: &str,
+    ) -> Result<crate::client::consumer_offsets::ConsumerGroupClient> {
+        let options = crate::client::ConsumerGroupOptions::new(group_id);
+        options.validate()?;
+        Ok(crate::client::consumer_offsets::ConsumerGroupClient::new(
+            options,
+            self.rpc_client.clone(),
+            self.metadata.clone(),
+        ))
+    }
+
+    /// Lists saved offsets visible to the caller. Unauthorized source tables are omitted
+    /// by the server; lack of group DESCRIBE fails the request. Not a consistent snapshot.
+    pub async fn list_consumer_offsets(
+        &self,
+        group_id: &str,
+    ) -> Result<HashMap<TableBucket, crate::client::OffsetAndMetadata>> {
+        self.consumer_group(group_id)?
+            .fetch_all()
+            .await?
+            .into_iter()
+            .map(|(bucket, offset)| {
+                offset.map(|value| (bucket, value)).ok_or_else(|| {
+                    crate::client::consumer_offsets::invalid(
+                        "All-offset response contains an absent offset",
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Lists visible groups by querying every current TabletServer. Fails rather than
+    /// returning a partial list when a server cannot be queried. Concurrent owner movement
+    /// or group creation/deletion can change this non-transactional view.
+    pub async fn list_consumer_groups(&self) -> Result<Vec<String>> {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let nodes = self.get_server_nodes().await?;
+            let tablets = nodes
+                .iter()
+                .filter(|node| *node.server_type() == crate::cluster::ServerType::TabletServer);
+            let responses = try_join_all(tablets.map(|node| async move {
+                self.rpc_client
+                    .get_connection(node)
+                    .await?
+                    .request(crate::rpc::message::ListConsumerGroupsRequest {
+                        inner_request: crate::proto::ListConsumerGroupsRequest {},
+                    })
+                    .await
+            }))
+            .await?;
+            let mut groups: Vec<_> = responses
+                .into_iter()
+                .flat_map(|r| r.groups.into_iter().map(|g| g.group_id))
+                .collect();
+            groups.sort_unstable();
+            groups.dedup();
+            Ok(groups)
+        })
+        .await
+        .map_err(|_| Error::UnexpectedError {
+            message: "Consumer group listing deadline exceeded".into(),
+            source: None,
+        })?
+    }
+
+    /// Sets explicit next offsets across tables, including rewinds. Quiesce consumers first:
+    /// the server provides no fencing against concurrent commits. Unknown writes are not retried.
+    /// Cancellation after dispatch cannot undo a reset.
+    pub async fn alter_consumer_offsets(
+        &self,
+        group_id: &str,
+        offsets: HashMap<TableBucket, crate::client::OffsetAndMetadata>,
+    ) -> std::result::Result<crate::client::OffsetCommitResult, crate::client::OffsetCommitError>
+    {
+        let group = self
+            .consumer_group(group_id)
+            .map_err(crate::client::OffsetCommitError::Rejected)?;
+        group.alter_offsets(offsets).await
+    }
+
+    /// Deletes selected offsets; missing entries succeed. Requires group WRITE.
+    /// Stop writers first; a timeout may mean deletion took effect and must not be blindly retried.
+    pub async fn delete_consumer_offsets(
+        &self,
+        group_id: &str,
+        buckets: &[TableBucket],
+    ) -> std::result::Result<crate::client::OffsetDeleteResult, crate::client::OffsetCommitError>
+    {
+        self.consumer_group(group_id)
+            .map_err(crate::client::OffsetCommitError::Rejected)?
+            .delete_offsets(buckets)
+            .await
+    }
+
+    /// Deletes each group's metadata and all offsets, routing each group to its owner.
+    /// Missing groups succeed. Requires group DROP. Quiesce writers to prevent recreation.
+    /// All IDs are validated before dispatch and duplicates are deleted once.
+    /// Every group has its own result; cancellation can leave a partially applied operation.
+    pub async fn delete_consumer_groups(
+        &self,
+        group_ids: &[String],
+    ) -> Result<crate::client::GroupDeleteResult> {
+        let ids: HashSet<_> = group_ids.iter().collect();
+        let groups = ids
+            .into_iter()
+            .map(|id| {
+                if TablePath::detect_invalid_name(id).is_some() || id.starts_with("__") {
+                    return Err(crate::client::consumer_offsets::invalid(
+                        "Invalid consumer group ID for deletion",
+                    ));
+                }
+                Ok((id, self.consumer_group(id)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(futures::future::join_all(
+            groups
+                .into_iter()
+                .map(|(id, group)| async move { (id.clone(), group.delete_group().await) }),
+        )
+        .await
+        .into_iter()
+        .collect())
+    }
+
     async fn admin_gateway(&self) -> Result<ServerConnection> {
         let cluster = self.metadata.get_cluster();
         let coordinator =

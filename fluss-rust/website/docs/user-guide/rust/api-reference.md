@@ -199,6 +199,134 @@ Single-consumer: overlapping `poll` calls on handles that share state, or `poll`
 | `fn table_path(&self) -> &TablePath`                                                                      | Get the table path                                       |
 | `fn table_id(&self) -> TableId`                                                                           | Get the table ID                                         |
 
+## Consumer offsets
+
+Both log scanner types support persisted offsets for manually assigned buckets. Configure a
+nonempty group ID, restore subscriptions, process a poll, then commit:
+
+```rust
+use fluss::client::{ConsumerGroupOptions, OffsetCommitOutcome};
+use fluss::metadata::TableBucket;
+
+let bucket = TableBucket::new(table.get_table_info().table_id, 0);
+let scanner = table.new_scan()
+    .with_consumer_group(ConsumerGroupOptions::new("orders-worker"))?
+    .create_log_scanner()?;
+scanner.subscribe_from_committed(&[bucket])?;
+let records = scanner.poll(std::time::Duration::from_secs(5)).await?;
+process_all(&records)?; // Commit only after processing succeeds.
+let outcomes = scanner.commit_sync().await?;
+for (bucket, outcome) in outcomes {
+    match outcome {
+        OffsetCommitOutcome::Committed => {}
+        failure => return Err(format!("Commit failed for {bucket}: {failure:?}").into()),
+    }
+}
+```
+
+| Method | Contract |
+| --- | --- |
+| `subscribe_from_committed(buckets)` | On poll, resume each bucket at this group’s saved offset, or earliest if it has no commit. Lookup errors propagate. |
+| `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
+| `commit_sync().await` | Commit progress from completed polls, including ranges skipped by the filter even when no rows were returned. Prefetch is excluded. Process all returned records first. |
+| `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
+| `commit_async(callback)` / `commit_offsets_async(offsets, callback)` | Call from a Tokio runtime to enqueue and capture the offsets. Outside a runtime, the call returns an error. A later poll, commit or explicit close invokes the callback in submission order. Inspect each bucket outcome. Enqueue errors are returned directly. |
+
+For a timestamp or another group’s position, query Admin and pass the resulting offset to `subscribe` or `subscribe_partition`.
+Existing explicit-offset subscriptions keep their behavior. Rust uses distinct names for explicit
+commits because it does not support method overloading.
+
+A scanner submits commits in invocation order and normally permits offset decreases. Drive poll,
+subscription changes and commit initiation from one consumer task. Different scanners/processes
+using the same group are independent writers: assign each bucket to one active consumer yourself.
+There is no membership management or rebalance. Group IDs are sent unchanged and validated by the
+server. For compatibility with servers enforcing group naming rules, use 1–200 ASCII letters,
+digits, underscores or hyphens, without a `__` prefix. For nonpartitioned buckets, use
+`TableBucket::new`; do not send partition ID `-1`.
+
+Offset operations reuse the connection's authentication credentials. Selected-offset queries need
+DESCRIBE on each source table; commits need READ. Servers with group ACLs also enforce permissions
+on the group. Authorization failures are returned to the caller and never trigger offset fallback.
+Records processed after the last successful commit can replay after reconnecting.
+
+On a broken connection or an owner change, the scanner rediscovers the owner and retries the same
+offsets and metadata within the operation deadline. Inspect every bucket in a partial response;
+do not retry successful buckets just because another failed. A rejection means the write is known
+not to have applied. If a dispatched attempt may have applied, the result can be unknown even if a
+retry was rejected.
+
+If a write may still arrive, the same scanner can commit a higher offset for that bucket or repeat
+the same offset and metadata. A batch that goes below the highest potentially late offset or changes
+its metadata at that offset fails with `NeedsRecovery`, even after a seek. Other buckets can still
+be committed separately. A late write can overwrite a higher acknowledged offset, so recovery may
+replay records. Neither reading the stored offset nor creating a new scanner fences that write:
+settle outstanding writes before intentionally rewinding.
+
+Processing
+followed by commit provides at-least-once recovery while the required records remain retained and
+each group/bucket has one active consumer. Downstream effects must tolerate replay: a crash after
+processing but before a successful commit can deliver the same records again. Offset commits are
+not atomic with writes to an external sink. No cross-process fencing token is sent, so replacing a
+consumer requires stopping the previous writer before the replacement starts committing.
+
+`ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
+after preceding queued commits finish. If the owner does not answer before this deadline, the next
+commit discovers the owner again. A scanner admits up to 64 pending commits. If admission returns
+`Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A deadline reached before any attempt starts writing rejects only that commit.  Existing scanners with
+no group retain their behavior. Offset persistence requires a server implementing discovery,
+commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
+consumer offsets. A committed offset that has expired from log retention is not silently reset.
+
+A short poll can return empty while the committed-offset lookup continues. With explicit numeric subscription, `LATEST_OFFSET` resolves each bucket’s end during poll.
+
+### Periodic commits and multiple tables
+
+Group scanners default to a five-second interval; use `without_auto_commit()` for manual commits. They run at the start of a poll once the interval has elapsed,
+using the current positions, including explicit seeks. Process the whole previous result before
+polling again. There is no timer writing offsets while the application is processing a batch.
+Poll does not wait for a periodic commit. Failures are logged. After an unknown outcome, the same per-bucket rewind rules apply as for explicit commits.
+
+A multi-table scanner accepts an empty initial table list; call `register_table(path)` to obtain its table ID and schema before assigning buckets. Unsubscribing the last bucket releases that table’s scanner. If a table is recreated, unsubscribe its old buckets and register the path again to obtain the new ID.
+
+For shutdown, finish processing the last result, call `commit_sync()` and inspect each bucket to confirm the final positions, then await `scanner.close()`. Close submits a periodic commit only if due and waits up to the group timeout for outstanding commits. Drop alone does not commit. Applications
+that dispatch work to another thread should use explicit commits after that work completes.
+
+```rust,ignore
+let scanner = connection
+    .new_multi_table_scan(&[orders_path, payments_path], ConsumerGroupOptions::new("billing"))
+    .await?
+    .with_auto_commit(Duration::from_secs(5))?
+    .create_log_scanner()?;
+scanner.subscribe_from_committed(&buckets)?;
+let records = scanner.poll(Duration::from_secs(1)).await?;
+// Process records using their TableBucket to identify the source table.
+// After the last processed batch:
+let outcomes = scanner.commit_sync().await?;
+```
+
+`create_record_batch_log_scanner` provides the Arrow equivalent. Each batch retains its source
+bucket and schema. Both scanner types support `subscribe`, `subscribe_from_committed`, `unsubscribe`,
+`commit_sync`, `commit_offsets_sync` and their asynchronous variants. Assignment resolves all
+requested tables before changing subscriptions. Poll rotates across tables; successful commits
+across tables share one ordering queue, but are not an atomic cross-table transaction. Projection
+and filtering remain available through individual table scanners.
+
+### Managing saved offsets
+
+| Admin method | Contract |
+| --- | --- |
+| `list_consumer_groups()` | Fans out to all current TabletServers, deduplicates visible groups, and fails if a server cannot be queried. This is not a transactional snapshot during owner movement. |
+| `list_consumer_offsets(group)` | Returns all saved offsets visible to the caller; unauthorized source tables are omitted. Requires group DESCRIBE. |
+| `alter_consumer_offsets(group, offsets)` | Sets or rewinds explicit next offsets across tables, with metadata and per-bucket results. Requires group READ and source table READ. |
+| `delete_consumer_offsets(group, buckets)` | Deletes selected entries, including entries for dropped tables; missing entries succeed. Requires group WRITE. Returns per-bucket results. |
+| `delete_consumer_groups(groups)` | Validates all IDs first, then deletes each distinct group and its offsets once. Missing groups succeed. Requires group DROP; returns a result for every group. |
+
+Stop consumers before resetting or deleting their offsets: these operations do not fence concurrent
+writers, and later commits can recreate deleted groups. Mutation failures distinguish rejection
+from unknown outcomes using `OffsetCommitError`; a timeout after dispatch must not be blindly
+retried, since a later deletion could erase a newer commit. List/delete APIs require server support
+for consumer group management. Cancellation of a multi-group deletion may leave some groups deleted.
+
 ## `RecordBatchLogReader`
 
 Bounded log reader that consumes data up to specified stopping offsets, then terminates.
