@@ -243,6 +243,8 @@
                                     <artifact>org.apache.fluss:fluss-flink-common</artifact>
                                     <excludes>
                                         <exclude>org/apache/fluss/flink/action/orphan/**</exclude>
+                                        <!-- Use the local service file without the unsupported orphan cleanup action. -->
+                                        <exclude>META-INF/services/org.apache.fluss.flink.action.ActionFactory</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
