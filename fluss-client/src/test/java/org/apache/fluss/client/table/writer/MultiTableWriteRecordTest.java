@@ -45,6 +45,7 @@ class MultiTableWriteRecordTest {
         assertThat(rec.getOperation()).isEqualTo(MultiTableWriteRecord.Operation.APPEND);
         assertThat(rec.getRow()).isSameAs(row);
         assertThat(rec.getSchemaId()).isEqualTo(5);
+        assertThat(rec.getBucketId()).isNull();
     }
 
     @Test
@@ -53,6 +54,7 @@ class MultiTableWriteRecordTest {
         MultiTableWriteRecord rec = MultiTableWriteRecord.forUpsert(TP, row, 7);
         assertThat(rec.getOperation()).isEqualTo(MultiTableWriteRecord.Operation.UPSERT);
         assertThat(rec.getSchemaId()).isEqualTo(7);
+        assertThat(rec.getBucketId()).isNull();
     }
 
     @Test
@@ -61,6 +63,7 @@ class MultiTableWriteRecordTest {
         MultiTableWriteRecord rec = MultiTableWriteRecord.forDelete(TP, row, 9);
         assertThat(rec.getOperation()).isEqualTo(MultiTableWriteRecord.Operation.DELETE);
         assertThat(rec.getSchemaId()).isEqualTo(9);
+        assertThat(rec.getBucketId()).isNull();
     }
 
     @Test
@@ -70,6 +73,13 @@ class MultiTableWriteRecordTest {
                 .contains("tablePath=" + TP)
                 .contains("operation=DELETE")
                 .contains("schemaId=3");
+    }
+
+    @Test
+    void testRejectsNegativeBucket() {
+        assertThatThrownBy(() -> MultiTableWriteRecord.forAppend(TP, newRow(), 1, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("bucketId");
     }
 
     @Test

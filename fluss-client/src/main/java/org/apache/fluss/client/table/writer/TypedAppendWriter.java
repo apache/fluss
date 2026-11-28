@@ -18,6 +18,8 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.row.InternalRow;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -37,4 +39,21 @@ public interface TypedAppendWriter<T> extends TableWriter {
      * @return A {@link CompletableFuture} that always returns append result when complete normally.
      */
     CompletableFuture<AppendResult> append(T record);
+
+    /**
+     * Append a record in the specified bucket of its target table or partition.
+     *
+     * <p>For tables with bucket keys, the bucket must match the key's normal hash routing.
+     *
+     * <p>This call may block while resolving the target table or partition's bucket metadata.
+     *
+     * @param record the record to append
+     * @param bucketId the zero-based target bucket ID, less than the target bucket count
+     * @return the append result
+     * @throws IllegalArgumentException if the bucket ID is negative
+     * @throws FlussRuntimeException if the bucket ID is out of range or does not match the bucket
+     *     key
+     * @see AppendWriter#append(InternalRow, int)
+     */
+    CompletableFuture<AppendResult> append(T record, int bucketId);
 }

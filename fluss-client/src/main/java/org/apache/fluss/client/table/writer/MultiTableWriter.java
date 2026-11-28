@@ -37,10 +37,13 @@ public interface MultiTableWriter extends AutoCloseable {
     /**
      * Write a record to the table identified by {@link MultiTableWriteRecord#getTablePath()}.
      *
-     * <p>Asynchronous; the returned future completes when the server has acknowledged the write (or
-     * has failed to write it).
+     * <p>Asynchronous; the returned future completes when the server has acknowledged the write or
+     * a validation, encoding, or send error occurs. The call may block while resolving metadata or
+     * waiting for buffer space.
      *
      * @throws TableNotExistException wrapped in the future, if the table is unknown
+     * @throws NullPointerException if the record is null
+     * @throws IllegalStateException if this writer is closed
      */
     CompletableFuture<WriteResult> write(MultiTableWriteRecord record);
 

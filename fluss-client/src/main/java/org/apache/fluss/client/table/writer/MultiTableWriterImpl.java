@@ -86,27 +86,25 @@ class MultiTableWriterImpl implements MultiTableWriter {
         MultiTableWriteRecord.Operation operation = record.getOperation();
         InternalRow row = record.getRow();
 
-        final WriteRecord writeRecord;
+        CompletableFuture<WriteResult> future = new CompletableFuture<>();
         try {
             TableWriteState state = resolveWriteState(tablePath, record.getSchemaId());
             state.checkFieldCount(row);
-            writeRecord = state.build(operation, row);
+            WriteRecord encoded = state.build(operation, row);
+            Integer bucketId = record.getBucketId();
+            WriteRecord writeRecord = bucketId == null ? encoded : encoded.withBucket(bucketId);
+            writerClient.send(
+                    writeRecord,
+                    (bucket, logEndOffset, exception) -> {
+                        if (exception == null) {
+                            future.complete(new WriteResult());
+                        } else {
+                            future.completeExceptionally(exception);
+                        }
+                    });
         } catch (Exception e) {
-            CompletableFuture<WriteResult> failed = new CompletableFuture<>();
-            failed.completeExceptionally(e);
-            return failed;
+            future.completeExceptionally(e);
         }
-
-        CompletableFuture<WriteResult> future = new CompletableFuture<>();
-        writerClient.send(
-                writeRecord,
-                (bucket, logEndOffset, exception) -> {
-                    if (exception == null) {
-                        future.complete(new WriteResult());
-                    } else {
-                        future.completeExceptionally(exception);
-                    }
-                });
         return future;
     }
 
