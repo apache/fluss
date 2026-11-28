@@ -39,13 +39,14 @@ public class TableLookup implements Lookup {
     @Nullable private final List<String> lookupColumnNames;
 
     private final boolean insertIfNotExists;
+    private final boolean historicalPartitionFallbackEnabled;
 
     public TableLookup(
             TableInfo tableInfo,
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient) {
-        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false);
+        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false, true);
     }
 
     private TableLookup(
@@ -54,19 +55,39 @@ public class TableLookup implements Lookup {
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             @Nullable List<String> lookupColumnNames,
-            boolean insertIfNotExists) {
+            boolean insertIfNotExists,
+            boolean historicalPartitionFallbackEnabled) {
         this.tableInfo = tableInfo;
         this.schemaGetter = schemaGetter;
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
         this.lookupColumnNames = lookupColumnNames;
         this.insertIfNotExists = insertIfNotExists;
+        this.historicalPartitionFallbackEnabled = historicalPartitionFallbackEnabled;
     }
 
     @Override
     public Lookup enableInsertIfNotExists() {
         return new TableLookup(
-                tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames, true);
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                lookupColumnNames,
+                true,
+                historicalPartitionFallbackEnabled);
+    }
+
+    @Override
+    public Lookup disableHistoricalPartitionFallback() {
+        return new TableLookup(
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                lookupColumnNames,
+                insertIfNotExists,
+                false);
     }
 
     @Override
@@ -77,7 +98,8 @@ public class TableLookup implements Lookup {
                 metadataUpdater,
                 lookupClient,
                 lookupColumnNames,
-                insertIfNotExists);
+                insertIfNotExists,
+                historicalPartitionFallbackEnabled);
     }
 
     @Override
@@ -109,7 +131,12 @@ public class TableLookup implements Lookup {
                 }
             }
             return new PrimaryKeyLookuper(
-                    tableInfo, schemaGetter, metadataUpdater, lookupClient, insertIfNotExists);
+                    tableInfo,
+                    schemaGetter,
+                    metadataUpdater,
+                    lookupClient,
+                    insertIfNotExists,
+                    historicalPartitionFallbackEnabled);
         } else {
             // throw exception if the insertIfNotExists is enabled for prefix key lookup, as
             // currently we only support insertIfNotExists for primary key lookup.

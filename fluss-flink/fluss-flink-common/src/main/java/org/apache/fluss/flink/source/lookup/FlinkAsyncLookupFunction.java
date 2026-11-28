@@ -64,6 +64,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final LookupNormalizer lookupNormalizer;
     @Nullable private int[] projection;
     private final boolean insertIfNotExists;
+    private final boolean historicalPartitionFallbackEnabled;
 
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
@@ -77,13 +78,15 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             RowType flinkRowType,
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection,
-            boolean insertIfNotExists) {
+            boolean insertIfNotExists,
+            boolean historicalPartitionFallbackEnabled) {
         this.flussConfig = flussConfig;
         this.tablePath = tablePath;
         this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
         this.insertIfNotExists = insertIfNotExists;
+        this.historicalPartitionFallbackEnabled = historicalPartitionFallbackEnabled;
     }
 
     @Override
@@ -109,6 +112,9 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
         Lookup lookup = table.newLookup();
+        if (!historicalPartitionFallbackEnabled) {
+            lookup = lookup.disableHistoricalPartitionFallback();
+        }
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
             int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
             RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
