@@ -32,11 +32,14 @@ import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 
+import javax.annotation.Nullable;
+
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -53,6 +56,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
     private final TestCoordinatorGateway coordinatorGateway;
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;
+
+    /** Table or partition -> its bucket count according to the coordinator. */
+    private final Map<PhysicalTablePath, Integer> coordinatorBucketCounts = new HashMap<>();
+
+    private int bucketLayoutChecks;
 
     public TestingMetadataUpdater(Map<TablePath, TableInfo> tableInfos) {
         this(
@@ -155,6 +163,24 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                                     + "you need add it while construct updater",
                             needUpdateTablePaths));
         }
+    }
+
+    /** Sets the bucket count the coordinator reports for the table or partition. */
+    public synchronized void setCoordinatorBucketCount(
+            PhysicalTablePath physicalTablePath, int bucketCount) {
+        coordinatorBucketCounts.put(physicalTablePath, bucketCount);
+    }
+
+    public synchronized int bucketLayoutChecks() {
+        return bucketLayoutChecks;
+    }
+
+    @Override
+    public synchronized OptionalInt getBucketCountFromCoordinator(
+            PhysicalTablePath physicalTablePath, long tableId, @Nullable Long partitionId) {
+        bucketLayoutChecks++;
+        Integer bucketCount = coordinatorBucketCounts.get(physicalTablePath);
+        return bucketCount == null ? OptionalInt.empty() : OptionalInt.of(bucketCount);
     }
 
     @Override

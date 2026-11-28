@@ -30,6 +30,9 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -43,6 +46,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.testutils.TestTableNames;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -272,5 +276,52 @@ class MetadataUpdaterITCase {
 
         // recover the coordinator
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+    }
+
+    @Test
+    void testGetBucketCountFromCoordinator() throws Exception {
+        TablePath tablePath = tableNames.tablePath("fluss", "bucket_count_from_coordinator");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("p", DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("p")
+                        .distributedBy(3, "a")
+                        .build();
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "p1");
+        try (Connection connection =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = connection.getAdmin();
+            admin.createTable(tablePath, descriptor, false).get();
+            admin.createPartition(
+                            tablePath,
+                            new PartitionSpec(Collections.singletonMap("p", "p1")),
+                            false)
+                    .get();
+            long tableId = admin.getTableInfo(tablePath).get().getTableId();
+            long partitionId = admin.listPartitionInfos(tablePath).get().get(0).getPartitionId();
+            MetadataUpdater metadataUpdater = ((FlussConnection) connection).getMetadataUpdater();
+
+            assertThat(
+                            metadataUpdater.getBucketCountFromCoordinator(
+                                    PhysicalTablePath.of(tablePath), tableId, null))
+                    .hasValue(3);
+            assertThat(
+                            metadataUpdater.getBucketCountFromCoordinator(
+                                    partitionPath, tableId, partitionId))
+                    .hasValue(3);
+            // A path that resolves to another table or partition, e.g. a re-created one.
+            assertThat(
+                            metadataUpdater.getBucketCountFromCoordinator(
+                                    partitionPath, tableId + 1, partitionId))
+                    .isEmpty();
+            assertThat(
+                            metadataUpdater.getBucketCountFromCoordinator(
+                                    partitionPath, tableId, partitionId + 1))
+                    .isEmpty();
+        }
     }
 }

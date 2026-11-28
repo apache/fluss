@@ -30,6 +30,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -412,6 +413,61 @@ class BucketRoutingTest {
                     .isInstanceOf(BucketRescaleException.class);
             assertThat(other).isNotDone();
             assertThat(accumulator.hasIncomplete()).isTrue();
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
+    @Test
+    void testAbortsBatchesRoutedToBucketsMissingFromLatestMetadata() throws Exception {
+        // Metadata briefly reports 10 buckets, e.g. the layout of a dropped table re-created
+        // under the same path, before refreshed metadata shows the actual single bucket.
+        TableInfo table = tableInfo(1, false, false);
+        // Round-robin spreads the records over all 10 buckets.
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
+        try {
+            List<CompletableFuture<Exception>> futures = new ArrayList<>();
+            for (int key = 0; key < 10; key++) {
+                CompletableFuture<Exception> future = new CompletableFuture<>();
+                futures.add(future);
+                accumulator.append(
+                        record(table, WriteFormat.INDEXED_LOG, key, 1),
+                        (bucket, offset, error) -> future.complete(error),
+                        cluster(10, true));
+            }
+            for (int bucket = 0; bucket < 10; bucket++) {
+                assertThat(accumulator.getReadyDeque(PATH, bucket)).hasSize(1);
+            }
+
+            // The cached layout alone does not fail the batches, as it can be stale.
+            RecordAccumulator.ReadyCheckResult result = accumulator.ready(cluster(1, true));
+            assertThat(result.unknownLeaderTables).isEmpty();
+            assertThat(result.bucketLayoutCheckTables).containsExactly(PATH);
+            assertThat(futures).noneMatch(CompletableFuture::isDone);
+            // A count that covers the queued buckets keeps them waiting for their leaders.
+            assertThat(accumulator.abortBatchesBeyondBucketCount(PATH, 10)).isFalse();
+            assertThat(futures).noneMatch(CompletableFuture::isDone);
+
+            // Once the coordinator confirms a single bucket, every batch routed with the old
+            // count fails instead of waiting for a leader that will never be found.
+            assertThat(accumulator.abortBatchesBeyondBucketCount(PATH, 1)).isTrue();
+            for (CompletableFuture<Exception> future : futures) {
+                assertThat(future.getNow(null))
+                        .isInstanceOf(InvalidBucketRoutingException.class)
+                        .hasMessageContaining("from 10 to 1");
+            }
+            assertThat(accumulator.hasIncomplete()).isFalse();
+
+            // The same accumulator routes new records with the current count.
+            accumulator.append(
+                    record(table, WriteFormat.INDEXED_LOG, 0, 1),
+                    (bucket, offset, error) -> {},
+                    cluster(1, true));
+            assertThat(accumulator.getReadyDeque(PATH, 0)).hasSize(1);
+            assertThat(accumulator.getReadyDeque(PATH, 0).peekFirst().getBucketCount())
+                    .isEqualTo(1);
         } finally {
             accumulator.close();
             accumulator.abortAllBatches(new RuntimeException("test cleanup"));
